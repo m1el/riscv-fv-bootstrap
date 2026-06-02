@@ -16,3 +16,8 @@ hex0
 *.glob
 .*.aux
 _build/
+.libshim/
+bare/*.log
+bare/*.dis
+bare/hex0.elf
+bare/hex0.bin

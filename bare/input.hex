@@ -1,0 +1,2 @@
+# hex0 smoke test: this decodes to the ASCII string "Hello\n"
+48 65 6C 6C 6F 0A
