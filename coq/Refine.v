@@ -467,6 +467,56 @@ Proof.
   unfold s1. reflexivity.
 Qed.
 
+(* [li t3,K; beq t2,t3,_] where t2 = c = K: 2 steps, the beq TAKEN to [target]
+   (= pc+imm).  Clobbers only t3/pc.  Mirror of Lean [li_beq_eq]. *)
+Lemma li_beq_eq s off K c imm target :
+  CodeLoaded s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length coreBytes) ->
+  s.(pc) = coreAddr + off ->
+  rget s 7 = c ->
+  decode (wordAt off) = Iaddi 28 0 K ->
+  decode (wordAt (off + 4)) = Ibeq 7 28 imm ->
+  0 <= K < 2 ^ 64 ->
+  c = K ->
+  wadd (coreAddr + (off + 4)) imm = target ->
+  runUntil 0 2 s = setPc (rset s 28 K) target.
+Proof.
+  intros hc ho hb hpc h7 hli hbeq hK heq htgt.
+  rewrite coreBytes_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length coreBytes)) by (rewrite coreBytes_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (coreAddr + (off + 4))).
+  { rewrite (step_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero,
+      (wadd_id 0 K ltac:(lia)), Z.add_0_l, hpc,
+      (wadd_id (coreAddr + off) 4 ltac:(unfold coreAddr; lia)).
+    f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded s1)
+    by (apply (CodeLoaded_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by (unfold s1; rewrite setPc_rget; exact h7).
+  assert (h28s1 : rget s1 28 = K) by (unfold s1; rewrite setPc_rget; reflexivity).
+  assert (hu2 : step s1 = setPc s1 target).
+  { rewrite (step_beq s1 (off + 4) 7 28 imm hc1 ltac:(lia)
+              ltac:(rewrite coreBytes_len; lia) hpc1 hbeq), h7s1, h28s1.
+    replace (c =? K) with true by (symmetry; apply Z.eqb_eq; exact heq).
+    rewrite hpc1, htgt. reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; unfold coreAddr; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; unfold coreAddr; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2.
+  unfold s1. reflexivity.
+Qed.
+
+(* Frame: a [(rset s 28 v).setPc P] state inherits every register != t3 from s. *)
+Lemma li_block_frame s v P i : i <> 28 ->
+  rget (setPc (rset s 28 v) P) i = rget s i.
+Proof.
+  intros hi. rewrite setPc_rget. destruct (i =? 0) eqn:E0.
+  - apply Z.eqb_eq in E0. subst i. reflexivity.
+  - apply Z.eqb_neq in E0.
+    rewrite (rset_rget s 28 v i ltac:(lia) E0).
+    replace (i =? 28) with false by (symmetry; apply Z.eqb_neq; exact hi).
+    reflexivity.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
