@@ -2332,6 +2332,160 @@ Proof.
   - rewrite <- hlen. apply readMem_eq. intros j hj. apply hmem. lia.
 Qed.
 
+(** ** The four halting error classes (mirror of loop_trailing/unknown_high/
+    split/unknown_low).  Each navigates to its error label and halts. *)
+
+(* high nibble at EOF -> Trailing (4). *)
+Lemma loop_trailing inp cap c hi emitted s :
+  isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = Some hi ->
+  LoopInv inp cap s (c :: nil) emitted -> exists k, Result (runUntil 0 k s) inp cap.
+Proof.
+  intros hsc hss hnh inv. pose proof inv as inv0.
+  destruct (reach64 inp cap c nil emitted s hsc hss inv)
+    as [Hpc64 [H7_64 [Hcode64 [Hmem64 [H5_64 [H6_64 [H1_64 [H10_64 [H11_64 [_ Hc256]]]]]]]]]].
+  set (s64 := runUntil 0 14 s) in *.
+  destruct (high_parse s64 c hi Hcode64 Hpc64 H7_64 Hc256 hnh) as [k1 [HpcC [HmemC [_ HothC]]]].
+  destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ Hidx Hsuf _ Hemitle Houtmem Hspec].
+  assert (HcodeC : CodeLoaded (runUntil 0 k1 s64)) by
+    (apply (CodeLoaded_eqmem s64); [exact HmemC| exact Hcode64]).
+  assert (h5C : rget (runUntil 0 k1 s64) 5 = Z.of_nat (length inp)).
+  { rewrite (HothC 5 ltac:(lia) ltac:(lia)), H5_64, Hidx.
+    change (length (c :: nil)) with 1%nat. lia. }
+  assert (h11C : rget (runUntil 0 k1 s64) 11 = Z.of_nat (length inp)) by
+    (rewrite (HothC 11 ltac:(lia) ltac:(lia)); exact H11_64).
+  pose proof (bgeu_eq_taken (runUntil 0 k1 s64) 108 5 11 (Z.of_nat (length inp)) 192
+    (coreAddr + 300) HcodeC ltac:(lia) ltac:(rewrite coreBytes_len; lia) HpcC h5C h11C
+    ltac:(vm_compute; reflexivity)
+    ltac:(rewrite (wadd_id (coreAddr + 108) 192 ltac:(unfold coreAddr; lia)); lia)) as hbt.
+  set (sE := setPc (runUntil 0 k1 s64) (coreAddr + 300)) in *.
+  apply (reach_error s sE inp cap emitted 300 4 (14 + (k1 + 1)) Trailing).
+  - rewrite (runUntil_add 14 (k1 + 1)). fold s64. rewrite (runUntil_add k1 1), hbt. reflexivity.
+  - unfold sE; apply setPc_pc.
+  - apply (CodeLoaded_eqmem (runUntil 0 k1 s64)); [unfold sE; rewrite setPc_mem; reflexivity| exact HcodeC].
+  - unfold sE; rewrite setPc_mem, HmemC, Hmem64; reflexivity.
+  - unfold sE; rewrite setPc_rget, (HothC 6 ltac:(lia) ltac:(lia)); exact H6_64.
+  - unfold sE; rewrite setPc_rget, (HothC 1 ltac:(lia) ltac:(lia)); exact H1_64.
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+  - lia.
+  - rewrite coreBytes_len; lia.
+  - lia.
+  - exact (emitted_lt inp cap s (c :: nil) emitted inv).
+  - reflexivity.
+  - exact (decode_err inp emitted (c :: nil) Trailing Hspec
+            (decodeS_high_trailing (Z.to_nat c) hi hsc hss hnh)).
+  - exact Hemitle.
+  - exact Houtmem.
+Qed.
+
+(* head char not space/comment/hex -> Unknown (5). *)
+Lemma loop_unknown_high inp cap c rest' emitted s :
+  isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = None ->
+  LoopInv inp cap s (c :: rest') emitted -> exists k, Result (runUntil 0 k s) inp cap.
+Proof.
+  intros hsc hss hn inv. pose proof inv as inv0.
+  destruct (reach64 inp cap c rest' emitted s hsc hss inv)
+    as [Hpc64 [H7_64 [Hcode64 [Hmem64 [_ [H6_64 [H1_64 [_ [_ [_ Hc256]]]]]]]]]].
+  set (s64 := runUntil 0 14 s) in *.
+  destruct (high_parse_unknown s64 c Hcode64 Hpc64 H7_64 Hc256 hn) as [k1 [HpcU [HmemU HothU]]].
+  destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
+  set (sE := runUntil 0 k1 s64) in *.
+  apply (reach_error s sE inp cap emitted 312 5 (14 + k1) Unknown).
+  - rewrite (runUntil_add 14 k1). fold s64. reflexivity.
+  - exact HpcU.
+  - apply (CodeLoaded_eqmem s64); [exact HmemU| exact Hcode64].
+  - rewrite HmemU; exact Hmem64.
+  - rewrite (HothU 6 ltac:(lia)); exact H6_64.
+  - rewrite (HothU 1 ltac:(lia)); exact H1_64.
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+  - lia.
+  - rewrite coreBytes_len; lia.
+  - lia.
+  - exact (emitted_lt inp cap s (c :: rest') emitted inv).
+  - reflexivity.
+  - exact (decode_err inp emitted (c :: rest') Unknown Hspec
+            (decodeS_high_unknown (Z.to_nat c) (zin rest') hsc hss hn)).
+  - exact Hemitle.
+  - exact Houtmem.
+Qed.
+
+(* high nibble, low char is a stop char -> Split (3). *)
+Lemma loop_split inp cap c hi l rest'' emitted s :
+  isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = Some hi ->
+  isLowStop (Z.to_nat l) = true ->
+  LoopInv inp cap s (c :: l :: rest'') emitted -> exists k, Result (runUntil 0 k s) inp cap.
+Proof.
+  intros hsc hss hnh hls inv. pose proof inv as inv0.
+  destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
+    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ Hl256]]]]]]]].
+  destruct (low_split (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 hls)
+    as [k1 [HpcS [HmemS HothS]]].
+  destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
+  set (sE := runUntil 0 k1 (runUntil 0 k0 s)) in *.
+  apply (reach_error s sE inp cap emitted 288 3 (k0 + k1) Split).
+  - rewrite (runUntil_add k0 k1). reflexivity.
+  - exact HpcS.
+  - apply (CodeLoaded_eqmem (runUntil 0 k0 s)); [exact HmemS| exact Hcode124].
+  - rewrite HmemS; exact Hmem124.
+  - rewrite (HothS 6 ltac:(lia)); exact H6_124.
+  - rewrite (HothS 1 ltac:(lia)); exact H1_124.
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+  - lia.
+  - rewrite coreBytes_len; lia.
+  - lia.
+  - exact (emitted_lt inp cap s (c :: l :: rest'') emitted inv).
+  - reflexivity.
+  - exact (decode_err inp emitted (c :: l :: rest'') Split Hspec
+            (decodeS_low_split (Z.to_nat c) (Z.to_nat l) (zin rest'') hi hsc hss hnh hls)).
+  - exact Hemitle.
+  - exact Houtmem.
+Qed.
+
+(* high nibble, low char not stop and not hex -> Unknown (5). *)
+Lemma loop_unknown_low inp cap c hi l rest'' emitted s :
+  isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = Some hi ->
+  isLowStop (Z.to_nat l) = false -> nibble (Z.to_nat l) = None ->
+  LoopInv inp cap s (c :: l :: rest'') emitted -> exists k, Result (runUntil 0 k s) inp cap.
+Proof.
+  intros hsc hss hnh hls hnl inv. pose proof inv as inv0.
+  destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
+    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ Hl256]]]]]]]].
+  destruct (isLowStop_false_ne l ltac:(lia) hls) as [Hl10 [Hl32 [Hl95 [Hl35 Hl59]]]].
+  destruct (low_beq_ft (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 Hl35 Hl59 Hl10 Hl32 Hl95)
+    as [HpcE [HmemE HothE]].
+  set (sE0 := runUntil 0 10 (runUntil 0 k0 s)) in *.
+  assert (HcodeE0 : CodeLoaded sE0) by
+    (apply (CodeLoaded_eqmem (runUntil 0 k0 s)); [exact HmemE| exact Hcode124]).
+  assert (H7E0 : rget sE0 7 = l) by (rewrite (HothE 7 ltac:(lia)); exact H7_124).
+  destruct (low_parse_unknown sE0 l HcodeE0 HpcE H7E0 Hl256 hnl) as [k1 [HpcU [HmemU HothU]]].
+  destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
+  set (sE := runUntil 0 k1 sE0) in *.
+  apply (reach_error s sE inp cap emitted 312 5 (k0 + (10 + k1)) Unknown).
+  - rewrite (runUntil_add k0 (10 + k1)), (runUntil_add 10 k1). reflexivity.
+  - exact HpcU.
+  - apply (CodeLoaded_eqmem sE0); [exact HmemU| exact HcodeE0].
+  - rewrite HmemU, HmemE, Hmem124. reflexivity.
+  - rewrite (HothU 6 ltac:(lia)), (HothE 6 ltac:(lia)); exact H6_124.
+  - rewrite (HothU 1 ltac:(lia)), (HothE 1 ltac:(lia)); exact H1_124.
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+  - vm_compute; reflexivity.
+  - lia.
+  - rewrite coreBytes_len; lia.
+  - lia.
+  - exact (emitted_lt inp cap s (c :: l :: rest'') emitted inv).
+  - reflexivity.
+  - exact (decode_err inp emitted (c :: l :: rest'') Unknown Hspec
+            (decodeS_low_unknown (Z.to_nat c) (Z.to_nat l) (zin rest'') hi hsc hss hnh hls hnl)).
+  - exact Hemitle.
+  - exact Houtmem.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
