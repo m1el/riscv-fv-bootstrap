@@ -789,19 +789,67 @@ theorem loop_correct (inp : List Nat) (cap : Nat) :
         obtain ⟨m, hm⟩ := ih rest' emitted' _ hn' inv'
         exact ⟨k + m, by rw [runFuel_add]; exact hm⟩
 
-/-! ## The general refinement theorem (FRONTIER)
+set_option maxRecDepth 4000 in
+/-- The prologue: from `initOn`, the two entry instructions `li t0,0; li t1,0`
+    reach the loop head establishing the initial invariant (full input remaining,
+    nothing emitted). Uses `code_initOn`/`in_initOn` for the memory facts. -/
+theorem init_loopinv (inp : List Nat) (cap : Nat) (hwf : WellFormed inp cap) :
+    LoopInv inp cap (runFuel 0 2 (Harness.initOn inp cap)) inp [] := by
+  have hcode0 : CodeLoaded (Harness.initOn inp cap) := code_initOn inp cap hwf
+  have hpc0 : (Harness.initOn inp cap).pc = BitVec.ofNat 64 (Image.coreAddr + 0) := rfl
+  -- step 1: li t0,0
+  have hs1 : step (Harness.initOn inp cap)
+      = ((Harness.initOn inp cap).rset 5 0).setPc (BitVec.ofNat 64 (Image.coreAddr + 4)) := by
+    have e : (Harness.initOn inp cap).pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 4) := by
+      rw [hpc0]; decide
+    rw [step_addi (Harness.initOn inp cap) 0 5 0 0#12 hcode0 (by decide) hpc0 (by decide),
+        show (Harness.initOn inp cap).rget 0 + (0#12).signExtend 64 = 0 from by rw [rget_zero]; decide, e]
+  let s1 := ((Harness.initOn inp cap).rset 5 0).setPc (BitVec.ofNat 64 (Image.coreAddr + 4))
+  have hs1d : s1 = ((Harness.initOn inp cap).rset 5 0).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 4)) := rfl
+  rw [← hs1d] at hs1
+  have hcode1 : CodeLoaded s1 := by intro i hi; rw [hs1d]; simp only [setPc_mem, rset_mem]; exact hcode0 i hi
+  have hpc1 : s1.pc = BitVec.ofNat 64 (Image.coreAddr + 4) := rfl
+  -- step 2: li t1,0
+  have hs2 : step s1 = (s1.rset 6 0).setPc LOOP := by
+    have e : s1.pc + 4 = LOOP := by rw [hpc1]; decide
+    rw [step_addi s1 4 6 0 0#12 hcode1 (by decide) hpc1 (by decide),
+        show s1.rget 0 + (0#12).signExtend 64 = 0 from by rw [rget_zero]; decide, e]
+  let s2 := (s1.rset 6 0).setPc LOOP
+  have hs2d : s2 = (s1.rset 6 0).setPc LOOP := rfl
+  rw [← hs2d] at hs2
+  have hfinal : runFuel 0 2 (Harness.initOn inp cap) = s2 := by
+    simp only [runFuel]
+    rw [hs1, hs2, if_neg (by rw [hpc0]; decide), if_neg (by rw [hpc1]; decide)]
+  rw [hfinal]
+  refine { at_loop := rfl, code := ?_, a0 := ?_, a1 := ?_, a2 := ?_, a3 := ?_,
+           ra0 := ?_, in_mem := ?_, in_lt := ?_, bytes_lt := hwf.bytes_ok,
+           idx := ?_, suffix := ?_, outidx := ?_, emitted_le := Nat.zero_le _,
+           out_mem := ?_, spec_link := ?_ }
+  · intro i hi; rw [hs2d]; simp only [setPc_mem, rset_mem]; rw [hs1d]
+    simp only [setPc_mem, rset_mem]; exact hcode0 i hi
+  · rw [hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (10:Nat) ≠ 6),
+        hs1d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (10:Nat) ≠ 5)]; rfl
+  · rw [hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (11:Nat) ≠ 6),
+        hs1d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (11:Nat) ≠ 5)]; rfl
+  · rw [hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (12:Nat) ≠ 6),
+        hs1d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (12:Nat) ≠ 5)]; rfl
+  · rw [hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (13:Nat) ≠ 6),
+        hs1d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (13:Nat) ≠ 5)]; rfl
+  · rw [hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (1:Nat) ≠ 6),
+        hs1d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (1:Nat) ≠ 5)]; rfl
+  · intro j hj; rw [hs2d]; simp only [setPc_mem, rset_mem]; rw [hs1d]
+    simp only [setPc_mem, rset_mem]; exact in_initOn inp cap hwf j hj
+  · have := hwf.in_fits; have := hwf.out_fits; omega
+  · rw [hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (5:Nat) ≠ 6),
+        hs1d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]
+    simp [Nat.sub_self]
+  · simp [Nat.sub_self]
+  · rw [hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  · intro j hj; simp at hj
+  · simp
 
-    The whole-program correctness statement. Proof outline:
-      * `WellFormed` + `initOn` establishes `LoopInv inp cap s₀ inp []`.
-      * one main-loop iteration: from `LoopInv .. rest emitted` either halts at
-        pc=0 with the result = `coreSpec`, or returns to `LoopInv .. rest' emitted'`
-        with `rest'.length < rest.length` -- by case analysis on the next char's
-        class (comment / spacing / nibble→{trailing,split,unknown,emit}), each a
-        straight-line chain of `step_*` reductions + the disjointness frame.
-      * strong induction on `rest.length` closes it; `emitted ++ decode rest`
-        telescopes to `coreSpec inp cap`.
-    The per-step primitive (`step_li_t0`) and the invariant above are the parts
-    in hand; the body case analysis + arithmetic/framing lemmas are remaining. -/
+/-! ## The general refinement theorem. -/
 theorem core_refines (inp : List Nat) (cap : Nat) (hwf : WellFormed inp cap) :
     ∃ fuel, Harness.observe inp cap fuel = Hex0.coreSpec inp cap := by
   sorry
