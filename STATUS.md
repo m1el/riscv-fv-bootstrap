@@ -13,6 +13,8 @@ Goal: run hex0 on bare-metal `qemu-system-riscv` **and** have a formal proof
 | 4 | Both models execute the **real binary** and match `coreSpec` (13-input differential battery, all error classes) | testing-grade, cross-validated vs QEMU |
 | 5 | **Certification** theorems: deployed bytes = `coreSpec` on embedded input + battery. Lean via `native_decide`; **Coq via `vm_compute` (kernel-checked)** | **finite / testing-grade** (proved, but covers finitely many inputs) |
 | 6 | **General refinement** (Lean **and Coq**): `core_refines : ∀ inp cap, WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`, **fully proved**. Lean: `sorry`-free, `#print axioms` = `[propext, Classical.choice, Quot.sound]`. Coq: `Admitted`-free, `Print Assumptions` = `[functional_extensionality_dep]` only. | **proof-grade, COMPLETE (both)** |
+| 7a | **ISA cross-check, decode half** (`coq/RvCross.v`): `decode_agrees : ∀ w, 0≤w<2³² → ∀ i, Rv64i.decode w = i → i ≠ unknown → Decode.decode RV64I w = embed i` — our decoder proved equal to **riscv-coq** (`coq-riscv.0.0.5`, the bedrock2/`compiler` reference model) on all 12 forms, for every 32-bit word. `Admitted`-free; `Print Assumptions` = **Closed under the global context (zero axioms)**. | **proof-grade, COMPLETE** |
+| 7b | ISA cross-check, **execute/step half** (`step_agrees`, forward simulation vs riscv-coq's `Run.run1` over the Minimal `OState` machine) + transport corollary `core_refines_riscv` | designed (CROSSCHECK.md §1–6), not yet proved |
 
 ### The honest epistemics (see also the conversation)
 
@@ -54,9 +56,14 @@ type-checks and is kernel-checked, assembling the prologue (`loadBytes_frame`/
 (no `sorryAx`). **The entire verified-tower refinement for hex0 has no remaining
 `sorry`.**
 
-Next: **Cross-check the ISA model** (task #7): prove our decode+step of these
-   instructions agrees with `sail-riscv-lean` (Lean) and `riscv-coq` (Coq). This
-   removes "model = hardware" from the TCB (currently testing-backed).
+Next: **Finish the ISA cross-check** (task #7). The **decode half is DONE**
+   (`coq/RvCross.v`, `decode_agrees`, axiom-free — our decoder = `riscv-coq`'s for
+   all words). Remaining: the **execute/step half** — a forward simulation of our
+   `step` against `riscv-coq`'s `Run.run1 RV64I` (Minimal `OState` machine), then
+   the transport corollary `core_refines_riscv` stating the *reference model*
+   running the real bytes implements `coreSpec`. Design in `CROSSCHECK.md`. (The
+   Lean oracle `sail-riscv-lean` is 171k-LoC WIP; the real proof lands in Coq vs
+   `riscv-coq`, which is installed.)
 
 ## Build / reproduce
 

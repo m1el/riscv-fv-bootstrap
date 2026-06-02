@@ -29,12 +29,20 @@ hex0 spec" to hold. Written CompCert-style: an explicit, enumerated boundary.
 
 ## Trusted (IN the TCB)
 
-1. **The ISA model is faithful to real RISC-V hardware.**
-   Our hand-written RV64I model (decode + step) is currently justified
-   *empirically* — its output matches QEMU on the battery. Making this
-   proof-grade is task #7: cross-check decode+step of these instructions against
-   the authoritative Sail model (`sail-riscv-lean`) and `riscv-coq`. Until then,
-   "model = hardware" is testing-backed, not proved.
+1. **The ISA model is faithful to real RISC-V hardware.** (Task #7 — *partially
+   discharged*.)
+   - **Decode: PROVED (no longer trusted).** `coq/RvCross.v`'s `decode_agrees`
+     shows our `Rv64i.decode` equals **riscv-coq**'s `Decode.decode RV64I`
+     (`coq-riscv.0.0.5`, the bedrock2/`compiler` reference semantics) on all 12
+     modelled forms, for every 32-bit word — `Admitted`-free, **zero axioms**
+     (`Print Assumptions` = *Closed under the global context*). Residual trust on
+     the decode side is only that *riscv-coq* faithfully models the ISA — a large,
+     externally-audited artifact.
+   - **Step/execute: still trusted (testing-backed).** Our `step` is justified
+     *empirically* (matches QEMU on the battery). Making it proof-grade is the
+     remaining half of task #7: a forward simulation of `step` against riscv-coq's
+     `Run.run1` (see `CROSSCHECK.md` §1 T2 / §6), plus the transport corollary
+     `core_refines_riscv`. Until then, "step = hardware" is testing-backed.
 
 2. **The trusted I/O shell** (`bare/shell.s`) — NOT proven (deliberately; see
    PREV_CTX §4). We trust that it:
