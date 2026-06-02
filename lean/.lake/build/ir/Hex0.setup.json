@@ -5,5 +5,7 @@
  "isModule": false,
  "importArts":
  {"Hex0.Spec":
-  ["/var/data/bootstrap/lean/.lake/build/lib/lean/Hex0/Spec.olean"]},
+  ["/var/data/bootstrap/lean/.lake/build/lib/lean/Hex0/Spec.olean"],
+  "Hex0.Rv64i":
+  ["/var/data/bootstrap/lean/.lake/build/lib/lean/Hex0/Rv64i.olean"]},
  "dynlibs": []}

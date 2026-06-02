@@ -1,6 +1,6 @@
 // Lean compiler output
 // Module: Hex0
-// Imports: public import Init public meta import Init public import Hex0.Spec
+// Imports: public import Init public meta import Init public import Hex0.Spec public import Hex0.Rv64i
 #include <lean/lean.h>
 #if defined(__clang__)
 #pragma clang diagnostic ignored "-Wunused-parameter"
@@ -16,6 +16,7 @@ extern "C" {
 lean_object* initialize_Init(uint8_t builtin);
 lean_object* initialize_Init(uint8_t builtin);
 lean_object* initialize_hex0_Hex0_Spec(uint8_t builtin);
+lean_object* initialize_hex0_Hex0_Rv64i(uint8_t builtin);
 static bool _G_initialized = false;
 LEAN_EXPORT lean_object* initialize_hex0_Hex0(uint8_t builtin) {
 lean_object * res;
@@ -28,6 +29,9 @@ res = initialize_Init(builtin);
 if (lean_io_result_is_error(res)) return res;
 lean_dec_ref(res);
 res = initialize_hex0_Hex0_Spec(builtin);
+if (lean_io_result_is_error(res)) return res;
+lean_dec_ref(res);
+res = initialize_hex0_Hex0_Rv64i(builtin);
 if (lean_io_result_is_error(res)) return res;
 lean_dec_ref(res);
 return lean_io_result_mk_ok(lean_box(0));

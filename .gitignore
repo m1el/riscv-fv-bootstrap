@@ -21,3 +21,10 @@ bare/*.log
 bare/*.dis
 bare/hex0.elf
 bare/hex0.bin
+lean/.lake/
+coq/*.vo
+coq/*.vok
+coq/*.vos
+coq/*.glob
+coq/.*.aux
+bare/hex0.bin
