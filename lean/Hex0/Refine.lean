@@ -988,6 +988,20 @@ theorem nibble_addi (c sub : Nat) (imm : BitVec 12)
 theorem nibble_lt (c v : Nat) (h : Hex0.nibble c = some v) : v < 16 := by
   unfold Hex0.nibble at h; split at h <;> simp_all <;> omega
 
+/-- A hex digit is never a low-stop char (`\n ' ' '_' '#' ';'`). -/
+theorem nibble_not_lowstop (l v : Nat) (h : Hex0.nibble l = some v) : Hex0.isLowStop l = false := by
+  have hr : (48 ≤ l ∧ l ≤ 57) ∨ (65 ≤ l ∧ l ≤ 70) := by
+    simp only [Hex0.nibble] at h
+    by_cases hd : 48 ≤ l ∧ l ≤ 57
+    · exact Or.inl hd
+    · rw [if_neg hd] at h
+      by_cases he : 65 ≤ l ∧ l ≤ 70
+      · exact Or.inr he
+      · rw [if_neg he] at h; exact absurd h (by simp)
+  simp only [Hex0.isLowStop, Hex0.isSpace, Hex0.isComment, Hex0.c_nl, Hex0.c_sp, Hex0.c_us,
+    Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff, beq_eq_false_iff_ne]
+  omega
+
 set_option maxRecDepth 8000 in
 /-- Closed enumeration (256 cases): combining two 4-bit nibbles. -/
 theorem comb4 : ∀ (x y : BitVec 4),
@@ -2366,6 +2380,281 @@ theorem loop_byte (inp : List Nat) (cap : Nat) (c hi l lo : Nat) (rest'' emitted
   · -- spec_link
     rw [inv.spec_link, decodeS_byte c l rest'' hi lo hsc hss hnh hlls hnl]
     simp only [List.append_assoc, List.cons_append, List.nil_append]
+
+set_option maxRecDepth 4000 in
+/-- Navigate from the loop head (`LoopInv` with head char `c`, not space/comment)
+    to offset 64 (entry of the high-nibble parse), 14 steps, carrying the
+    bookkeeping registers. Shared prefix of every byte/error case. -/
+theorem reach64 (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : List Nat) (s : State)
+    (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = false)
+    (inv : LoopInv inp cap s (c :: rest') emitted) :
+    ∃ s64, runFuel 0 14 s = s64 ∧ s64.pc = BitVec.ofNat 64 (Image.coreAddr + 64) ∧
+      s64.rget 7 = BitVec.ofNat 64 c ∧ CodeLoaded s64 ∧ s64.mem = s.mem ∧
+      s64.rget 5 = s.rget 5 + 1 ∧ s64.rget 6 = BitVec.ofNat 64 emitted.length ∧
+      s64.rget 1 = 0 ∧ s64.rget 10 = BitVec.ofNat 64 Image.inputAddr ∧
+      s64.rget 11 = BitVec.ofNat 64 inp.length ∧ s64.rget 13 = BitVec.ofNat 64 cap ∧ c < 256 := by
+  have hcm : c ≠ 35 ∧ c ≠ 59 := by
+    simp only [Hex0.isComment, Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff,
+      beq_eq_false_iff_ne] at hsc; exact hsc
+  have hsp : c ≠ 10 ∧ c ≠ 32 ∧ c ≠ 95 := by
+    simp only [Hex0.isSpace, Hex0.c_nl, Hex0.c_sp, Hex0.c_us, Bool.or_eq_false_iff,
+      beq_eq_false_iff_ne] at hss; exact ⟨hss.1.1, hss.1.2, hss.2⟩
+  have hc256 : c < 256 := inv.bytes_lt c (by
+    have : c ∈ inp.drop (inp.length - (c::rest').length) := by rw [inv.suffix]; exact List.mem_cons_self
+    exact List.drop_subset _ _ this)
+  obtain ⟨s4, hr4, hpc4, h7_4, h5_4, hmem4, hcode4, hoth4⟩ :=
+    loop_prefix inp cap c rest' emitted s inv
+  obtain ⟨hpcB, hmemB, hothB⟩ :=
+    high_beq_ft s4 hcode4 c hpc4 h7_4 hc256 hcm.1 hcm.2 hsp.1 hsp.2.1 hsp.2.2
+  refine ⟨runFuel 0 10 s4, ?_, hpcB, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, hc256⟩
+  · rw [show (14:Nat) = 4 + 10 from rfl, runFuel_add, hr4]
+  · rw [hothB 7 (by decide)]; exact h7_4
+  · intro i hi; rw [hmemB]; exact hcode4 i hi
+  · rw [hmemB, hmem4]
+  · rw [hothB 5 (by decide)]; exact h5_4
+  · rw [hothB 6 (by decide), hoth4 6 (by decide) (by decide) (by decide) (by decide)]; exact inv.outidx
+  · rw [hothB 1 (by decide), hoth4 1 (by decide) (by decide) (by decide) (by decide)]; exact inv.ra0
+  · rw [hothB 10 (by decide), hoth4 10 (by decide) (by decide) (by decide) (by decide)]; exact inv.a0
+  · rw [hothB 11 (by decide), hoth4 11 (by decide) (by decide) (by decide) (by decide)]; exact inv.a1
+  · rw [hothB 13 (by decide), hoth4 13 (by decide) (by decide) (by decide) (by decide)]; exact inv.a3
+
+set_option maxRecDepth 4000 in
+/-- Navigate from the loop head to offset 124 (entry of the low `beq` chain) for
+    a byte whose head `c` is the hex digit `hi` and which has a following char
+    `l`. Reads `c` (high parse) and `l`, carrying bookkeeping. -/
+theorem reach124 (inp : List Nat) (cap : Nat) (c hi l : Nat) (rest'' emitted : List Nat) (s : State)
+    (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = false)
+    (hnh : Hex0.nibble c = some hi)
+    (inv : LoopInv inp cap s (c :: l :: rest'') emitted) :
+    ∃ k s124, runFuel 0 k s = s124 ∧ s124.pc = BitVec.ofNat 64 (Image.coreAddr + 124) ∧
+      s124.rget 7 = BitVec.ofNat 64 l ∧ CodeLoaded s124 ∧ s124.mem = s.mem ∧
+      s124.rget 6 = BitVec.ofNat 64 emitted.length ∧ s124.rget 1 = 0 ∧
+      s124.rget 13 = BitVec.ofNat 64 cap ∧ l < 256 := by
+  obtain ⟨s64, hr64, hpc64, h7_64, hcode64, hmem64, h5_64, h6_64, h1_64, h10_64, h11_64, h13_64, hc256⟩ :=
+    reach64 inp cap c (l :: rest'') emitted s hsc hss inv
+  obtain ⟨k1, hpcC, hmemC, h29C, hothC⟩ := high_parse s64 hcode64 c hi hpc64 h7_64 hc256 hnh
+  have hRle : rest''.length + 2 ≤ inp.length := by
+    have h := congrArg List.length inv.suffix
+    simp only [List.length_drop, List.length_cons] at h; omega
+  have hinlt : inp.length < 2 ^ 64 := by have := inv.in_lt; omega
+  have hl256 : l < 256 := inv.bytes_lt l (by
+    have : l ∈ inp.drop (inp.length - (c::l::rest'').length) := by
+      rw [inv.suffix]; exact List.mem_cons_of_mem _ List.mem_cons_self
+    exact List.drop_subset _ _ this)
+  have hdrop1 : inp.drop ((inp.length - (c::l::rest'').length) + 1) = l :: rest'' := by
+    rw [← List.tail_drop, inv.suffix]; rfl
+  have ha0C : (runFuel 0 k1 s64).rget 10 = BitVec.ofNat 64 Image.inputAddr := by
+    rw [hothC 10 (by decide) (by decide)]; exact h10_64
+  have ha1C : (runFuel 0 k1 s64).rget 11 = BitVec.ofNat 64 inp.length := by
+    rw [hothC 11 (by decide) (by decide)]; exact h11_64
+  have ht0C : (runFuel 0 k1 s64).rget 5
+      = BitVec.ofNat 64 ((inp.length - (c::l::rest'').length) + 1) := by
+    rw [hothC 5 (by decide) (by decide), h5_64, inv.idx,
+        show (1:Word) = BitVec.ofNat 64 1 from rfl, addr_ofNat_succ]
+  have hcodeC : CodeLoaded (runFuel 0 k1 s64) := by intro i hi; rw [hmemC, hmem64]; exact inv.code i hi
+  obtain ⟨s8, hr8, hpc8, h7_8, h5_8, hmem8, hcode8, hoth8⟩ :=
+    read_prefix (runFuel 0 k1 s64) 108 0x00c0#13 inp
+      ((inp.length - (c::l::rest'').length) + 1) l hcodeC hpcC (by decide) (by decide)
+      (by decide) (by decide) (by decide) ha0C ha1C ht0C (by omega) hinlt
+      (fun j hj => by rw [hmemC, hmem64]; exact inv.in_mem j hj)
+      (by rw [← getD_drop, hdrop1]; rfl) hl256
+  refine ⟨14 + (k1 + 4), s8, ?_, ?_, h7_8, hcode8, ?_, ?_, ?_, ?_, hl256⟩
+  · rw [runFuel_add, hr64, runFuel_add, hr8]
+  · rw [hpc8]
+  · rw [hmem8, hmemC, hmem64]
+  · rw [hoth8 6 (by decide) (by decide) (by decide) (by decide), hothC 6 (by decide) (by decide)]
+    exact h6_64
+  · rw [hoth8 1 (by decide) (by decide) (by decide) (by decide), hothC 1 (by decide) (by decide)]
+    exact h1_64
+  · rw [hoth8 13 (by decide) (by decide) (by decide) (by decide), hothC 13 (by decide) (by decide)]
+    exact h13_64
+
+/-- `Result` builder for output-short (code 2): the full decode `bs` exceeds
+    `cap`, so `coreSpec` truncates to `bs.take cap = emitted` with length `cap`. -/
+theorem short_result (s : State) (inp : List Nat) (cap : Nat) (emitted bs : List Nat)
+    (st : Hex0.Status) (hp : s.pc = 0) (ha0 : s.rget 10 = BitVec.ofNat 64 2)
+    (ha1 : s.rget 11 = BitVec.ofNat 64 cap)
+    (hmem : ∀ j, j < cap →
+      s.mem (BitVec.ofNat 64 (Image.outAddr + j)) = BitVec.ofNat 8 (emitted.getD j 0))
+    (hdec : Hex0.decode inp = (bs, st)) (hbs : cap < bs.length) (htake : bs.take cap = emitted) :
+    Result s inp cap := by
+  have hcs : Hex0.coreSpec inp cap = (2, emitted, cap) := by
+    simp only [Hex0.coreSpec, hdec]; rw [if_pos hbs, htake]
+  refine ⟨hp, ?_, ?_, ?_⟩
+  · rw [ha0, hcs]
+  · rw [ha1, hcs]
+  · intro j hj; rw [hcs] at hj ⊢; exact hmem j hj
+
+set_option maxRecDepth 4000 in
+/-- Error case: high nibble `c` at end of input (no low char) → `Trailing` (4). -/
+theorem loop_trailing (inp : List Nat) (cap : Nat) (c hi : Nat) (emitted : List Nat) (s : State)
+    (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = false) (hnh : Hex0.nibble c = some hi)
+    (inv : LoopInv inp cap s (c :: []) emitted) : ∃ k, Result (runFuel 0 k s) inp cap := by
+  have hge1 : 1 ≤ inp.length := by
+    have h := congrArg List.length inv.suffix
+    simp only [List.length_drop, List.length_cons, List.length_nil] at h; omega
+  obtain ⟨s64, hr64, hpc64, h7_64, hcode64, hmem64, h5_64, h6_64, h1_64, h10_64, h11_64, h13_64, hc256⟩ :=
+    reach64 inp cap c [] emitted s hsc hss inv
+  obtain ⟨k1, hpcC, hmemC, h29C, hothC⟩ := high_parse s64 hcode64 c hi hpc64 h7_64 hc256 hnh
+  -- at off 108, t0 = a1 = |inp| → bgeu taken → .Ltrailing (300)
+  have h5C : (runFuel 0 k1 s64).rget 5 = BitVec.ofNat 64 inp.length := by
+    rw [hothC 5 (by decide) (by decide), h5_64, inv.idx,
+        show (1:Word) = BitVec.ofNat 64 1 from rfl, addr_ofNat_succ]
+    congr 1; simp only [List.length_cons, List.length_nil]; omega
+  have ha1C : (runFuel 0 k1 s64).rget 11 = BitVec.ofNat 64 inp.length := by
+    rw [hothC 11 (by decide) (by decide)]; exact h11_64
+  have hcodeC : CodeLoaded (runFuel 0 k1 s64) := by intro i hi; rw [hmemC, hmem64]; exact inv.code i hi
+  have hbt := bgeu_eq_taken (runFuel 0 k1 s64) 108 5 11 inp.length 0x00c0#13
+    (BitVec.ofNat 64 (Image.coreAddr + 300)) hcodeC hpcC h5C ha1C (by decide) (by decide) (by decide)
+  have hdec : Hex0.decode inp = (emitted, Hex0.Status.Trailing) := by
+    have hsl := inv.spec_link
+    have hdtok : Hex0.decodeS .High (c :: []) = ([], Hex0.Status.Trailing) := by
+      simp [Hex0.decodeS, hsc, hss, hnh]
+    rw [hdtok] at hsl; simpa [Hex0.decode] using hsl
+  refine reach_error s ((runFuel 0 k1 s64).setPc (BitVec.ofNat 64 (Image.coreAddr + 300)))
+    inp cap emitted 300 4 (14 + (k1 + 1)) Hex0.Status.Trailing ?_ (by simp only [setPc_pc]) ?_ ?_
+    ?_ ?_ (by decide) (by decide) (by decide) (by decide) (by decide) rfl hdec inv.emitted_le inv.out_mem
+  · rw [runFuel_add, hr64, runFuel_add, hbt]
+  · intro i hi; simp only [setPc_mem]; rw [hmemC, hmem64]; exact inv.code i hi
+  · simp only [setPc_mem]; rw [hmemC, hmem64]
+  · rw [setPc_rget, hothC 6 (by decide) (by decide)]; exact h6_64
+  · rw [setPc_rget, hothC 1 (by decide) (by decide)]; exact h1_64
+
+set_option maxRecDepth 4000 in
+/-- Error case: high nibble `c`, but the low char `l` is a stop char → `Split` (3). -/
+theorem loop_split (inp : List Nat) (cap : Nat) (c hi l : Nat) (rest'' emitted : List Nat) (s : State)
+    (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = false) (hnh : Hex0.nibble c = some hi)
+    (hlls : Hex0.isLowStop l = true)
+    (inv : LoopInv inp cap s (c :: l :: rest'') emitted) : ∃ k, Result (runFuel 0 k s) inp cap := by
+  obtain ⟨k0, s124, hr124, hpc124, h7_124, hcode124, hmem124, h6_124, h1_124, h13_124, hl256⟩ :=
+    reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv
+  obtain ⟨k1, hpcS, hmemS, hothS⟩ := low_split s124 hcode124 l hpc124 h7_124 hl256 hlls
+  have hdec : Hex0.decode inp = (emitted, Hex0.Status.Split) := by
+    have hsl := inv.spec_link
+    have hdtok : Hex0.decodeS .High (c :: l :: rest'') = ([], Hex0.Status.Split) := by
+      rw [Hex0.decodeS]; simp only [hsc, hss, hnh, Bool.false_eq_true, if_false]
+      rw [Hex0.decodeS]; simp [hlls]
+    rw [hdtok] at hsl; simpa [Hex0.decode] using hsl
+  refine reach_error s (runFuel 0 k1 s124) inp cap emitted 288 3 (k0 + k1) Hex0.Status.Split
+    ?_ hpcS ?_ ?_ ?_ ?_ (by decide) (by decide) (by decide) (by decide) (by decide) rfl hdec
+    inv.emitted_le ?_
+  · rw [runFuel_add, hr124]
+  · intro i hi; rw [hmemS, hmem124]; exact inv.code i hi
+  · rw [hmemS, hmem124]
+  · rw [hothS 6 (by decide)]; exact h6_124
+  · rw [hothS 1 (by decide)]; exact h1_124
+  · intro j hj; rw [hmem124] at *; exact inv.out_mem j hj
+
+set_option maxRecDepth 4000 in
+/-- Error case: head char `c` is neither space/comment nor a hex digit → `Unknown` (5). -/
+theorem loop_unknown_high (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : List Nat) (s : State)
+    (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = false) (hn : Hex0.nibble c = none)
+    (inv : LoopInv inp cap s (c :: rest') emitted) : ∃ k, Result (runFuel 0 k s) inp cap := by
+  obtain ⟨s64, hr64, hpc64, h7_64, hcode64, hmem64, h5_64, h6_64, h1_64, h10_64, h11_64, h13_64, hc256⟩ :=
+    reach64 inp cap c rest' emitted s hsc hss inv
+  obtain ⟨k1, hpcU, hmemU, hothU⟩ := high_parse_unknown s64 hcode64 c hpc64 h7_64 hc256 hn
+  have hdec : Hex0.decode inp = (emitted, Hex0.Status.Unknown) := by
+    have hsl := inv.spec_link
+    have hdtok : Hex0.decodeS .High (c :: rest') = ([], Hex0.Status.Unknown) := by
+      rw [Hex0.decodeS]; simp [hsc, hss, hn]
+    rw [hdtok] at hsl; simpa [Hex0.decode] using hsl
+  refine reach_error s (runFuel 0 k1 s64) inp cap emitted 312 5 (14 + k1) Hex0.Status.Unknown
+    ?_ hpcU ?_ ?_ ?_ ?_ (by decide) (by decide) (by decide) (by decide) (by decide) rfl hdec
+    inv.emitted_le inv.out_mem
+  · rw [runFuel_add, hr64]
+  · intro i hi; rw [hmemU, hmem64]; exact inv.code i hi
+  · rw [hmemU, hmem64]
+  · rw [hothU 6 (by decide)]; exact h6_64
+  · rw [hothU 1 (by decide)]; exact h1_64
+
+set_option maxRecDepth 4000 in
+/-- Error case: high nibble `c`, low char `l` is neither stop nor hex digit → `Unknown` (5). -/
+theorem loop_unknown_low (inp : List Nat) (cap : Nat) (c hi l : Nat) (rest'' emitted : List Nat)
+    (s : State) (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = false)
+    (hnh : Hex0.nibble c = some hi) (hlls : Hex0.isLowStop l = false) (hnl : Hex0.nibble l = none)
+    (inv : LoopInv inp cap s (c :: l :: rest'') emitted) : ∃ k, Result (runFuel 0 k s) inp cap := by
+  obtain ⟨k0, s124, hr124, hpc124, h7_124, hcode124, hmem124, h6_124, h1_124, h13_124, hl256⟩ :=
+    reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv
+  -- l not a stop char → low beq chain falls through to 164
+  have hl5 : l ≠ 10 ∧ l ≠ 32 ∧ l ≠ 95 ∧ l ≠ 35 ∧ l ≠ 59 := by
+    simp only [Hex0.isLowStop, Hex0.isSpace, Hex0.isComment, Hex0.c_nl, Hex0.c_sp, Hex0.c_us,
+      Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hlls
+    refine ⟨?_,?_,?_,?_,?_⟩ <;> omega
+  obtain ⟨hpcE, hmemE, hothE⟩ :=
+    low_beq_ft s124 hcode124 l hpc124 h7_124 hl256 hl5.2.2.2.1 hl5.2.2.2.2 hl5.1 hl5.2.1 hl5.2.2.1
+  have hcodeE : CodeLoaded (runFuel 0 10 s124) := by intro i hi; rw [hmemE]; exact hcode124 i hi
+  have h7E : (runFuel 0 10 s124).rget 7 = BitVec.ofNat 64 l := by rw [hothE 7 (by decide)]; exact h7_124
+  obtain ⟨k1, hpcU, hmemU, hothU⟩ := low_parse_unknown (runFuel 0 10 s124) hcodeE l hpcE h7E hl256 hnl
+  have hdec : Hex0.decode inp = (emitted, Hex0.Status.Unknown) := by
+    have hsl := inv.spec_link
+    have hdtok : Hex0.decodeS .High (c :: l :: rest'') = ([], Hex0.Status.Unknown) := by
+      rw [Hex0.decodeS]; simp only [hsc, hss, hnh, Bool.false_eq_true, if_false]
+      rw [Hex0.decodeS]; simp [hlls, hnl]
+    rw [hdtok] at hsl; simpa [Hex0.decode] using hsl
+  refine reach_error s (runFuel 0 k1 (runFuel 0 10 s124)) inp cap emitted 312 5
+    (k0 + (10 + k1)) Hex0.Status.Unknown ?_ hpcU ?_ ?_ ?_ ?_ (by decide) (by decide) (by decide)
+    (by decide) (by decide) rfl hdec inv.emitted_le ?_
+  · rw [runFuel_add, hr124, runFuel_add]
+  · intro i hi; rw [hmemU, hmemE, hmem124]; exact inv.code i hi
+  · rw [hmemU, hmemE, hmem124]
+  · rw [hothU 6 (by decide), hothE 6 (by decide)]; exact h6_124
+  · rw [hothU 1 (by decide), hothE 1 (by decide)]; exact h1_124
+  · intro j hj; rw [hmem124] at *; exact inv.out_mem j hj
+
+set_option maxRecDepth 4000 in
+/-- Error case: valid byte `c`,`l` but the output is full (`|emitted| = cap`) →
+    OutputShort (2): `coreSpec` truncates the (longer) decode to `emitted`. -/
+theorem loop_short (inp : List Nat) (cap : Nat) (c hi l lo : Nat) (rest'' emitted : List Nat)
+    (s : State) (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = false)
+    (hnh : Hex0.nibble c = some hi) (hnl : Hex0.nibble l = some lo) (hge : cap ≤ emitted.length)
+    (inv : LoopInv inp cap s (c :: l :: rest'') emitted) : ∃ k, Result (runFuel 0 k s) inp cap := by
+  have heq : emitted.length = cap := Nat.le_antisymm inv.emitted_le hge
+  have hlls : Hex0.isLowStop l = false := nibble_not_lowstop l lo hnl
+  obtain ⟨k0, s124, hr124, hpc124, h7_124, hcode124, hmem124, h6_124, h1_124, h13_124, hl256⟩ :=
+    reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv
+  have hl5 : l ≠ 10 ∧ l ≠ 32 ∧ l ≠ 95 ∧ l ≠ 35 ∧ l ≠ 59 := by
+    simp only [Hex0.isLowStop, Hex0.isSpace, Hex0.isComment, Hex0.c_nl, Hex0.c_sp, Hex0.c_us,
+      Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hlls
+    refine ⟨?_,?_,?_,?_,?_⟩ <;> omega
+  obtain ⟨hpcE, hmemE, hothE⟩ :=
+    low_beq_ft s124 hcode124 l hpc124 h7_124 hl256 hl5.2.2.2.1 hl5.2.2.2.2 hl5.1 hl5.2.1 hl5.2.2.1
+  have hcodeE : CodeLoaded (runFuel 0 10 s124) := by intro i hi; rw [hmemE]; exact hcode124 i hi
+  have h7E : (runFuel 0 10 s124).rget 7 = BitVec.ofNat 64 l := by rw [hothE 7 (by decide)]; exact h7_124
+  obtain ⟨k1, hpcF, hmemF, h30F, hothF⟩ := low_parse (runFuel 0 10 s124) hcodeE l lo hpcE h7E hl256 hnl
+  -- at off 208, t1 = |emitted| = cap = a3 → bgeu taken → .Lshort (276)
+  have h6F : (runFuel 0 k1 (runFuel 0 10 s124)).rget 6 = BitVec.ofNat 64 emitted.length := by
+    rw [hothF 6 (by decide) (by decide), hothE 6 (by decide)]; exact h6_124
+  have h13F : (runFuel 0 k1 (runFuel 0 10 s124)).rget 13 = BitVec.ofNat 64 emitted.length := by
+    rw [hothF 13 (by decide) (by decide), hothE 13 (by decide), h13_124, heq]
+  have h1F : (runFuel 0 k1 (runFuel 0 10 s124)).rget 1 = 0 := by
+    rw [hothF 1 (by decide) (by decide), hothE 1 (by decide)]; exact h1_124
+  have hcodeF : CodeLoaded (runFuel 0 k1 (runFuel 0 10 s124)) := by
+    intro i hi; rw [hmemF, hmemE, hmem124]; exact inv.code i hi
+  have hbt := bgeu_eq_taken (runFuel 0 k1 (runFuel 0 10 s124)) 208 6 13 emitted.length 0x0044#13
+    (BitVec.ofNat 64 (Image.coreAddr + 276)) hcodeF hpcF h6F h13F (by decide) (by decide) (by decide)
+  have hcodeE : CodeLoaded ((runFuel 0 k1 (runFuel 0 10 s124)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 276))) := by
+    intro i hi; simp only [setPc_mem]; exact hcodeF i hi
+  obtain ⟨hp, ha0, ha1, hm⟩ := halt_epilogue
+    ((runFuel 0 k1 (runFuel 0 10 s124)).setPc (BitVec.ofNat 64 (Image.coreAddr + 276)))
+    276 2 emitted.length hcodeE (by simp only [setPc_pc]) (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by rw [setPc_rget]; exact h6F) (by rw [setPc_rget]; exact h1F)
+  have hdtok := decodeS_byte c l rest'' hi lo hsc hss hnh hlls hnl
+  have hdec : Hex0.decode inp =
+      (emitted ++ (hi * 16 + lo) :: (Hex0.decodeS .High rest'').1, (Hex0.decodeS .High rest'').2) := by
+    have hsl := inv.spec_link; rw [hdtok] at hsl; simpa [Hex0.decode] using hsl
+  refine ⟨k0 + (10 + k1) + 1 + 3, ?_⟩
+  rw [runFuel_add]
+  have hrunSE : runFuel 0 (k0 + (10 + k1) + 1) s
+      = (runFuel 0 k1 (runFuel 0 10 s124)).setPc (BitVec.ofNat 64 (Image.coreAddr + 276)) := by
+    rw [runFuel_add, runFuel_add, hr124, runFuel_add, hbt]
+  rw [hrunSE]
+  refine short_result _ inp cap emitted _ (Hex0.decodeS .High rest'').2 hp ha0 ?_ ?_ hdec ?_ ?_
+  · rw [ha1, heq]
+  · intro j hj; rw [hm]; simp only [setPc_mem]; rw [hmemF, hmemE, hmem124]
+    exact inv.out_mem j (by omega)
+  · rw [List.length_append, List.length_cons]; omega
+  · rw [← heq]; exact List.take_left _ _
 
 /-- One main-loop iteration (the machine side of step 3). From a non-empty
     remaining input, the machine either halts correctly (error / output-short)
