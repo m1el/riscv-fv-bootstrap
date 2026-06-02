@@ -31,14 +31,15 @@ Goal: run hex0 on bare-metal `qemu-system-riscv` **and** have a formal proof
 3. **Token decomposition** `decode (token ++ rest) = decode token ++ decode rest`
    ≡ machine `core(in, a, b) ≡ core(in, a+Δin, b+Δout)`:
    - spec side — ✅ `decodeS_spacing / decodeS_byte / decodeS_comment_skip`.
-   - machine side — 🚧 `loop_iteration` (the one remaining `sorry` of substance):
-     from `LoopInv .. rest emitted`, case-split on `rest.head`'s char class and
-     run the body (`bgeu`-not-taken, `lbu` input read, char-compares, then
-     spacing→loop / nibble→`sb`+loop / comment→sub-loop / error→halt), landing in
-     `LoopInv .. rest' emitted'` with `rest'.length < rest.length`. The engine,
-     arithmetic toolkit (`ult_ofNat`, `ofNat_ne`, `getD_drop`), and spec lemmas
-     reduce this to mechanical (if lengthy) case work; the `sb`/comment cases are
-     the meatiest (output/code disjointness frame).
+   - machine side — 🚧 `loop_iteration`. **`loop_prefix` is now PROVED**: the
+     shared 4-instr head `bgeu`(not-taken)→`add`→`lbu`(read input char)→`addi`,
+     including the input-memory read framing (`in_mem` + `getD_drop` +
+     `setWidth8_64`). What remains in `loop_iteration`: from `loop_prefix`'s `s4`,
+     the per-class tail — the `beq` char-dispatch chain then spacing→loop /
+     nibble→`sb`+loop / comment→sub-loop / error→halt, rebuilding `LoopInv` for
+     the shorter suffix (the `sb`/comment cases carry the output/code disjointness
+     frame). Toolkit in hand: engine, `ult_ofNat`/`ofNat_ne`/`getD_drop`/
+     `setWidth8_64`, `loop_prefix`, spec decomposition.
 4. **Induction** — ✅ **`loop_correct`** (structural induction on a fuel bound on
    `rest.length`; base = `eof_result`/`core_eof`, step = `loop_iteration`,
    chaining via `runFuel_add`, telescoping via `spec_link`). PROVED.
