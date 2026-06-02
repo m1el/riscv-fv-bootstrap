@@ -203,6 +203,11 @@ Proof.
   intros h. simpl. destruct (s.(pc) =? 0) eqn:E; [apply Z.eqb_eq in E; lia | reflexivity].
 Qed.
 
+Lemma runUntil_S n s : s.(pc) <> 0 -> runUntil 0 (S n) s = runUntil 0 n (step s).
+Proof.
+  intros h. simpl. destruct (s.(pc) =? 0) eqn:E; [apply Z.eqb_eq in E; lia | reflexivity].
+Qed.
+
 Lemma runUntil_add a b s : runUntil 0 (a + b) s = runUntil 0 b (runUntil 0 a s).
 Proof.
   revert b s. induction a as [|k ih]; intros b s; simpl; [reflexivity|].
@@ -230,6 +235,78 @@ Qed.
 Lemma decodeS_comment c rest : isComment c = true ->
   decodeS High (c :: rest) = decodeS High (skipComment rest).
 Proof. intros hc. simp decodeS. rewrite hc. reflexivity. Qed.
+
+(** ** EOF base case (mirror of core_eof). *)
+
+Lemma coreBytes_len : Z.of_nat (length coreBytes) = 324. Proof. reflexivity. Qed.
+Lemma coreAddr_pos k : 0 <= k -> coreAddr + k <> 0. Proof. unfold coreAddr; lia. Qed.
+Lemma CodeLoaded_eqmem s t : t.(mem) = s.(mem) -> CodeLoaded s -> CodeLoaded t.
+Proof. intros hm hcs i Hi. rewrite hm. apply hcs; exact Hi. Qed.
+
+Lemma core_eof : forall s L E,
+  CodeLoaded s -> s.(pc) = coreAddr + 8 ->
+  rget s 5 = L -> rget s 11 = L -> rget s 6 = E -> rget s 1 = 0 -> 0 <= E < 2 ^ 64 ->
+  (runUntil 0 4 s).(pc) = 0 /\ rget (runUntil 0 4 s) 10 = 0 /\
+  rget (runUntil 0 4 s) 11 = E /\ (runUntil 0 4 s).(mem) = s.(mem).
+Proof.
+  intros s L E hc hpc h5 h11 h6 h1 hE.
+  (* step 1: bgeu t0,a1 taken (t0 = a1) -> .Lok (264) *)
+  assert (hs1 : step s = setPc s (coreAddr + 264)).
+  { rewrite (step_bgeu s 8 5 11 256 hc ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc
+              ltac:(vm_compute; reflexivity)).
+    rewrite h5, h11. unfold ultb. rewrite Z.ltb_irrefl. cbn match.
+    rewrite hpc, (wadd_id (coreAddr+8) 256 ltac:(unfold coreAddr; lia)). reflexivity. }
+  set (s1 := setPc s (coreAddr + 264)) in *.
+  assert (hpc1 : s1.(pc) = coreAddr + 264) by (unfold s1; apply setPc_pc).
+  assert (hc1 : CodeLoaded s1) by (apply (CodeLoaded_eqmem s); [reflexivity| exact hc]).
+  (* step 2: li a0,0 -> 268 *)
+  assert (hs2 : step s1 = setPc (rset s1 10 0) (coreAddr + 268)).
+  { rewrite (step_addi s1 264 10 0 0 hc1 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc1
+              ltac:(vm_compute; reflexivity)).
+    rewrite rget_zero, (wadd_id 0 0 ltac:(lia)), hpc1,
+            (wadd_id (coreAddr+264) 4 ltac:(unfold coreAddr; lia)). reflexivity. }
+  set (s2 := setPc (rset s1 10 0) (coreAddr + 268)) in *.
+  assert (hpc2 : s2.(pc) = coreAddr + 268) by (unfold s2; apply setPc_pc).
+  assert (hc2 : CodeLoaded s2) by
+    (apply (CodeLoaded_eqmem s); [unfold s2, s1; rewrite setPc_mem, rset_mem, setPc_mem; reflexivity| exact hc]).
+  assert (h6_2 : rget s2 6 = E).
+  { unfold s2. rewrite setPc_rget, (rset_rget s1 10 0 6 ltac:(lia) ltac:(lia)).
+    unfold s1. rewrite setPc_rget. exact h6. }
+  (* step 3: mv a1,t1 -> 272 *)
+  assert (hs3 : step s2 = setPc (rset s2 11 E) (coreAddr + 272)).
+  { rewrite (step_addi s2 268 11 6 0 hc2 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc2
+              ltac:(vm_compute; reflexivity)).
+    rewrite h6_2, (wadd_id E 0 ltac:(lia)), Z.add_0_r, hpc2,
+            (wadd_id (coreAddr+268) 4 ltac:(unfold coreAddr; lia)). reflexivity. }
+  set (s3 := setPc (rset s2 11 E) (coreAddr + 272)) in *.
+  assert (hpc3 : s3.(pc) = coreAddr + 272) by (unfold s3; apply setPc_pc).
+  assert (hc3 : CodeLoaded s3) by
+    (apply (CodeLoaded_eqmem s); [unfold s3,s2,s1; rewrite !setPc_mem, !rset_mem; reflexivity| exact hc]).
+  assert (h1_3 : rget s3 1 = 0).
+  { unfold s3. rewrite setPc_rget, (rset_rget s2 11 E 1 ltac:(lia) ltac:(lia)).
+    unfold s2. rewrite setPc_rget, (rset_rget s1 10 0 1 ltac:(lia) ltac:(lia)).
+    unfold s1. rewrite setPc_rget. exact h1. }
+  (* step 4: ret -> pc = 0 *)
+  assert (hs4 : step s3 = setPc s3 0).
+  { rewrite (step_jalr s3 272 0 1 0 hc3 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc3
+              ltac:(vm_compute; reflexivity)).
+    assert (Hr : rset s3 0 (wadd s3.(pc) 4) = s3) by (unfold rset; reflexivity).
+    rewrite Hr, h1_3, (wadd_id 0 0 ltac:(lia)). reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; apply coreAddr_pos; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; apply coreAddr_pos; lia).
+  assert (hp2 : s2.(pc) <> 0) by (rewrite hpc2; apply coreAddr_pos; lia).
+  assert (hp3 : s3.(pc) <> 0) by (rewrite hpc3; apply coreAddr_pos; lia).
+  assert (hrun : runUntil 0 4 s = setPc s3 0).
+  { rewrite (runUntil_S 3 s hp0), hs1, (runUntil_S 2 s1 hp1), hs2,
+            (runUntil_S 1 s2 hp2), hs3, (runUntil_S 0 s3 hp3), hs4. reflexivity. }
+  rewrite hrun. refine (conj _ (conj _ (conj _ _))).
+  - rewrite setPc_pc. reflexivity.
+  - rewrite setPc_rget. unfold s3. rewrite setPc_rget, (rset_rget s2 11 E 10 ltac:(lia) ltac:(lia)).
+    unfold s2. rewrite setPc_rget, (rset_rget s1 10 0 10 ltac:(lia) ltac:(lia)). reflexivity.
+  - rewrite setPc_rget. unfold s3. rewrite setPc_rget, (rset_rget s2 11 E 11 ltac:(lia) ltac:(lia)).
+    reflexivity.
+  - rewrite setPc_mem. unfold s3, s2, s1. rewrite !setPc_mem, !rset_mem. reflexivity.
+Qed.
 
 (** ** Well-formedness: input region fits before the output region, etc. *)
 Record WellFormed (inp : list Z) (cap : Z) : Prop := {
