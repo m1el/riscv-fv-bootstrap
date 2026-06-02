@@ -664,7 +664,7 @@ Qed.
 Lemma spacing_tail s4 c :
   CodeLoaded s4 -> s4.(pc) = coreAddr + 24 -> rget s4 7 = c ->
   0 <= c -> isSpace (Z.to_nat c) = true ->
-  exists k, (runUntil 0 k s4).(pc) = coreAddr + 8 /\
+  exists k, (k <= 10)%nat /\ (runUntil 0 k s4).(pc) = coreAddr + 8 /\
             (runUntil 0 k s4).(mem) = s4.(mem) /\
             (forall i, i <> 28 -> rget (runUntil 0 k s4) i = rget s4 i).
 Proof.
@@ -701,6 +701,7 @@ Proof.
     assert (hfin : runUntil 0 (2 + (2 + 2)) s4 = setPc (rset s_c 28 10) (coreAddr + 8))
       by (rewrite runUntil_add, hb1, runUntil_add, hb2, hb3; reflexivity).
     exists (2 + (2 + 2))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold s_c. rewrite setPc_mem, rset_mem.
       unfold s_b. rewrite setPc_mem, rset_mem. reflexivity.
@@ -726,6 +727,7 @@ Proof.
     assert (hfin : runUntil 0 (2 + (2 + (2 + 2))) s4 = setPc (rset s_d 28 32) (coreAddr + 8))
       by (rewrite runUntil_add, hb1, runUntil_add, hb2, runUntil_add, hb3, hb4; reflexivity).
     exists (2 + (2 + (2 + 2)))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold s_d. rewrite setPc_mem, rset_mem.
       unfold s_c. rewrite setPc_mem, rset_mem. unfold s_b. rewrite setPc_mem, rset_mem. reflexivity.
@@ -764,6 +766,7 @@ Proof.
       by (rewrite runUntil_add, hb1, runUntil_add, hb2, runUntil_add, hb3, runUntil_add, hb4, hb5;
           reflexivity).
     exists (2 + (2 + (2 + (2 + 2))))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold s_e. rewrite setPc_mem, rset_mem.
       unfold s_d. rewrite setPc_mem, rset_mem. unfold s_c. rewrite setPc_mem, rset_mem.
@@ -823,7 +826,7 @@ Qed.
 Lemma loop_spacing inp cap c rest' emitted s :
   isSpace (Z.to_nat c) = true ->
   LoopInv inp cap s (c :: rest') emitted ->
-  exists k, LoopInv inp cap (runUntil 0 k s) rest' emitted.
+  exists k, (k <= 50)%nat /\ LoopInv inp cap (runUntil 0 k s) rest' emitted.
 Proof.
   intros hss inv.
   destruct (loopinv_head inp cap c rest' emitted s inv) as [Hin [Hc0 _]].
@@ -832,8 +835,8 @@ Proof.
   destruct (loop_prefix inp cap c rest' emitted s inv)
     as [hpc4 [ht2 [ht0 [hmem4 [hcode4 hother4]]]]].
   destruct (spacing_tail (runUntil 0 4 s) c hcode4 hpc4 ht2 Hc0 hss)
-    as [k [htpc [htmem htother]]].
-  exists (4 + k)%nat. rewrite runUntil_add.
+    as [k [hk [htpc [htmem htother]]]].
+  exists (4 + k)%nat. split; [lia|]. rewrite runUntil_add.
   apply (spacing_loopinv inp cap c rest' emitted s (runUntil 0 k (runUntil 0 4 s)) inv hsc hss).
   - exact htpc.
   - rewrite htmem; exact hmem4.
@@ -1278,7 +1281,7 @@ Qed.
 Lemma high_parse s c hi :
   CodeLoaded s -> s.(pc) = coreAddr + 64 -> rget s 7 = c -> 0 <= c < 256 ->
   nibble (Z.to_nat c) = Some hi ->
-  exists k, (runUntil 0 k s).(pc) = coreAddr + 108 /\ (runUntil 0 k s).(mem) = s.(mem) /\
+  exists k, (k <= 9)%nat /\ (runUntil 0 k s).(pc) = coreAddr + 108 /\ (runUntil 0 k s).(mem) = s.(mem) /\
     rget (runUntil 0 k s) 29 = Z.of_nat hi /\
     (forall i, i <> 28 -> i <> 29 -> rget (runUntil 0 k s) i = rget s i).
 Proof.
@@ -1321,6 +1324,7 @@ Proof.
     assert (hfin : runUntil 0 (2 + (2 + 2)) s = setPc s_c (coreAddr + 108))
       by (rewrite (runUntil_add 2 (2 + 2)), bA, (runUntil_add 2 2), bB, hbc; reflexivity).
     exists (2 + (2 + 2))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem. unfold s_c. rewrite setPc_mem, rset_mem. unfold s_b.
       rewrite setPc_mem, rset_mem. unfold s_a. rewrite setPc_mem, rset_mem. reflexivity.
@@ -1376,6 +1380,7 @@ Proof.
           (runUntil_add 2 (2 + 1)), bC, (runUntil_add 2 1), bD, (runUntil_one s_d hpd0), haddi;
           reflexivity).
     exists (2 + (2 + (2 + (2 + 1))))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold s_d. rewrite setPc_mem, rset_mem. unfold s_c.
       rewrite setPc_mem, rset_mem. unfold s_b. rewrite setPc_mem, rset_mem. unfold s_a.
@@ -1396,7 +1401,7 @@ Qed.
 Lemma low_parse s c lo :
   CodeLoaded s -> s.(pc) = coreAddr + 164 -> rget s 7 = c -> 0 <= c < 256 ->
   nibble (Z.to_nat c) = Some lo ->
-  exists k, (runUntil 0 k s).(pc) = coreAddr + 208 /\ (runUntil 0 k s).(mem) = s.(mem) /\
+  exists k, (k <= 9)%nat /\ (runUntil 0 k s).(pc) = coreAddr + 208 /\ (runUntil 0 k s).(mem) = s.(mem) /\
     rget (runUntil 0 k s) 30 = Z.of_nat lo /\
     (forall i, i <> 28 -> i <> 30 -> rget (runUntil 0 k s) i = rget s i).
 Proof.
@@ -1439,6 +1444,7 @@ Proof.
     assert (hfin : runUntil 0 (2 + (2 + 2)) s = setPc s_c (coreAddr + 208))
       by (rewrite (runUntil_add 2 (2 + 2)), bA, (runUntil_add 2 2), bB, hbc; reflexivity).
     exists (2 + (2 + 2))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem. unfold s_c. rewrite setPc_mem, rset_mem. unfold s_b.
       rewrite setPc_mem, rset_mem. unfold s_a. rewrite setPc_mem, rset_mem. reflexivity.
@@ -1494,6 +1500,7 @@ Proof.
           (runUntil_add 2 (2 + 1)), bC, (runUntil_add 2 1), bD, (runUntil_one s_d hpd0), haddi;
           reflexivity).
     exists (2 + (2 + (2 + (2 + 1))))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold s_d. rewrite setPc_mem, rset_mem. unfold s_c.
       rewrite setPc_mem, rset_mem. unfold s_b. rewrite setPc_mem, rset_mem. unfold s_a.
@@ -1546,7 +1553,7 @@ Lemma store_epilogue s hi lo n cap :
   rget s 6 = Z.of_nat n -> rget s 13 = cap -> rget s 12 = outAddr ->
   rget s 29 = Z.of_nat hi -> rget s 30 = Z.of_nat lo ->
   (hi < 16)%nat -> (lo < 16)%nat -> Z.of_nat n < cap -> outAddr + cap < 2 ^ 64 ->
-  exists k, (runUntil 0 k s).(pc) = coreAddr + 8 /\
+  exists k, (k <= 7)%nat /\ (runUntil 0 k s).(pc) = coreAddr + 8 /\
     rget (runUntil 0 k s) 6 = Z.of_nat (n + 1) /\
     (forall i, i <> 6 -> i <> 28 -> i <> 29 -> rget (runUntil 0 k s) i = rget s i) /\
     (forall a, (runUntil 0 k s).(mem) a =
@@ -1662,6 +1669,7 @@ Proof.
       (runUntil_S 3 v3 hp3), hu4, (runUntil_S 2 v4 hp4), hu5, (runUntil_S 1 v5 hp5), hu6,
       (runUntil_S 0 v6 hp6), hu7. reflexivity. }
   exists 7%nat. rewrite hfin. repeat apply conj.
+  - lia.
   - apply setPc_pc.
   - rewrite setPc_rget. unfold v6.
     rewrite setPc_rget, (rset_rget v5 6 _ 6 ltac:(lia) ltac:(lia)), Z.eqb_refl. lia.
@@ -2210,7 +2218,7 @@ Proof.
     as [Hpc64 [H7_64 [Hcode64 [Hmem64 [H5_64 [H6_64 [H1_64 [H10_64 [H11_64 [H13_64 [H12_64 Hc256]]]]]]]]]]].
   set (s64 := runUntil 0 14 s) in *.
   destruct (high_parse s64 c hi Hcode64 Hpc64 H7_64 Hc256 hnh)
-    as [k1 [HpcC [HmemC [H29C HothC]]]].
+    as [k1 [Hk1 [HpcC [HmemC [H29C HothC]]]]].
   destruct inv0 as [_ _ _ _ _ _ _ Hinmem Hinlt Hbytes _ _ Hidx Hsuf _ _ _ _].
   set (m := (length inp - length (c :: l :: rest''))%nat) in *.
   assert (hlc : Z.of_nat (length (c :: l :: rest'')) = Z.of_nat (length rest'') + 2)
@@ -2358,7 +2366,7 @@ Proof.
   destruct (reach64 inp cap c nil emitted s hsc hss inv)
     as [Hpc64 [H7_64 [Hcode64 [Hmem64 [H5_64 [H6_64 [H1_64 [H10_64 [H11_64 [_ [_ Hc256]]]]]]]]]]].
   set (s64 := runUntil 0 14 s) in *.
-  destruct (high_parse s64 c hi Hcode64 Hpc64 H7_64 Hc256 hnh) as [k1 [HpcC [HmemC [_ HothC]]]].
+  destruct (high_parse s64 c hi Hcode64 Hpc64 H7_64 Hc256 hnh) as [k1 [Hk1 [HpcC [HmemC [_ HothC]]]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ Hidx Hsuf _ Hemitle Houtmem Hspec].
   assert (HcodeC : CodeLoaded (runUntil 0 k1 s64)) by
     (apply (CodeLoaded_eqmem s64); [exact HmemC| exact Hcode64]).
@@ -2537,7 +2545,7 @@ Proof.
   assert (HcodeE0 : CodeLoaded sE0) by
     (apply (CodeLoaded_eqmem (runUntil 0 k0 s)); [exact HmemE| exact Hcode124]).
   assert (H7E0 : rget sE0 7 = l) by (rewrite (HothE 7 ltac:(lia)); exact H7_124).
-  destruct (low_parse sE0 l lo HcodeE0 HpcE H7E0 Hl256 hnl) as [k2 [HpcF [HmemF [_ HothF]]]].
+  destruct (low_parse sE0 l lo HcodeE0 HpcE H7E0 Hl256 hnl) as [k2 [Hk2 [HpcF [HmemF [_ HothF]]]]].
   set (sP := runUntil 0 k2 sE0) in *.
   assert (HmemP : sP.(mem) = s.(mem)) by (rewrite HmemF, HmemE, Hmem124; reflexivity).
   assert (HcodeP : CodeLoaded sP) by (apply (CodeLoaded_eqmem s); [exact HmemP| destruct inv0 as [_ Hc _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _]; exact Hc]).
@@ -2610,7 +2618,7 @@ Proof.
   assert (HcodeE0 : CodeLoaded sE0) by
     (apply (CodeLoaded_eqmem (runUntil 0 k0 s)); [exact HmemE| exact Hcode124]).
   assert (H7E0 : rget sE0 7 = l) by (rewrite (HothE 7 ltac:(lia)); exact H7_124).
-  destruct (low_parse sE0 l lo HcodeE0 HpcE H7E0 Hl256 hnl) as [k2 [HpcF [HmemF [H30F HothF]]]].
+  destruct (low_parse sE0 l lo HcodeE0 HpcE H7E0 Hl256 hnl) as [k2 [Hk2 [HpcF [HmemF [H30F HothF]]]]].
   set (sP := runUntil 0 k2 sE0) in *.
   assert (HmemP : sP.(mem) = s.(mem)) by (rewrite HmemF, HmemE, Hmem124; reflexivity).
   destruct inv0 as [_ Hcode_s _ _ _ _ _ Hinmem Hinlt Hbytes Hinfits Houtlt _ Hsuf _ _ Houtmem Hspec].
@@ -2634,7 +2642,7 @@ Proof.
   assert (hhi16 : (hi < 16)%nat) by (apply (nibble_lt (Z.to_nat c)); exact hnh).
   assert (hlo16 : (lo < 16)%nat) by (apply (nibble_lt (Z.to_nat l)); exact hnl).
   destruct (store_epilogue sP hi lo (length emitted) cap HcodeP HpcF H6P H13P H12P H29P H30F
-    hhi16 hlo16 hcap Houtlt) as [k3 [HpcSF [H6SF [HothSF HmemSF]]]].
+    hhi16 hlo16 hcap Houtlt) as [k3 [Hk3 [HpcSF [H6SF [HothSF HmemSF]]]]].
   set (sF := runUntil 0 k3 sP) in *.
   exists (k0 + (10 + (k2 + k3)))%nat.
   assert (hchain : runUntil 0 (k0 + (10 + (k2 + k3))) s = sF).
