@@ -2189,6 +2189,69 @@ Proof.
   - lia.
 Qed.
 
+(* From the loop head, a byte head [c] (= hi) with a following char [l]: navigate
+   (read c, high-parse, read l) to offset 124 (the low-stop beq chain). *)
+Lemma reach124 inp cap c hi l rest'' emitted s :
+  isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false ->
+  nibble (Z.to_nat c) = Some hi ->
+  LoopInv inp cap s (c :: l :: rest'') emitted ->
+  exists k, (runUntil 0 k s).(pc) = coreAddr + 124 /\ rget (runUntil 0 k s) 7 = l /\
+    CodeLoaded (runUntil 0 k s) /\ (runUntil 0 k s).(mem) = s.(mem) /\
+    rget (runUntil 0 k s) 6 = Z.of_nat (length emitted) /\ rget (runUntil 0 k s) 1 = 0 /\
+    rget (runUntil 0 k s) 13 = cap /\ 0 <= l < 256.
+Proof.
+  intros hsc hss hnh inv. pose proof inv as inv0.
+  destruct (reach64 inp cap c (l :: rest'') emitted s hsc hss inv)
+    as [Hpc64 [H7_64 [Hcode64 [Hmem64 [H5_64 [H6_64 [H1_64 [H10_64 [H11_64 [H13_64 Hc256]]]]]]]]]].
+  set (s64 := runUntil 0 14 s) in *.
+  destruct (high_parse s64 c hi Hcode64 Hpc64 H7_64 Hc256 hnh)
+    as [k1 [HpcC [HmemC [H29C HothC]]]].
+  destruct inv0 as [_ _ _ _ _ _ _ Hinmem Hinlt Hbytes _ _ Hidx Hsuf _ _ _ _].
+  set (m := (length inp - length (c :: l :: rest''))%nat) in *.
+  assert (hlc : Z.of_nat (length (c :: l :: rest'')) = Z.of_nat (length rest'') + 2)
+    by (simpl length; lia).
+  assert (hge2 : (length (c :: l :: rest'') <= length inp)%nat).
+  { pose proof (f_equal (@length Z) Hsuf) as Hl. rewrite length_skipn in Hl. fold m in Hl. lia. }
+  set (idx := (m + 1)%nat) in *.
+  assert (Hin_l : In l inp).
+  { rewrite <- (firstn_skipn m inp). apply in_or_app. right. fold m in Hsuf. rewrite Hsuf.
+    right; left; reflexivity. }
+  assert (Hl256 : 0 <= l < 256) by (apply Hbytes; exact Hin_l).
+  assert (Hidx_lt : (idx < length inp)%nat) by (unfold idx, m; simpl length in hge2; lia).
+  assert (Hnth : nth idx inp 0 = l).
+  { unfold idx. rewrite <- (nth_skipn m inp 1 0), Hsuf. reflexivity. }
+  assert (Ht0C : rget (runUntil 0 k1 s64) 5 = Z.of_nat idx).
+  { rewrite (HothC 5 ltac:(lia) ltac:(lia)), H5_64, Hidx.
+    unfold idx, m. rewrite Nat2Z.inj_add, Nat2Z.inj_sub by lia. lia. }
+  assert (HcodeC : CodeLoaded (runUntil 0 k1 s64)) by
+    (apply (CodeLoaded_eqmem s64); [exact HmemC| exact Hcode64]).
+  destruct (read_prefix (runUntil 0 k1 s64) 108 192 inp idx l HcodeC
+    HpcC ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity)
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia)
+    ltac:(rewrite coreBytes_len; lia)
+    ltac:(rewrite (HothC 10 ltac:(lia) ltac:(lia)); exact H10_64)
+    ltac:(rewrite (HothC 11 ltac:(lia) ltac:(lia)); exact H11_64)
+    Ht0C Hidx_lt Hinlt
+    ltac:(intros j hj; rewrite HmemC, Hmem64; exact (Hinmem j hj))
+    Hnth Hl256) as [Hpc8 [H7_8 [H5_8 [Hmem8 [Hcode8 Hoth8]]]]].
+  exists (14 + (k1 + 4))%nat.
+  assert (hchain : runUntil 0 (14 + (k1 + 4)) s = runUntil 0 4 (runUntil 0 k1 s64))
+    by (rewrite (runUntil_add 14 (k1 + 4)); fold s64; rewrite (runUntil_add k1 4); reflexivity).
+  rewrite hchain. repeat apply conj.
+  - exact Hpc8.
+  - exact H7_8.
+  - exact Hcode8.
+  - rewrite Hmem8, HmemC, Hmem64. reflexivity.
+  - rewrite (Hoth8 6 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)),
+            (HothC 6 ltac:(lia) ltac:(lia)). exact H6_64.
+  - rewrite (Hoth8 1 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)),
+            (HothC 1 ltac:(lia) ltac:(lia)). exact H1_64.
+  - rewrite (Hoth8 13 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)),
+            (HothC 13 ltac:(lia) ltac:(lia)). exact H13_64.
+  - lia.
+  - lia.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
