@@ -6,14 +6,20 @@ hex0 spec" to hold. Written CompCert-style: an explicit, enumerated boundary.
 ## Proven (NOT in the TCB)
 
 - **The `decode` spec** (`coq/Spec.v`, `lean/Hex0/Spec.lean`) — the meaning of
-  hex0. The two definitions compute identically on a battery of inputs.
+  hex0. The two definitions compute identically on a battery of inputs, and the
+  Lean `decodeS` is **proved equivalent to the published BNF grammar of HEX0.md**
+  (`lean/Hex0/Grammar.lean`): `decodeS .High inp = (out,st) ↔ Parse inp out st`,
+  with the grammar shown total (`parse_total`) and deterministic (`parse_det`) —
+  every input is *either* a valid program (→ `Ok`) *or* exactly one error class,
+  and the classification matches the spec.
 - **The RV64I model** (`*/Rv64i.*`) executes the *actual* `core` bytes and
   matches `coreSpec` (differential battery + the embedded input).
 - **Concrete certification** (`*/Certify.*`) — the deployed bytes equal
   `coreSpec` on the embedded input and every error class. *Finite/testing-grade.*
-- **General refinement** (`*/Refine.*`) — ∀ inputs. *Proof-grade, in progress;
-  see STATUS.md.* The per-step reduction primitive is proved; the inductive loop
-  body is the remaining frontier.
+- **General refinement** (`lean/Hex0/Refine.lean`) — `core_refines : ∀ inp cap,
+  WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`. **Fully
+  proved, `sorry`-free** (axioms: `propext`/`Classical.choice`/`Quot.sound`).
+  (Coq `Refine.v` still `Admitted` — port pending.)
 
 ## Trusted (IN the TCB)
 
@@ -51,6 +57,14 @@ hex0 spec" to hold. Written CompCert-style: an explicit, enumerated boundary.
 
 6. **`halt` observed correctly**: we model program end as `pc = 0` (the sentinel
    return address). The shell must actually return to that address / halt.
+
+7. **The inductive grammar transcribes HEX0.md.** `Grammar.lean`'s `Valid`/`Parse`
+   are the formal object; we trust they faithfully transcribe the prose BNF of
+   `HEX0.md` (one constructor per production). This is a much smaller,
+   eyeball-auditable gap than trusting `decodeS` directly — but it is still a
+   human reading, not a proof. (HEX0.md was updated to match the implementation:
+   EOF-terminated comments are accepted, and the `Split`/`Unknown` nibble-error
+   split is spelled out.)
 
 ## Notes on deliberate definedness (deletes proof obligations)
 
