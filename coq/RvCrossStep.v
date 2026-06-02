@@ -99,6 +99,18 @@ Section WordBridge.
   Lemma br_lts : forall a b : word,
     word.lts a b = Rv64i.sltb (word.unsigned a) (word.unsigned b).
   Proof. intros. rewrite word.signed_lts. unfold Rv64i.sltb. rewrite !toS_signed. reflexivity. Qed.
+
+  (** a register written by an arithmetic instruction: storing [word.add] of two
+      [of_Z]'d operands is storing the [of_Z] of our [wadd] result -- the shape
+      [RegAgree] of the post-state needs. *)
+  Lemma wadd_of_Z : forall a b,
+    word.of_Z (word:=word) (Rv64i.wadd a b) = word.add (word.of_Z a) (word.of_Z b).
+  Proof.
+    intros. apply word.unsigned_inj. rewrite br_add, !word.unsigned_of_Z.
+    unfold Rv64i.wadd, Rv64i.wrap, Rv64i.w64, word.wrap.
+    rewrite <- Z.add_mod by (apply Z.pow_nonzero; lia).
+    rewrite Z.mod_mod by (apply Z.pow_nonzero; lia). reflexivity.
+  Qed.
 End WordBridge.
 
 (* ================================================================== *)
@@ -241,4 +253,18 @@ Section Bridge.
     word.unsigned m.(getPc) + 4 <= 2 ^ 64 /\
     (forall i, 0 <= i < 4 -> D (word.add m.(getPc) (word.of_Z i))) /\
     isXAddr4 m.(getPc) m.(getXAddrs).
+
+  (** register read under [RegAgree], handling x0 (both sides read 0). The
+      bridge corollary the per-instruction [exec_*] lemmas use to resolve
+      [getRegister rs1] / [getRegister rs2]. *)
+  Lemma getReg_R : forall s (m:RMach) r, RegAgree s m -> 0 <= r < 32 ->
+    Machine.getRegister r m = (Some (word.of_Z (Rv64i.rget s r)), m).
+  Proof.
+    intros s m r Hra Hr.
+    destruct (Z.eq_dec r 0) as [E|NE].
+    - subst r. unfold Machine.getRegister, IsRiscvMachine.
+      destruct (Z.eq_dec 0 Register0) as [_|C]; [|exfalso; cbn in C; lia].
+      unfold Rv64i.rget. cbn. reflexivity.
+    - destruct (Hra r ltac:(lia)) as [Hg _]. apply getReg_red; [lia | exact Hg].
+  Qed.
 End Bridge.
