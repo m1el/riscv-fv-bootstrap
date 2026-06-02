@@ -38,3 +38,5 @@ lean/*.log
 lean/*-install.log
 elan-init.sh
 *.output
+*.log
+lean-toolchain-install.log
