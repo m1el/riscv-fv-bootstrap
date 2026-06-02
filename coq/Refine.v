@@ -1242,6 +1242,155 @@ Proof.
     unfold sb. rewrite (li_block_frame s 10 (coreAddr + (124 + 8)) i hi). reflexivity.
 Qed.
 
+(** ** Nibble helpers + the high/low nibble-parse chains. *)
+
+(* nibble (as Z byte): digit '0'..'9' -> c-48, letter 'A'..'F' -> c-55. *)
+Lemma nibble_cases c hi : 0 <= c -> nibble (Z.to_nat c) = Some hi ->
+  (48 <= c <= 57 /\ c - 48 = Z.of_nat hi) \/ (65 <= c <= 70 /\ c - 55 = Z.of_nat hi).
+Proof.
+  intros h0 hn.
+  assert (Hc : c = Z.of_nat (Z.to_nat c)) by (rewrite Z2Nat.id; [reflexivity| exact h0]).
+  unfold nibble in hn. set (n := Z.to_nat c) in *.
+  destruct ((48 <=? n) && (n <=? 57))%nat eqn:Ed.
+  - apply andb_true_iff in Ed. destruct Ed as [E1 E2].
+    apply Nat.leb_le in E1. apply Nat.leb_le in E2. cbv iota in hn. injection hn as hn.
+    left. split; [rewrite Hc; lia|]. rewrite Hc, <- hn, Nat2Z.inj_sub by lia. reflexivity.
+  - destruct ((65 <=? n) && (n <=? 70))%nat eqn:El.
+    + apply andb_true_iff in El. destruct El as [E1 E2].
+      apply Nat.leb_le in E1. apply Nat.leb_le in E2. cbv iota in hn. injection hn as hn.
+      right. split; [rewrite Hc; lia|]. rewrite Hc, <- hn, Nat2Z.inj_sub by lia. reflexivity.
+    + cbv iota in hn. discriminate hn.
+Qed.
+
+Lemma nibble_lt c hi : nibble c = Some hi -> (hi < 16)%nat.
+Proof.
+  unfold nibble. destruct ((48 <=? c) && (c <=? 57))%nat eqn:Ed.
+  - apply andb_true_iff in Ed. destruct Ed as [E1 E2].
+    apply Nat.leb_le in E1. apply Nat.leb_le in E2. intros H; injection H as H; lia.
+  - destruct ((65 <=? c) && (c <=? 70))%nat eqn:El.
+    + apply andb_true_iff in El. destruct El as [E1 E2].
+      apply Nat.leb_le in E1. apply Nat.leb_le in E2. intros H; injection H as H; lia.
+    + discriminate.
+Qed.
+
+(* High-nibble parse (offsets 64..104): nibble c = Some hi -> reach have_high
+   (108) with t4 (x29) = hi.  Mirror of Lean [high_parse]. *)
+Lemma high_parse s c hi :
+  CodeLoaded s -> s.(pc) = coreAddr + 64 -> rget s 7 = c -> 0 <= c < 256 ->
+  nibble (Z.to_nat c) = Some hi ->
+  exists k, (runUntil 0 k s).(pc) = coreAddr + 108 /\ (runUntil 0 k s).(mem) = s.(mem) /\
+    rget (runUntil 0 k s) 29 = Z.of_nat hi /\
+    (forall i, i <> 28 -> i <> 29 -> rget (runUntil 0 k s) i = rget s i).
+Proof.
+  intros hcode hpc h7 hc hn.
+  destruct (nibble_cases c hi ltac:(lia) hn) as [[Hr Hv]|[Hr Hv]].
+  - (* digit *)
+    pose proof (li_blt_nt s 64 48 c 244 hcode ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc h7
+      ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia) ltac:(lia)) as bA.
+    set (s_a := setPc (rset s 28 48) (coreAddr + (64 + 8))) in *.
+    assert (hca : CodeLoaded s_a) by
+      (apply (CodeLoaded_eqmem s); [unfold s_a; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+    assert (hpca : s_a.(pc) = coreAddr + 72) by (unfold s_a; reflexivity).
+    assert (h7a : rget s_a 7 = c) by
+      (unfold s_a; rewrite (li_block_frame s 48 (coreAddr + (64 + 8)) 7 ltac:(lia)); exact h7).
+    pose proof (li_bge_nt s_a 72 58 c 12 hca ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpca h7a
+      ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia) ltac:(lia)) as bB.
+    set (s_b := setPc (rset s_a 28 58) (coreAddr + (72 + 8))) in *.
+    assert (hcb : CodeLoaded s_b) by
+      (apply (CodeLoaded_eqmem s_a); [unfold s_b; rewrite setPc_mem, rset_mem; reflexivity| exact hca]).
+    assert (hpcb : s_b.(pc) = coreAddr + 80) by (unfold s_b; reflexivity).
+    assert (h7b : rget s_b 7 = c) by
+      (unfold s_b; rewrite (li_block_frame s_a 58 (coreAddr + (72 + 8)) 7 ltac:(lia)); exact h7a).
+    assert (haddi : step s_b = setPc (rset s_b 29 (c + -48)) (coreAddr + 84)).
+    { rewrite (step_addi s_b 80 29 7 (-48) hcb ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcb
+        ltac:(vm_compute; reflexivity)), h7b, (wadd_id c (-48) ltac:(lia)), hpcb,
+        (wadd_id (coreAddr + 80) 4 ltac:(unfold coreAddr; lia)). reflexivity. }
+    set (s_c := setPc (rset s_b 29 (c + -48)) (coreAddr + 84)) in *.
+    assert (hcc : CodeLoaded s_c) by
+      (apply (CodeLoaded_eqmem s_b); [unfold s_c; rewrite setPc_mem, rset_mem; reflexivity| exact hcb]).
+    assert (hpcc : s_c.(pc) = coreAddr + 84) by (unfold s_c; reflexivity).
+    assert (hjal : step s_c = setPc s_c (coreAddr + 108)).
+    { rewrite (step_jal s_c 84 0 24 hcc ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcc
+        ltac:(vm_compute; reflexivity)).
+      assert (Hr0 : rset s_c 0 (wadd s_c.(pc) 4) = s_c) by (unfold rset; reflexivity).
+      rewrite Hr0, hpcc, (wadd_id (coreAddr + 84) 24 ltac:(unfold coreAddr; lia)). reflexivity. }
+    assert (hbc : runUntil 0 2 s_b = setPc s_c (coreAddr + 108)).
+    { assert (hpb0 : s_b.(pc) <> 0) by (rewrite hpcb; apply coreAddr_pos; lia).
+      assert (hpc0 : s_c.(pc) <> 0) by (rewrite hpcc; apply coreAddr_pos; lia).
+      rewrite (runUntil_S 1 s_b hpb0), haddi, (runUntil_S 0 s_c hpc0), hjal. reflexivity. }
+    assert (hfin : runUntil 0 (2 + (2 + 2)) s = setPc s_c (coreAddr + 108))
+      by (rewrite (runUntil_add 2 (2 + 2)), bA, (runUntil_add 2 2), bB, hbc; reflexivity).
+    exists (2 + (2 + 2))%nat. rewrite hfin. repeat apply conj.
+    + apply setPc_pc.
+    + rewrite setPc_mem. unfold s_c. rewrite setPc_mem, rset_mem. unfold s_b.
+      rewrite setPc_mem, rset_mem. unfold s_a. rewrite setPc_mem, rset_mem. reflexivity.
+    + rewrite setPc_rget. unfold s_c.
+      rewrite setPc_rget, (rset_rget s_b 29 (c + -48) 29 ltac:(lia) ltac:(lia)), Z.eqb_refl. lia.
+    + intros i hi28 hi29. rewrite setPc_rget. unfold s_c. rewrite setPc_rget.
+      destruct (i =? 0) eqn:E0; [apply Z.eqb_eq in E0; subst i; reflexivity|].
+      apply Z.eqb_neq in E0. rewrite (rset_rget s_b 29 (c + -48) i ltac:(lia) E0).
+      replace (i =? 29) with false by (symmetry; apply Z.eqb_neq; exact hi29).
+      unfold s_b. rewrite (li_block_frame s_a 58 (coreAddr + (72 + 8)) i hi28).
+      unfold s_a. rewrite (li_block_frame s 48 (coreAddr + (64 + 8)) i hi28). reflexivity.
+  - (* letter *)
+    pose proof (li_blt_nt s 64 48 c 244 hcode ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc h7
+      ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia) ltac:(lia)) as bA.
+    set (s_a := setPc (rset s 28 48) (coreAddr + (64 + 8))) in *.
+    assert (hca : CodeLoaded s_a) by
+      (apply (CodeLoaded_eqmem s); [unfold s_a; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+    assert (hpca : s_a.(pc) = coreAddr + 72) by (unfold s_a; reflexivity).
+    assert (h7a : rget s_a 7 = c) by
+      (unfold s_a; rewrite (li_block_frame s 48 (coreAddr + (64 + 8)) 7 ltac:(lia)); exact h7).
+    pose proof (li_bge_t s_a 72 58 c 12 (coreAddr + 88) hca ltac:(lia) ltac:(rewrite coreBytes_len; lia)
+      hpca h7a ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia) ltac:(lia)
+      ltac:(rewrite (wadd_id (coreAddr + (72 + 4)) 12 ltac:(unfold coreAddr; lia)); lia)) as bB.
+    set (s_b := setPc (rset s_a 28 58) (coreAddr + 88)) in *.
+    assert (hcb : CodeLoaded s_b) by
+      (apply (CodeLoaded_eqmem s_a); [unfold s_b; rewrite setPc_mem, rset_mem; reflexivity| exact hca]).
+    assert (hpcb : s_b.(pc) = coreAddr + 88) by (unfold s_b; reflexivity).
+    assert (h7b : rget s_b 7 = c) by
+      (unfold s_b; rewrite (li_block_frame s_a 58 (coreAddr + 88) 7 ltac:(lia)); exact h7a).
+    pose proof (li_blt_nt s_b 88 65 c 220 hcb ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcb h7b
+      ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia) ltac:(lia)) as bC.
+    set (s_c := setPc (rset s_b 28 65) (coreAddr + (88 + 8))) in *.
+    assert (hcc : CodeLoaded s_c) by
+      (apply (CodeLoaded_eqmem s_b); [unfold s_c; rewrite setPc_mem, rset_mem; reflexivity| exact hcb]).
+    assert (hpcc : s_c.(pc) = coreAddr + 96) by (unfold s_c; reflexivity).
+    assert (h7c : rget s_c 7 = c) by
+      (unfold s_c; rewrite (li_block_frame s_b 65 (coreAddr + (88 + 8)) 7 ltac:(lia)); exact h7b).
+    pose proof (li_bge_nt s_c 96 71 c 212 hcc ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcc h7c
+      ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia) ltac:(lia)) as bD.
+    set (s_d := setPc (rset s_c 28 71) (coreAddr + (96 + 8))) in *.
+    assert (hcd : CodeLoaded s_d) by
+      (apply (CodeLoaded_eqmem s_c); [unfold s_d; rewrite setPc_mem, rset_mem; reflexivity| exact hcc]).
+    assert (hpcd : s_d.(pc) = coreAddr + 104) by (unfold s_d; reflexivity).
+    assert (h7d : rget s_d 7 = c) by
+      (unfold s_d; rewrite (li_block_frame s_c 71 (coreAddr + (96 + 8)) 7 ltac:(lia)); exact h7c).
+    assert (haddi : step s_d = setPc (rset s_d 29 (c + -55)) (coreAddr + 108)).
+    { rewrite (step_addi s_d 104 29 7 (-55) hcd ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcd
+        ltac:(vm_compute; reflexivity)), h7d, (wadd_id c (-55) ltac:(lia)), hpcd,
+        (wadd_id (coreAddr + 104) 4 ltac:(unfold coreAddr; lia)). reflexivity. }
+    assert (hpd0 : s_d.(pc) <> 0) by (rewrite hpcd; apply coreAddr_pos; lia).
+    assert (hfin : runUntil 0 (2 + (2 + (2 + (2 + 1)))) s = setPc (rset s_d 29 (c + -55)) (coreAddr + 108))
+      by (rewrite (runUntil_add 2 (2 + (2 + (2 + 1)))), bA, (runUntil_add 2 (2 + (2 + 1))), bB,
+          (runUntil_add 2 (2 + 1)), bC, (runUntil_add 2 1), bD, (runUntil_one s_d hpd0), haddi;
+          reflexivity).
+    exists (2 + (2 + (2 + (2 + 1))))%nat. rewrite hfin. repeat apply conj.
+    + apply setPc_pc.
+    + rewrite setPc_mem, rset_mem. unfold s_d. rewrite setPc_mem, rset_mem. unfold s_c.
+      rewrite setPc_mem, rset_mem. unfold s_b. rewrite setPc_mem, rset_mem. unfold s_a.
+      rewrite setPc_mem, rset_mem. reflexivity.
+    + rewrite setPc_rget, (rset_rget s_d 29 (c + -55) 29 ltac:(lia) ltac:(lia)), Z.eqb_refl. lia.
+    + intros i hi28 hi29. rewrite setPc_rget.
+      destruct (i =? 0) eqn:E0; [apply Z.eqb_eq in E0; subst i; reflexivity|].
+      apply Z.eqb_neq in E0. rewrite (rset_rget s_d 29 (c + -55) i ltac:(lia) E0).
+      replace (i =? 29) with false by (symmetry; apply Z.eqb_neq; exact hi29).
+      unfold s_d. rewrite (li_block_frame s_c 71 (coreAddr + (96 + 8)) i hi28).
+      unfold s_c. rewrite (li_block_frame s_b 65 (coreAddr + (88 + 8)) i hi28).
+      unfold s_b. rewrite (li_block_frame s_a 58 (coreAddr + 88) i hi28).
+      unfold s_a. rewrite (li_block_frame s 48 (coreAddr + (64 + 8)) i hi28). reflexivity.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
