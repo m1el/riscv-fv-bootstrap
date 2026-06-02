@@ -1795,6 +1795,195 @@ theorem store_epilogue (s : State) (hcode : CodeLoaded s) (hi lo n cap : Nat)
     show (v6.setPc LOOP).mem a = _
     simp only [setPc_mem, hv6, rset_mem, hv5, storeByte_mem, hmemv4]
 
+set_option maxRecDepth 4000 in
+/-- A COMPLETE main-loop iteration for a byte token: high nibble `c`, low nibble
+    `l` (`hi`/`lo`), with output capacity to spare. Chains `loop_prefix` (read
+    `c`) → `high_beq_ft` → `high_parse` → `read_prefix` (read `l`) → `low_beq_ft`
+    → `low_parse` → `store_epilogue` (emit `hi*16+lo`), then rebuilds `LoopInv`
+    for the shorter suffix with one more emitted byte (via `decodeS_byte`). -/
+theorem loop_byte (inp : List Nat) (cap : Nat) (c hi l lo : Nat) (rest'' emitted : List Nat)
+    (s : State) (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = false)
+    (hnh : Hex0.nibble c = some hi) (hlls : Hex0.isLowStop l = false)
+    (hnl : Hex0.nibble l = some lo) (hcap : emitted.length < cap)
+    (inv : LoopInv inp cap s (c :: l :: rest'') emitted) :
+    ∃ k, LoopInv inp cap (runFuel 0 k s) rest'' (emitted ++ [hi * 16 + lo]) := by
+  -- char-class facts
+  have hcm : c ≠ 35 ∧ c ≠ 59 := by
+    simp only [Hex0.isComment, Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff,
+      beq_eq_false_iff_ne] at hsc; exact hsc
+  have hsp : c ≠ 10 ∧ c ≠ 32 ∧ c ≠ 95 := by
+    simp only [Hex0.isSpace, Hex0.c_nl, Hex0.c_sp, Hex0.c_us, Bool.or_eq_false_iff,
+      beq_eq_false_iff_ne] at hss; exact ⟨hss.1.1, hss.1.2, hss.2⟩
+  have hlstop : l ≠ 10 ∧ l ≠ 32 ∧ l ≠ 95 ∧ l ≠ 35 ∧ l ≠ 59 := by
+    simp only [Hex0.isLowStop, Hex0.isSpace, Hex0.isComment, Hex0.c_nl, Hex0.c_sp,
+      Hex0.c_us, Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hlls
+    refine ⟨?_,?_,?_,?_,?_⟩ <;> omega
+  have hc256 : c < 256 := inv.bytes_lt c (by
+    have : c ∈ inp.drop (inp.length - (c::l::rest'').length) := by rw [inv.suffix]; exact List.mem_cons_self
+    exact List.drop_subset _ _ this)
+  have hl256 : l < 256 := inv.bytes_lt l (by
+    have : l ∈ inp.drop (inp.length - (c::l::rest'').length) := by
+      rw [inv.suffix]; exact List.mem_cons_of_mem _ List.mem_cons_self
+    exact List.drop_subset _ _ this)
+  have hhi16 : hi < 16 := nibble_lt c hi hnh
+  have hlo16 : lo < 16 := nibble_lt l lo hnl
+  have hRle : rest''.length + 2 ≤ inp.length := by
+    have h := congrArg List.length inv.suffix
+    simp only [List.length_drop, List.length_cons] at h; omega
+  have hinlt : inp.length < 2 ^ 64 := by have := inv.in_lt; omega
+  -- the tail-suffix at position p+1 is l :: rest''
+  have hdrop1 : inp.drop ((inp.length - (c::l::rest'').length) + 1) = l :: rest'' := by
+    rw [← List.tail_drop, inv.suffix]; rfl
+  -- A: read high char c
+  obtain ⟨s4, hr4, hpc4, h7_4, h5_4, hmem4, hcode4, hoth4⟩ :=
+    loop_prefix inp cap c (l :: rest'') emitted s inv
+  -- B: high beq fall-through to off 64
+  obtain ⟨hpcB, hmemB, hothB⟩ :=
+    high_beq_ft s4 hcode4 c hpc4 h7_4 hc256 hcm.1 hcm.2 hsp.1 hsp.2.1 hsp.2.2
+  have hcodeB : CodeLoaded (runFuel 0 10 s4) := by intro i hi; rw [hmemB]; exact hcode4 i hi
+  have h7B : (runFuel 0 10 s4).rget 7 = BitVec.ofNat 64 c := by rw [hothB 7 (by decide)]; exact h7_4
+  -- C: high nibble parse to off 108, t4 = hi
+  obtain ⟨k1, hpcC, hmemC, h29C, hothC⟩ :=
+    high_parse (runFuel 0 10 s4) hcodeB c hi hpcB h7B hc256 hnh
+  have hcodeC : CodeLoaded (runFuel 0 k1 (runFuel 0 10 s4)) := by
+    intro i hi; rw [hmemC, hmemB]; exact hcode4 i hi
+  have ha0C : (runFuel 0 k1 (runFuel 0 10 s4)).rget 10 = BitVec.ofNat 64 Image.inputAddr := by
+    rw [hothC 10 (by decide) (by decide), hothB 10 (by decide),
+        hoth4 10 (by decide) (by decide) (by decide) (by decide)]; exact inv.a0
+  have ha1C : (runFuel 0 k1 (runFuel 0 10 s4)).rget 11 = BitVec.ofNat 64 inp.length := by
+    rw [hothC 11 (by decide) (by decide), hothB 11 (by decide),
+        hoth4 11 (by decide) (by decide) (by decide) (by decide)]; exact inv.a1
+  have ht0C : (runFuel 0 k1 (runFuel 0 10 s4)).rget 5
+      = BitVec.ofNat 64 ((inp.length - (c::l::rest'').length) + 1) := by
+    rw [hothC 5 (by decide) (by decide), hothB 5 (by decide), h5_4, inv.idx,
+        show (1:Word) = BitVec.ofNat 64 1 from rfl, addr_ofNat_succ]
+  -- D: read low char l (off 108..120)
+  obtain ⟨s8, hr8, hpc8, h7_8, h5_8, hmem8, hcode8, hoth8⟩ :=
+    read_prefix (runFuel 0 k1 (runFuel 0 10 s4)) 108 0x00c0#13 inp
+      ((inp.length - (c::l::rest'').length) + 1) l hcodeC hpcC (by decide) (by decide)
+      (by decide) (by decide) (by decide) ha0C ha1C ht0C (by omega) hinlt
+      (fun j hj => by rw [hmemC, hmemB, hmem4]; exact inv.in_mem j hj)
+      (by rw [← getD_drop, hdrop1]; rfl) hl256
+  -- E: low beq fall-through to off 164
+  obtain ⟨hpcE, hmemE, hothE⟩ :=
+    low_beq_ft s8 hcode8 l hpc8 h7_8 hl256 hlstop.2.2.2.1 hlstop.2.2.2.2
+      hlstop.1 hlstop.2.1 hlstop.2.2.1
+  have hcodeE : CodeLoaded (runFuel 0 10 s8) := by intro i hi; rw [hmemE]; exact hcode8 i hi
+  have h7E : (runFuel 0 10 s8).rget 7 = BitVec.ofNat 64 l := by rw [hothE 7 (by decide)]; exact h7_8
+  -- F: low nibble parse to off 208, t5 = lo
+  obtain ⟨k2, hpcF, hmemF, h30F, hothF⟩ :=
+    low_parse (runFuel 0 10 s8) hcodeE l lo hpcE h7E hl256 hnl
+  -- registers/memory at off 208 (sP)
+  have hmemP : (runFuel 0 k2 (runFuel 0 10 s8)).mem = s.mem := by
+    rw [hmemF, hmemE, hmem8, hmemC, hmemB, hmem4]
+  have hcodeP : CodeLoaded (runFuel 0 k2 (runFuel 0 10 s8)) := by
+    intro i hi; rw [hmemP]; exact inv.code i hi
+  have h6P : (runFuel 0 k2 (runFuel 0 10 s8)).rget 6 = BitVec.ofNat 64 emitted.length := by
+    rw [hothF 6 (by decide) (by decide), hothE 6 (by decide),
+        hoth8 6 (by decide) (by decide) (by decide) (by decide),
+        hothC 6 (by decide) (by decide), hothB 6 (by decide),
+        hoth4 6 (by decide) (by decide) (by decide) (by decide)]; exact inv.outidx
+  have h12P : (runFuel 0 k2 (runFuel 0 10 s8)).rget 12 = BitVec.ofNat 64 Image.outAddr := by
+    rw [hothF 12 (by decide) (by decide), hothE 12 (by decide),
+        hoth8 12 (by decide) (by decide) (by decide) (by decide),
+        hothC 12 (by decide) (by decide), hothB 12 (by decide),
+        hoth4 12 (by decide) (by decide) (by decide) (by decide)]; exact inv.a2
+  have h13P : (runFuel 0 k2 (runFuel 0 10 s8)).rget 13 = BitVec.ofNat 64 cap := by
+    rw [hothF 13 (by decide) (by decide), hothE 13 (by decide),
+        hoth8 13 (by decide) (by decide) (by decide) (by decide),
+        hothC 13 (by decide) (by decide), hothB 13 (by decide),
+        hoth4 13 (by decide) (by decide) (by decide) (by decide)]; exact inv.a3
+  have h29P : (runFuel 0 k2 (runFuel 0 10 s8)).rget 29 = BitVec.ofNat 64 hi := by
+    rw [hothF 29 (by decide) (by decide), hothE 29 (by decide),
+        hoth8 29 (by decide) (by decide) (by decide) (by decide)]; exact h29C
+  -- G: capacity check + store
+  obtain ⟨sF, hr7, hpcSF, h6SF, hothSF, hmemSF⟩ :=
+    store_epilogue (runFuel 0 k2 (runFuel 0 10 s8)) hcodeP hi lo emitted.length cap
+      hpcF h6P h13P h12P h29P h30F hhi16 hlo16 hcap inv.out_lt
+  -- chain the fuel
+  refine ⟨4 + (10 + (k1 + (4 + (10 + (k2 + 7))))), ?_⟩
+  have hrun : runFuel 0 (4 + (10 + (k1 + (4 + (10 + (k2 + 7)))))) s = sF := by
+    rw [runFuel_add, hr4, runFuel_add, runFuel_add, runFuel_add, hr8,
+        runFuel_add, runFuel_add, hr7]
+  rw [hrun]
+  -- the new emitted is one byte longer
+  have hlen' : (emitted ++ [hi * 16 + lo]).length = emitted.length + 1 := by
+    simp [List.length_append]
+  -- pointwise memory of sF
+  have hmem_at : ∀ a, sF.mem a =
+      if a = BitVec.ofNat 64 (Image.outAddr + emitted.length)
+      then BitVec.ofNat 8 (hi * 16 + lo) else s.mem a := by
+    intro a; rw [hmemSF, hmemP]
+  -- bounds for output-address injectivity
+  have hb_out : ∀ j, j < emitted.length →
+      (BitVec.ofNat 64 (Image.outAddr + j) : Word) ≠ BitVec.ofNat 64 (Image.outAddr + emitted.length) := by
+    intro j hj
+    refine ofNat_ne _ _ ?_ ?_ ?_
+    · have := inv.out_lt; omega
+    · have := inv.out_lt; omega
+    · omega
+  refine { at_loop := hpcSF, code := ?_, a0 := ?_, a1 := ?_, a2 := ?_, a3 := ?_,
+           ra0 := ?_, in_mem := ?_, in_lt := inv.in_lt, bytes_lt := inv.bytes_lt,
+           in_fits := inv.in_fits, out_lt := inv.out_lt,
+           idx := ?_, suffix := ?_, outidx := ?_, emitted_le := ?_,
+           out_mem := ?_, spec_link := ?_ }
+  · -- code: store doesn't touch code region
+    intro i hi
+    have h324 : i < 324 := by have : Image.coreBytes.length = 324 := by decide; omega
+    rw [hmem_at, if_neg (ofNat_ne _ _ (by simp only [Image.coreAddr]; omega)
+        (by have := inv.out_lt; simp only [Image.outAddr] at this ⊢; omega)
+        (by simp only [Image.coreAddr, Image.outAddr]; omega))]
+    exact inv.code i hi
+  · rw [hothSF 10 (by decide) (by decide) (by decide),
+        hothF 10 (by decide) (by decide), hothE 10 (by decide),
+        hoth8 10 (by decide) (by decide) (by decide) (by decide),
+        hothC 10 (by decide) (by decide), hothB 10 (by decide),
+        hoth4 10 (by decide) (by decide) (by decide) (by decide)]; exact inv.a0
+  · rw [hothSF 11 (by decide) (by decide) (by decide),
+        hothF 11 (by decide) (by decide), hothE 11 (by decide),
+        hoth8 11 (by decide) (by decide) (by decide) (by decide),
+        hothC 11 (by decide) (by decide), hothB 11 (by decide),
+        hoth4 11 (by decide) (by decide) (by decide) (by decide)]; exact inv.a1
+  · rw [hothSF 12 (by decide) (by decide) (by decide)]; exact h12P
+  · rw [hothSF 13 (by decide) (by decide) (by decide)]; exact h13P
+  · rw [hothSF 1 (by decide) (by decide) (by decide),
+        hothF 1 (by decide) (by decide), hothE 1 (by decide),
+        hoth8 1 (by decide) (by decide) (by decide) (by decide),
+        hothC 1 (by decide) (by decide), hothB 1 (by decide),
+        hoth4 1 (by decide) (by decide) (by decide) (by decide)]; exact inv.ra0
+  · -- in_mem: store disjoint from input region (in_fits)
+    intro j hj
+    rw [hmem_at, if_neg (ofNat_ne _ _
+        (by have := inv.in_lt; omega)
+        (by have := inv.out_lt; simp only [Image.outAddr] at this ⊢; omega)
+        (by have := inv.in_fits; omega))]
+    exact inv.in_mem j hj
+  · -- idx
+    rw [hothSF 5 (by decide) (by decide) (by decide), hothF 5 (by decide) (by decide),
+        hothE 5 (by decide), h5_8, ht0C, show (1:Word) = BitVec.ofNat 64 1 from rfl,
+        addr_ofNat_succ]
+    congr 1; simp only [List.length_cons]; omega
+  · -- suffix
+    have hk : inp.length - rest''.length = (inp.length - (c::l::rest'').length) + 1 + 1 := by
+      simp only [List.length_cons]; omega
+    rw [hk, ← List.tail_drop, hdrop1]; rfl
+  · -- outidx
+    rw [h6SF, hlen']
+  · -- emitted_le
+    rw [hlen']; omega
+  · -- out_mem
+    intro j hj
+    rw [hlen'] at hj
+    rw [hmem_at]
+    by_cases hje : j = emitted.length
+    · subst hje
+      rw [if_pos rfl, List.getD_append_right (by omega), Nat.sub_self]; rfl
+    · rw [if_neg (hb_out j (by omega)), hmemP, List.getD_append _ _ _ (by omega)]
+      exact inv.out_mem j (by omega)
+  · -- spec_link
+    rw [inv.spec_link, decodeS_byte c l rest'' hi lo hsc hss hnh hlls hnl]
+    simp only [List.append_assoc, List.cons_append, List.nil_append]
+
 /-- One main-loop iteration (the machine side of step 3). From a non-empty
     remaining input, the machine either halts correctly (error / output-short)
     or returns to the loop head with strictly less remaining input and the
