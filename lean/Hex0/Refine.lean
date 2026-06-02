@@ -190,6 +190,9 @@ structure LoopInv (inp : List Nat) (cap : Nat) (s : State)
   a2        : s.rget 12 = BitVec.ofNat 64 Image.outAddr
   a3        : s.rget 13 = BitVec.ofNat 64 cap
   ra0       : s.rget 1  = 0
+  -- the input bytes live in the input region (so `lbu` reads the right char)
+  in_mem    : ∀ j, j < inp.length →
+                s.mem (BitVec.ofNat 64 (Image.inputAddr + j)) = BitVec.ofNat 8 (inp.getD j 0)
   -- in_idx (t0) is the consumed prefix length; `rest` is what remains
   idx       : s.rget 5  = BitVec.ofNat 64 (inp.length - rest.length)
   suffix    : inp.drop (inp.length - rest.length) = rest
@@ -290,6 +293,28 @@ theorem core_eof (s : State) (inp : List Nat) (emitted_len : Nat)
     simp
   · -- mem unchanged
     simp only [setPc_mem, hs3def, hs2def, hs1def, rset_mem]
+
+/-! ## Step 3 (spec side): `decodeS` token decomposition.
+    `decode (token ++ rest) = (token's output) ++ decode rest`, per token class. -/
+
+theorem decodeS_spacing (c : Nat) (rest : List Nat)
+    (hc : Hex0.isComment c = false) (hs : Hex0.isSpace c = true) :
+    Hex0.decodeS .High (c :: rest) = Hex0.decodeS .High rest := by
+  rw [Hex0.decodeS]; simp [hc, hs]
+
+theorem decodeS_byte (h l : Nat) (rest : List Nat) (hv lv : Nat)
+    (hc : Hex0.isComment h = false) (hs : Hex0.isSpace h = false)
+    (hh : Hex0.nibble h = some hv)
+    (hlc : Hex0.isLowStop l = false) (hl : Hex0.nibble l = some lv) :
+    Hex0.decodeS .High (h :: l :: rest) =
+      ((hv * 16 + lv) :: (Hex0.decodeS .High rest).1, (Hex0.decodeS .High rest).2) := by
+  rw [Hex0.decodeS]; simp only [hc, hs, hh, Bool.false_eq_true, if_false]
+  rw [Hex0.decodeS]; simp [hlc, hl]
+
+theorem decodeS_comment_skip (c : Nat) (rest : List Nat)
+    (hc : Hex0.isComment c = true) :
+    Hex0.decodeS .High (c :: rest) = Hex0.decodeS .High (Hex0.skipComment rest) := by
+  rw [Hex0.decodeS]; simp [hc]
 
 /-! ## The general refinement theorem (FRONTIER)
 
