@@ -1117,6 +1117,131 @@ Proof.
   rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2. unfold s1. reflexivity.
 Qed.
 
+(** ** The high/low beq fall-through chains (mirror of high_beq_ft/low_beq_ft).
+    All five [li K; beq] blocks fall through (c is none of the stop chars). *)
+
+(* High beq-chain (offsets 24..60): c not a space/comment char -> reach 64. *)
+Lemma high_beq_ft s c :
+  CodeLoaded s -> s.(pc) = coreAddr + 24 -> rget s 7 = c -> 0 <= c < 256 ->
+  c <> 35 -> c <> 59 -> c <> 10 -> c <> 32 -> c <> 95 ->
+  (runUntil 0 10 s).(pc) = coreAddr + 64 /\ (runUntil 0 10 s).(mem) = s.(mem) /\
+  (forall i, i <> 28 -> rget (runUntil 0 10 s) i = rget s i).
+Proof.
+  intros hcode hpc h7 hc h35 h59 h10 h32 h95.
+  pose proof (li_beq_ne s 24 35 c 208 hcode ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc h7
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h35) as b1.
+  set (sb := setPc (rset s 28 35) (coreAddr + (24 + 8))) in *.
+  assert (hcb : CodeLoaded sb) by
+    (apply (CodeLoaded_eqmem s); [unfold sb; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpcb : sb.(pc) = coreAddr + 32) by (unfold sb; reflexivity).
+  assert (h7b : rget sb 7 = c) by
+    (unfold sb; rewrite (li_block_frame s 35 (coreAddr + (24 + 8)) 7 ltac:(lia)); exact h7).
+  pose proof (li_beq_ne sb 32 59 c 200 hcb ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcb h7b
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h59) as b2.
+  set (sc := setPc (rset sb 28 59) (coreAddr + (32 + 8))) in *.
+  assert (hcc : CodeLoaded sc) by
+    (apply (CodeLoaded_eqmem s); [unfold sc; rewrite setPc_mem, rset_mem; unfold sb;
+       rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpcc : sc.(pc) = coreAddr + 40) by (unfold sc; reflexivity).
+  assert (h7c : rget sc 7 = c) by
+    (unfold sc; rewrite (li_block_frame sb 59 (coreAddr + (32 + 8)) 7 ltac:(lia)); exact h7b).
+  pose proof (li_beq_ne sc 40 10 c (-36) hcc ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcc h7c
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h10) as b3.
+  set (sd := setPc (rset sc 28 10) (coreAddr + (40 + 8))) in *.
+  assert (hcd : CodeLoaded sd) by
+    (apply (CodeLoaded_eqmem s); [unfold sd; rewrite setPc_mem, rset_mem; unfold sc;
+       rewrite setPc_mem, rset_mem; unfold sb; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpcd : sd.(pc) = coreAddr + 48) by (unfold sd; reflexivity).
+  assert (h7d : rget sd 7 = c) by
+    (unfold sd; rewrite (li_block_frame sc 10 (coreAddr + (40 + 8)) 7 ltac:(lia)); exact h7c).
+  pose proof (li_beq_ne sd 48 32 c (-44) hcd ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcd h7d
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h32) as b4.
+  set (se := setPc (rset sd 28 32) (coreAddr + (48 + 8))) in *.
+  assert (hce : CodeLoaded se) by
+    (apply (CodeLoaded_eqmem s); [unfold se; rewrite setPc_mem, rset_mem; unfold sd;
+       rewrite setPc_mem, rset_mem; unfold sc; rewrite setPc_mem, rset_mem; unfold sb;
+       rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpce : se.(pc) = coreAddr + 56) by (unfold se; reflexivity).
+  assert (h7e : rget se 7 = c) by
+    (unfold se; rewrite (li_block_frame sd 32 (coreAddr + (48 + 8)) 7 ltac:(lia)); exact h7d).
+  pose proof (li_beq_ne se 56 95 c (-52) hce ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpce h7e
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h95) as b5.
+  assert (hfin : runUntil 0 10 s = setPc (rset se 28 95) (coreAddr + (56 + 8)))
+    by (rewrite (runUntil_add 2 8), b1, (runUntil_add 2 6), b2, (runUntil_add 2 4), b3,
+        (runUntil_add 2 2), b4, b5; reflexivity).
+  rewrite hfin. repeat apply conj.
+  - apply setPc_pc.
+  - rewrite setPc_mem, rset_mem. unfold se. rewrite setPc_mem, rset_mem. unfold sd.
+    rewrite setPc_mem, rset_mem. unfold sc. rewrite setPc_mem, rset_mem. unfold sb.
+    rewrite setPc_mem, rset_mem. reflexivity.
+  - intros i hi. rewrite (li_block_frame se 95 (coreAddr + (56 + 8)) i hi).
+    unfold se. rewrite (li_block_frame sd 32 (coreAddr + (48 + 8)) i hi).
+    unfold sd. rewrite (li_block_frame sc 10 (coreAddr + (40 + 8)) i hi).
+    unfold sc. rewrite (li_block_frame sb 59 (coreAddr + (32 + 8)) i hi).
+    unfold sb. rewrite (li_block_frame s 35 (coreAddr + (24 + 8)) i hi). reflexivity.
+Qed.
+
+(* Low-stop beq-chain (offsets 124..160): l not a stop char -> reach 164. *)
+Lemma low_beq_ft s c :
+  CodeLoaded s -> s.(pc) = coreAddr + 124 -> rget s 7 = c -> 0 <= c < 256 ->
+  c <> 35 -> c <> 59 -> c <> 10 -> c <> 32 -> c <> 95 ->
+  (runUntil 0 10 s).(pc) = coreAddr + 164 /\ (runUntil 0 10 s).(mem) = s.(mem) /\
+  (forall i, i <> 28 -> rget (runUntil 0 10 s) i = rget s i).
+Proof.
+  intros hcode hpc h7 hc h35 h59 h10 h32 h95.
+  pose proof (li_beq_ne s 124 10 c 160 hcode ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc h7
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h10) as b1.
+  set (sb := setPc (rset s 28 10) (coreAddr + (124 + 8))) in *.
+  assert (hcb : CodeLoaded sb) by
+    (apply (CodeLoaded_eqmem s); [unfold sb; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpcb : sb.(pc) = coreAddr + 132) by (unfold sb; reflexivity).
+  assert (h7b : rget sb 7 = c) by
+    (unfold sb; rewrite (li_block_frame s 10 (coreAddr + (124 + 8)) 7 ltac:(lia)); exact h7).
+  pose proof (li_beq_ne sb 132 32 c 152 hcb ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcb h7b
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h32) as b2.
+  set (sc := setPc (rset sb 28 32) (coreAddr + (132 + 8))) in *.
+  assert (hcc : CodeLoaded sc) by
+    (apply (CodeLoaded_eqmem s); [unfold sc; rewrite setPc_mem, rset_mem; unfold sb;
+       rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpcc : sc.(pc) = coreAddr + 140) by (unfold sc; reflexivity).
+  assert (h7c : rget sc 7 = c) by
+    (unfold sc; rewrite (li_block_frame sb 32 (coreAddr + (132 + 8)) 7 ltac:(lia)); exact h7b).
+  pose proof (li_beq_ne sc 140 95 c 144 hcc ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcc h7c
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h95) as b3.
+  set (sd := setPc (rset sc 28 95) (coreAddr + (140 + 8))) in *.
+  assert (hcd : CodeLoaded sd) by
+    (apply (CodeLoaded_eqmem s); [unfold sd; rewrite setPc_mem, rset_mem; unfold sc;
+       rewrite setPc_mem, rset_mem; unfold sb; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpcd : sd.(pc) = coreAddr + 148) by (unfold sd; reflexivity).
+  assert (h7d : rget sd 7 = c) by
+    (unfold sd; rewrite (li_block_frame sc 95 (coreAddr + (140 + 8)) 7 ltac:(lia)); exact h7c).
+  pose proof (li_beq_ne sd 148 35 c 136 hcd ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpcd h7d
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h35) as b4.
+  set (se := setPc (rset sd 28 35) (coreAddr + (148 + 8))) in *.
+  assert (hce : CodeLoaded se) by
+    (apply (CodeLoaded_eqmem s); [unfold se; rewrite setPc_mem, rset_mem; unfold sd;
+       rewrite setPc_mem, rset_mem; unfold sc; rewrite setPc_mem, rset_mem; unfold sb;
+       rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpce : se.(pc) = coreAddr + 156) by (unfold se; reflexivity).
+  assert (h7e : rget se 7 = c) by
+    (unfold se; rewrite (li_block_frame sd 35 (coreAddr + (148 + 8)) 7 ltac:(lia)); exact h7d).
+  pose proof (li_beq_ne se 156 59 c 128 hce ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpce h7e
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) h59) as b5.
+  assert (hfin : runUntil 0 10 s = setPc (rset se 28 59) (coreAddr + (156 + 8)))
+    by (rewrite (runUntil_add 2 8), b1, (runUntil_add 2 6), b2, (runUntil_add 2 4), b3,
+        (runUntil_add 2 2), b4, b5; reflexivity).
+  rewrite hfin. repeat apply conj.
+  - apply setPc_pc.
+  - rewrite setPc_mem, rset_mem. unfold se. rewrite setPc_mem, rset_mem. unfold sd.
+    rewrite setPc_mem, rset_mem. unfold sc. rewrite setPc_mem, rset_mem. unfold sb.
+    rewrite setPc_mem, rset_mem. reflexivity.
+  - intros i hi. rewrite (li_block_frame se 59 (coreAddr + (156 + 8)) i hi).
+    unfold se. rewrite (li_block_frame sd 35 (coreAddr + (148 + 8)) i hi).
+    unfold sd. rewrite (li_block_frame sc 95 (coreAddr + (140 + 8)) i hi).
+    unfold sc. rewrite (li_block_frame sb 32 (coreAddr + (132 + 8)) i hi).
+    unfold sb. rewrite (li_block_frame s 10 (coreAddr + (124 + 8)) i hi). reflexivity.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
