@@ -2630,7 +2630,8 @@ Lemma loop_byte inp cap c hi l lo rest'' emitted s :
   isLowStop (Z.to_nat l) = false -> nibble (Z.to_nat l) = Some lo ->
   Z.of_nat (length emitted) < cap ->
   LoopInv inp cap s (c :: l :: rest'') emitted ->
-  exists k, LoopInv inp cap (runUntil 0 k s) rest'' (emitted ++ (hi * 16 + lo)%nat :: nil).
+  exists k, (k <= 50 * (length (c :: l :: rest'') - length rest''))%nat /\
+            LoopInv inp cap (runUntil 0 k s) rest'' (emitted ++ (hi * 16 + lo)%nat :: nil).
 Proof.
   intros hsc hss hnh hlls hnl hcap inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
@@ -2669,7 +2670,7 @@ Proof.
   destruct (store_epilogue sP hi lo (length emitted) cap HcodeP HpcF H6P H13P H12P H29P H30F
     hhi16 hlo16 hcap Houtlt) as [k3 [Hk3 [HpcSF [H6SF [HothSF HmemSF]]]]].
   set (sF := runUntil 0 k3 sP) in *.
-  exists (k0 + (10 + (k2 + k3)))%nat.
+  exists (k0 + (10 + (k2 + k3)))%nat. split; [simpl length; lia|].
   assert (hchain : runUntil 0 (k0 + (10 + (k2 + k3))) s = sF).
   { rewrite (runUntil_add k0 (10 + (k2 + k3))), (runUntil_add 10 (k2 + k3)), (runUntil_add k2 k3).
     fold sE0. fold sP. reflexivity. }
