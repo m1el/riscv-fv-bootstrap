@@ -23,8 +23,9 @@ architecture as built, the exact remaining work, and the recipes that work.
   Also note `set`/`List.getD_eq_getElem` are Mathlib/Batteries-only — unavailable
   here; use `let x := e; have h : x = e := rfl; rw [← h] at <hyp>` and
   `(List.getElem_eq_getD 0)` instead.
-- The remaining frontier is now **task #7** (ISA cross-check) and porting the
-  Coq `Refine.v` (still `Admitted`).
+- The remaining frontier is now **task #7** (ISA cross-check) and the single
+  Coq `Refine.v` hole `loop_iteration` (the per-token dispatch; `core_refines`
+  itself is proved modulo it).
 
 ## Environment gotchas (these cost real time — don't rediscover)
 
@@ -186,22 +187,31 @@ cd lean && lake build                         # whole Lean dev (1 sorry in Refin
 grep -c '  sorry' lean/Hex0/Refine.lean       # should be 1 until loop_iteration closes
 lake env lean Hex0/Validate.lean              # model-vs-spec differential battery
 
-eval $(opam env); cd coq && make -j64          # Coq dev (Refine.v still Admitted)
+eval $(opam env); cd coq && make -j64          # Coq dev (Refine.v: only loop_iteration Admitted)
 cd bare && make run                            # bare-metal hex0 -> "Hello\n"
 uv run tools/gen_image.py                      # regen Image.{lean,v} from the ELF
 ```
 
 ## Things NOT yet done (beyond the one sorry)
 
-- **Coq `core_refines`** is still `Admitted`. The Coq **foundation tier IS proved**
-  (`coq/Refine.v`, kernel-checked): `fetch_code` + all 12 `step_*` + projections,
-  the arithmetic toolkit (`wadd_id`/`sltb_small`), `runUntil` composition, the
-  `decodeS_*` decomposition, and `core_eof`. Remaining: `LoopInv` + the per-token
-  dispatch (`loop_iteration`) + `loop_correct` + the `runOn↔coreSpec` conversion.
-  Two Coq-specific snags (see PROOF.md §8 / `coq/Refine.v` header): `runOn` uses a
-  fixed fuel (100000) so the final assembly needs a step bound (Lean used ∃fuel),
-  and the model's `Z` bytes vs the spec's `nat` need `zin`/`Z.to_nat` conversions
-  threaded through `LoopInv`/dispatch.
+- **Coq `core_refines` is PROVED modulo the single `Admitted` `loop_iteration`.**
+  `Print Assumptions core_refines` ⇒ `loop_iteration` + `functional_extensionality_dep`
+  (standard consistent axiom, for `mem : Z → Z` state equality). Kernel-checked and
+  assembling the theorem: `fetch_code` + all 12 `step_*` + projections, the
+  arithmetic toolkit, `runUntil` composition (incl. new `runUntil_stab`), the
+  `decodeS_*` decomposition, `core_eof`, `LoopInv` (18 fields), `eof_result`,
+  `loop_correct` (fuel-bounded induction `50*|rest|+4`), `init_loopinv` (prologue),
+  and the `runOn↔coreSpec` conversion. **The only remaining Coq hole is
+  `loop_iteration`** — the per-token dispatch (spacing/byte/comment + 4 error
+  classes), the ~2500-line Lean tail to port (mirror `lean/Hex0/Refine.lean`'s
+  `loop_*` blocks). Coq gotchas already resolved (see `coq/Refine.v` header):
+  `set (..) in *` (not goal-only) so `step` eqns fold; **avoid `simpl andb` over
+  `nth .. coreBytes`** (full simpl traversal + huge `coreAddr` literal ⇒ coqc
+  hangs — use `replace (guard) with true/false` + `cbv iota`); **`lia` cannot
+  reason about the nat literal `100000`** (`Nat.of_num_uint`) so bound it through
+  `Z` (`Nat2Z.inj_le` + `vm_compute (Z.of_nat 100000)`) and absorb fuel slack via
+  `runUntil_stab`; the `Z`-bytes/`nat`-spec gap needs `zin`/`Z.to_nat` threaded
+  through `LoopInv`/dispatch.
 - **Task #7 (ISA cross-check)**: prove our `decode`+`step` agree with
   `sail-riscv-lean` (opencompl) / `riscv-coq`, to remove "model = hardware" from
   the TCB (currently testing-backed). `sail-riscv-lean` is 171k LoC, WIP,

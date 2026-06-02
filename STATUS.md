@@ -84,8 +84,11 @@ model ....... coq/Rv64i.v · lean/Hex0/Rv64i.lean       (RV64I semantics)
 validate .... coq/Validate.v · lean/Hex0/Validate.lean (model vs spec on real bytes)
 certify ..... coq/Certify.v · lean/Hex0/Certify.lean   (finite, proved)
 refine ...... coq/Refine.v · lean/Hex0/Refine.lean     (Lean: PROVED sorry-free;
-              Coq: foundation tier proved [engine+toolkit+runUntil+decodeS-decomp
-              +core_eof], dispatch/induction/conversion = frontier. See PROOF.md.)
+              Coq: core_refines PROVED modulo the single Admitted loop_iteration
+              [engine+toolkit+runUntil+decodeS-decomp+core_eof+LoopInv+eof_result
+              +loop_correct+init_loopinv+conversion all kernel-checked]; the
+              per-token dispatch loop_iteration is the only remaining hole. See
+              PROOF.md.)
 grammar ..... lean/Hex0/Grammar.lean                   (HEX0.md BNF ⟺ decodeS: total + disjoint)
 tools/ ...... gen_image.py (ELF bytes -> Image.{v,lean})
 TCB.md ...... the trusted base
