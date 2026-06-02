@@ -849,6 +849,82 @@ theorem init_loopinv (inp : List Nat) (cap : Nat) (hwf : WellFormed inp cap) :
   · intro j hj; simp at hj
   · simp
 
+/-! ## Pure spec lemmas for the `observe`/`coreSpec` conversion. -/
+
+theorem nibble_lt (c v : Nat) (h : Hex0.nibble c = some v) : v < 16 := by
+  unfold Hex0.nibble at h; split at h <;> simp_all <;> omega
+
+theorem decodeS_bytes_lt : ∀ (st : Hex0.St) (l : List Nat),
+    (∀ hi, st = Hex0.St.Low hi → hi < 16) → ∀ b, b ∈ (Hex0.decodeS st l).1 → b < 256
+  | .High, [], _, b, hb => by simp [Hex0.decodeS] at hb
+  | .Low _, [], _, b, hb => by simp [Hex0.decodeS] at hb
+  | .High, c :: rest, _, b, hb => by
+      rw [Hex0.decodeS] at hb
+      by_cases hc : Hex0.isComment c = true
+      · rw [if_pos hc] at hb
+        exact decodeS_bytes_lt .High (Hex0.skipComment rest) (fun _ h => nomatch h) b hb
+      · rw [if_neg hc] at hb
+        by_cases hs : Hex0.isSpace c = true
+        · rw [if_pos hs] at hb
+          exact decodeS_bytes_lt .High rest (fun _ h => nomatch h) b hb
+        · rw [if_neg hs] at hb
+          cases hn : Hex0.nibble c with
+          | none => rw [hn] at hb; simp [Hex0.decodeS] at hb
+          | some hi => rw [hn] at hb
+                       exact decodeS_bytes_lt (.Low hi) rest
+                         (fun hi' h => by cases h; exact nibble_lt _ _ hn) b hb
+  | .Low hi, c :: rest, hpre, b, hb => by
+      rw [Hex0.decodeS] at hb
+      by_cases hls : Hex0.isLowStop c = true
+      · rw [if_pos hls] at hb; simp at hb
+      · rw [if_neg hls] at hb
+        cases hn : Hex0.nibble c with
+        | none => rw [hn] at hb; simp at hb
+        | some lo =>
+          rw [hn] at hb
+          simp only [List.mem_cons] at hb
+          rcases hb with h | h
+          · subst h
+            have := nibble_lt _ _ hn
+            have := hpre hi rfl
+            omega
+          · exact decodeS_bytes_lt .High rest (fun _ hh => nomatch hh) b h
+  termination_by st l => l.length
+  decreasing_by
+    · exact Nat.lt_of_le_of_lt (Hex0.skipComment_len rest) (by simp)
+    · simp
+    · simp
+    · simp
+
+theorem decode_bytes_lt (l : List Nat) : ∀ b ∈ (Hex0.decode l).1, b < 256 :=
+  fun b hb => decodeS_bytes_lt Hex0.St.High l (fun _ h => nomatch h) b hb
+
+theorem range_getD (l : List Nat) : (List.range l.length).map (fun i => l.getD i 0) = l := by
+  apply List.ext_getElem
+  · simp
+  · intro i h1 _
+    simp only [List.getElem_map, List.getElem_range, List.getD_eq_getElem?_getD]
+    rw [List.getElem?_eq_getElem (by simpa using h1)]; rfl
+
+/-- Shape facts about `coreSpec` needed for the conversion. -/
+theorem coreSpec_props (inp : List Nat) (cap : Nat) :
+    (Hex0.coreSpec inp cap).1 < 2 ^ 64 ∧
+    (Hex0.coreSpec inp cap).2.2 = (Hex0.coreSpec inp cap).2.1.length ∧
+    (Hex0.coreSpec inp cap).2.2 ≤ cap ∧
+    (∀ b ∈ (Hex0.coreSpec inp cap).2.1, b < 256) := by
+  unfold Hex0.coreSpec
+  have hb := decode_bytes_lt inp
+  cases hd : Hex0.decode inp with
+  | mk bs st =>
+    rw [hd] at hb
+    by_cases hlt : cap < bs.length
+    · simp only [hlt, if_true]
+      refine ⟨(by decide), ?_, Nat.le_refl _, fun b hbm => hb b (List.mem_of_mem_take hbm)⟩
+      rw [List.length_take]; omega
+    · simp only [hlt, if_false]
+      have hst : Hex0.statusCode st < 2 ^ 64 := by cases st <;> decide
+      exact ⟨hst, trivial, (by omega), hb⟩
+
 /-! ## The general refinement theorem. -/
 theorem core_refines (inp : List Nat) (cap : Nat) (hwf : WellFormed inp cap) :
     ∃ fuel, Harness.observe inp cap fuel = Hex0.coreSpec inp cap := by
