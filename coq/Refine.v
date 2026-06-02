@@ -3,22 +3,33 @@
     Proof-grade theorem: for ALL inputs, the real `core` computes `coreSpec`.
     No vm_compute on the general statement -- it is genuine induction.
 
-    STATUS: the FOUNDATION TIER is ported and proved (kernel-checked), mirroring
-    `lean/Hex0/Refine.lean` §5 up to (and including) the EOF base case:
+    STATUS: `core_refines` is PROVED modulo the single per-token dispatch lemma
+    `loop_iteration` (the only `Admitted`).  Everything that assembles it is
+    kernel-checked, mirroring `lean/Hex0/Refine.lean` §5:
       - `fetch_code` + all 12 `step_*` lemmas + state/storeByte projections
         (`decode (wordAt off)` reduces under `vm_compute` at concrete offsets, so
         the step lemmas apply exactly as in Lean);
       - arithmetic toolkit: `wrap_small`, `wadd_id`, `toS_small`, `sltb_small`;
       - `runUntil` composition: `runUntil_halt`, `runUntil_one`, `runUntil_S`,
-        `runUntil_add`;
+        `runUntil_add`, `runUntil_stab` (large-fuel halt absorption);
       - spec-side token decomposition: `decodeS_spacing`/`byte`/`comment`;
-      - `core_eof` -- the EOF base case (4-step run to a correct halt).
-    Remaining frontier (the large tail, `Admitted`): `LoopInv` + the per-token
-    dispatch (`loop_iteration`) + induction (`loop_correct`) + prologue + the
-    `runOn↔coreSpec` conversion. Two Coq-specific notes vs Lean (see PROOF.md §8):
-    (1) `runOn` uses a *fixed* fuel (100000), so the assembly needs a step-count
-    bound (Lean used ∃fuel); (2) the model's bytes are `Z` but the spec is on
-    `nat`, so `LoopInv`/dispatch carry `Z.of_nat`/`Z.to_nat` (`zin`) conversions. *)
+      - `core_eof` -- the EOF base case (4-step run to a correct halt);
+      - `LoopInv` (the 18-field invariant) + `eof_result`;
+      - `loop_correct` -- the induction (fuel bound `50*|rest| + 4`);
+      - `init_loopinv` -- the prologue (2-step run to the loop head);
+      - `core_refines` -- prologue + induction + `runOn<->coreSpec` conversion.
+    Remaining frontier (`Admitted`, line ~425): `loop_iteration` -- the per-token
+    dispatch (spacing/byte/comment + the four halting error classes), the large
+    mechanical tail (~2500 Lean lines).  `Print Assumptions core_refines` =>
+    `loop_iteration` + `functional_extensionality_dep` (a standard, consistent
+    axiom, used for `mem : Z -> Z` state equality -- cf. Lean's propext/choice).
+    Two Coq-specific notes vs Lean (see PROOF.md §8): (1) `runOn` uses a *fixed*
+    fuel (100000), so the assembly bounds the step count (Lean used ∃fuel) and
+    absorbs the slack via `runUntil_stab` -- note `lia` cannot reason about the
+    nat literal `100000` (it is `Nat.of_num_uint`), so the bound `F <= 100000`
+    is proved through `Z` (`Nat2Z.inj_le` + `vm_compute (Z.of_nat 100000)`);
+    (2) the model's bytes are `Z` but the spec is on `nat`, so `LoopInv`/dispatch
+    carry `Z.of_nat`/`Z.to_nat` (`zin`) conversions. *)
 
 From Coq Require Import ZArith List Lia Bool.
 From Equations Require Import Equations.
@@ -223,6 +234,19 @@ Proof.
   destruct (s.(pc) =? 0) eqn:E.
   - apply Z.eqb_eq in E. now rewrite (runUntil_halt b s E).
   - apply ih.
+Qed.
+
+(* Once the machine has halted by fuel [f], any larger fuel [g] gives the same
+   state.  Used to absorb the fixed 100000-fuel run in [runOn] into the
+   step-count bound the loop actually needs (avoids nat-subtraction lia, which
+   chokes on the [Nat.of_num_uint 100000] literal). *)
+Lemma runUntil_stab f s : (runUntil 0 f s).(pc) = 0 ->
+  forall g, (f <= g)%nat -> runUntil 0 g s = runUntil 0 f s.
+Proof.
+  intros Hhalt g Hle. induction Hle as [|g Hle IH].
+  - reflexivity.
+  - rewrite <- Nat.add_1_r, (runUntil_add g 1 s), IH.
+    exact (runUntil_halt 1 (runUntil 0 f s) Hhalt).
 Qed.
 
 (** ** Spec-side token decomposition (mirror of decodeS_spacing/byte/comment). *)
@@ -448,12 +472,102 @@ Record WellFormed (inp : list Z) (cap : Z) : Prop := {
   bytes_ok : forall b, In b inp -> 0 <= b < 256
 }.
 
-(** ** The general refinement theorem (FRONTIER).
-    Proof outline (mirrors the Lean file): establish the main-loop invariant from
-    the initial state, prove one iteration preserves it or halts correctly (case
-    analysis on the next char's class), induct on the remaining input length. *)
+(** ** Prologue: from the initial state, `li t0,0; li t1,0` reach the loop head
+    establishing the initial invariant (full input remaining, nothing emitted). *)
+Theorem init_loopinv : forall inp cap, WellFormed inp cap ->
+  LoopInv inp cap (runUntil 0 2 (mkInit (Z.of_nat (length inp)) cap (memWith inp inputAddr))) inp [].
+Proof.
+  intros inp cap HW. destruct HW as [Hfits Hfit2 Hbytes].
+  set (init := mkInit (Z.of_nat (length inp)) cap (memWith inp inputAddr)).
+  assert (Hmem0 : init.(mem) = memWith inp inputAddr) by reflexivity.
+  assert (Hpc0 : init.(pc) = coreAddr) by reflexivity.
+  assert (Hcode0 : CodeLoaded init).
+  { intros i Hi. rewrite coreBytes_len in Hi. rewrite Hmem0. unfold memWith.
+    replace ((coreAddr <=? coreAddr + i) && (coreAddr + i <? coreAddr + Z.of_nat (length coreBytes)))
+      with true
+      by (symmetry; apply andb_true_iff; split;
+          [apply Z.leb_le; lia | apply Z.ltb_lt; rewrite coreBytes_len; lia]).
+    cbv iota. replace (coreAddr + i - coreAddr) with i by lia. unfold nthb. reflexivity. }
+  assert (hs1 : step init = setPc (rset init 5 0) (coreAddr + 4)).
+  { rewrite (step_addi init 0 5 0 0 Hcode0 ltac:(lia) ltac:(rewrite coreBytes_len; lia) Hpc0
+              ltac:(vm_compute; reflexivity)).
+    rewrite rget_zero, (wadd_id 0 0 ltac:(lia)), Hpc0,
+            (wadd_id coreAddr 4 ltac:(unfold coreAddr; lia)). reflexivity. }
+  set (s1 := setPc (rset init 5 0) (coreAddr + 4)) in *.
+  assert (hpc1 : s1.(pc) = coreAddr + 4) by reflexivity.
+  assert (hc1 : CodeLoaded s1) by (apply (CodeLoaded_eqmem init); [reflexivity| exact Hcode0]).
+  assert (hs2 : step s1 = setPc (rset s1 6 0) (coreAddr + 8)).
+  { rewrite (step_addi s1 4 6 0 0 hc1 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc1
+              ltac:(vm_compute; reflexivity)).
+    rewrite rget_zero, (wadd_id 0 0 ltac:(lia)), hpc1,
+            (wadd_id (coreAddr+4) 4 ltac:(unfold coreAddr; lia)). reflexivity. }
+  set (s2 := setPc (rset s1 6 0) (coreAddr + 8)) in *.
+  assert (hp0 : init.(pc) <> 0) by (rewrite Hpc0; unfold coreAddr; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; apply coreAddr_pos; lia).
+  assert (hrun : runUntil 0 2 init = s2)
+    by (rewrite (runUntil_S 1 init hp0), hs1, (runUntil_S 0 s1 hp1), hs2; reflexivity).
+  rewrite hrun.
+  assert (Hmem2 : s2.(mem) = memWith inp inputAddr)
+    by (unfold s2, s1; rewrite !setPc_mem, !rset_mem; exact Hmem0).
+  assert (R10 : rget s2 10 = inputAddr) by (unfold s2, s1, init; reflexivity).
+  assert (R11 : rget s2 11 = Z.of_nat (length inp)) by (unfold s2, s1, init; reflexivity).
+  assert (R12 : rget s2 12 = outAddr) by (unfold s2, s1, init; reflexivity).
+  assert (R13 : rget s2 13 = cap) by (unfold s2, s1, init; reflexivity).
+  assert (R1 : rget s2 1 = 0) by (unfold s2, s1, init; reflexivity).
+  assert (R5 : rget s2 5 = 0) by (unfold s2, s1, init; reflexivity).
+  assert (R6 : rget s2 6 = 0) by (unfold s2, s1, init; reflexivity).
+  refine {| li_at_loop := _; li_code := _; li_a0 := R10; li_a1 := R11; li_a2 := R12;
+            li_a3 := R13; li_ra := R1; li_in_mem := _; li_in_lt := _; li_bytes := Hbytes;
+            li_in_fits := Hfits; li_out_lt := Hfit2; li_idx := _; li_suffix := _;
+            li_outidx := _; li_emit_le := _; li_out_mem := _; li_spec := _ |}.
+  - reflexivity.
+  - apply (CodeLoaded_eqmem init); [exact Hmem2| exact Hcode0].
+  - intros j Hj. rewrite Hmem2. unfold memWith.
+    replace ((coreAddr <=? inputAddr + j) && (inputAddr + j <? coreAddr + Z.of_nat (length coreBytes)))
+      with false
+      by (symmetry; apply andb_false_iff; right; apply Z.ltb_ge;
+          rewrite coreBytes_len; unfold coreAddr, inputAddr; lia).
+    cbv iota.
+    replace ((inputAddr <=? inputAddr + j) && (inputAddr + j <? inputAddr + Z.of_nat (length inp)))
+      with true
+      by (symmetry; apply andb_true_iff; split;
+          [apply Z.leb_le; lia | apply Z.ltb_lt; lia]).
+    cbv iota. replace (inputAddr + j - inputAddr) with j by lia. reflexivity.
+  - unfold inputAddr, outAddr in *; lia.
+  - rewrite R5; lia.
+  - rewrite Nat.sub_diag; reflexivity.
+  - rewrite R6; reflexivity.
+  - simpl; lia.
+  - intros j Hj; simpl in Hj; lia.
+  - rewrite app_nil_l; apply surjective_pairing.
+Qed.
+
+(** ** The general refinement theorem: PROVED modulo the per-token dispatch
+    (`loop_iteration`). Mirrors the Lean assembly; the fixed 100000 fuel suffices
+    because the loop halts within [2 + 50*|inp| + 4] steps and |inp| <= 484. *)
 Theorem core_refines : forall (inp : list Z) (cap : Z),
   WellFormed inp cap ->
   runOn inp cap = specOn (zin inp) (Z.to_nat cap).
 Proof.
-Admitted.
+  intros inp cap HW.
+  assert (Hlen : (length inp <= 484)%nat)
+    by (destruct HW as [Hfits _ _]; unfold inputAddr, outAddr in Hfits; lia).
+  pose proof (init_loopinv inp cap HW) as HLI.
+  set (init := mkInit (Z.of_nat (length inp)) cap (memWith inp inputAddr)) in *.
+  pose proof (loop_correct inp cap (length inp) inp [] (runUntil 0 2 init) (le_n _) HLI) as HR.
+  rewrite <- (runUntil_add 2 (50 * length inp + 4) init) in HR.
+  (* The loop halts by fuel [2 + (50*|inp| + 4)] <= 100000 (since |inp| <= 484),
+     so the fixed 100000-fuel run in [runOn] coincides with it. *)
+  assert (HF : (2 + (50 * length inp + 4) <= 100000)%nat).
+  { apply Nat2Z.inj_le.
+    replace (Z.of_nat 100000) with 100000%Z by (vm_compute; reflexivity).
+    lia. }
+  assert (Hhalt : runUntil 0 100000 init
+                  = runUntil 0 (2 + (50 * length inp + 4)) init)
+    by (apply (runUntil_stab _ _ (Result_pc _ _ _ HR)); exact HF).
+  unfold runOn. fold init. rewrite Hhalt.
+  unfold specOn, Result in *.
+  destruct (coreSpec (zin inp) (Z.to_nat cap)) as [[st bs] ln].
+  destruct HR as [Hp [H10 [H11 Hmemr]]].
+  rewrite H10, H11, Nat2Z.id, Hmemr. reflexivity.
+Qed.
