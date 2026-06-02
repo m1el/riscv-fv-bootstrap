@@ -31,15 +31,18 @@ Goal: run hex0 on bare-metal `qemu-system-riscv` **and** have a formal proof
 3. **Token decomposition** `decode (token ++ rest) = decode token ++ decode rest`
    ≡ machine `core(in, a, b) ≡ core(in, a+Δin, b+Δout)`:
    - spec side — ✅ `decodeS_spacing / decodeS_byte / decodeS_comment_skip`.
-   - machine side — 🚧 `loop_iteration`. **`loop_prefix` is now PROVED**: the
-     shared 4-instr head `bgeu`(not-taken)→`add`→`lbu`(read input char)→`addi`,
-     including the input-memory read framing (`in_mem` + `getD_drop` +
-     `setWidth8_64`). What remains in `loop_iteration`: from `loop_prefix`'s `s4`,
-     the per-class tail — the `beq` char-dispatch chain then spacing→loop /
-     nibble→`sb`+loop / comment→sub-loop / error→halt, rebuilding `LoopInv` for
-     the shorter suffix (the `sb`/comment cases carry the output/code disjointness
-     frame). Toolkit in hand: engine, `ult_ofNat`/`ofNat_ne`/`getD_drop`/
-     `setWidth8_64`, `loop_prefix`, spec decomposition.
+   - machine side — 🚧 `loop_iteration`, but a **complete iteration is now
+     PROVED** for the newline spacing token: **`loop_spacing_nl`**
+     (`LoopInv (10::rest') → ∃k, LoopInv rest'`), built from three proved pieces:
+     **`loop_prefix`** (the shared `bgeu`→`add`→`lbu`→`addi` head with the
+     input-memory read framing), **`spacing_tail_nl`** (the `beq` dispatch chain →
+     loop-back), and **`spacing_loopinv`** (rebuild the invariant for the shorter
+     suffix). This validates the whole machine-side architecture composes and
+     plugs into the proven induction. What remains for `loop_iteration`: the other
+     spacing chars (`' '`, `'_'` — analogous longer tails), and the
+     nibble→`sb`+loop / comment→sub-loop / error→halt classes (same
+     prefix+tail+rebuild pattern; `sb`/comment add the output↔code disjointness
+     frame), then a dispatch on the head char's class.
 4. **Induction** — ✅ **`loop_correct`** (structural induction on a fuel bound on
    `rest.length`; base = `eof_result`/`core_eof`, step = `loop_iteration`,
    chaining via `runFuel_add`, telescoping via `spec_link`). PROVED.
