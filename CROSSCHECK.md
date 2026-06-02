@@ -83,10 +83,15 @@ The two instruction-independent foundations of the execute/step simulation are
   fetch well-formedness `WFfetch` (CROSSCHECK.md §3) are defined and type-check
   against the concrete Minimal `RiscvMachine` record.
 
-Remaining for **T2**: the `run1` `OState` monad reduction (`Bind`/`get`/`put`),
-the 12 per-instruction `exec_*` lemmas (register/memory map bridges, the `sb`
-store via `putmany`, branch targets), `step_agrees` assembling them, and the
-transport corollary `core_refines_riscv`.
+- **`run1` reduction toolkit** (`Run1` section) — `run1_fetch` (a successful
+  executable fetch reduces `run1` to `execute (decode …)` then `endCycleNormal`),
+  `getReg_red`/`setReg_red` (register read/write over the `OState` machine),
+  `endcycle_red` (pc := nextPc, nextPc += 4). Instruction-independent; reused by
+  every `exec_*`.
+
+Remaining for **T2**: the 12 per-instruction `exec_*` lemmas (assembling the
+toolkit + `decode_agrees` + word/memory bridges; the `sb` store via `putmany`,
+branch targets), `step_agrees`, and the transport corollary `core_refines_riscv`.
 
 ### Lean side (sail-riscv-lean) — deferred, deliberately
 

@@ -20,8 +20,10 @@
 
 From Coq Require Import ZArith List Lia Bool. Import ListNotations.
 Require Import Hex0Coq.Rv64i Hex0Coq.RvCross.
-Require Import riscv.Spec.Machine riscv.Utility.Utility riscv.Platform.Memory.
-Require Import riscv.Platform.RiscvMachine.
+Require Import riscv.Spec.Decode riscv.Spec.Machine riscv.Spec.Execute.
+Require Import riscv.Utility.Utility riscv.Platform.Memory.
+Require Import riscv.Platform.RiscvMachine riscv.Platform.Minimal riscv.Platform.Run.
+Require Import riscv.Utility.Monads. Import OStateOperations.
 Require Import coqutil.Word.Interface coqutil.Word.Properties coqutil.Word.Bitwidth.
 Require Import coqutil.Word.LittleEndian coqutil.Word.LittleEndianList.
 Require Import coqutil.Map.Interface coqutil.Map.Properties coqutil.Byte.
@@ -139,6 +141,66 @@ Section Fetch.
     ring.
   Qed.
 End Fetch.
+
+(* ================================================================== *)
+(* run1 reduction toolkit: how one Minimal OState cycle reduces.        *)
+(* These are instruction-independent and reusable across all exec_*.    *)
+(* ================================================================== *)
+
+Section Run1.
+  Context {BW: Bitwidth 64}.
+  Context {word: word.word 64} {word_ok: word.ok word}.
+  Context {Mem: map.map word Init.Byte.byte} {Mem_ok: map.ok Mem}.
+  Context {Registers: map.map Z word} {Reg_ok: map.ok Registers}.
+
+  (** A successful, executable fetch reduces [run1] to: run [execute] of the
+      decoded instruction on the (fetch leaves state unchanged) machine, then
+      [endCycleNormal]. *)
+  Lemma run1_fetch : forall (m:RiscvMachine) bs,
+    isXAddr4B m.(getPc) m.(getXAddrs) = true ->
+    Memory.load_bytes 4 m.(getMem) m.(getPc) = Some bs ->
+    Run.run1 RV64I m =
+      (let (o, m3) := Execute.execute (decode RV64I (LittleEndian.combine 4 bs)) m in
+       match o with Some _ => endCycleNormal m3 | None => (None, m3) end).
+  Proof.
+    intros m bs Hx Hl.
+    unfold Run.run1, Machine.getPC, Machine.loadWord, IsRiscvMachine, loadN, fail_if_None.
+    cbv [Bind Return OState_Monad get put]. cbn [fst snd]. rewrite Hl, Hx. reflexivity.
+  Qed.
+
+  (** Reading register [r] (1..31) returns its mapped value, state unchanged. *)
+  Lemma getReg_red : forall (m:RiscvMachine) r v, 1 <= r < 32 ->
+    map.get m.(getRegs) r = Some v ->
+    Machine.getRegister r m = (Some v, m).
+  Proof.
+    intros m r v Hr Hg.
+    unfold Machine.getRegister, IsRiscvMachine.
+    destruct (Z.eq_dec r Register0) as [E|_].
+    - exfalso; cbn in E; lia.
+    - replace ((0 <? r) && (r <? 32)) with true by (symmetry; apply andb_true_iff; split; apply Z.ltb_lt; lia).
+      cbv [Bind Return OState_Monad get]. cbn [fst snd]. rewrite Hg. reflexivity.
+  Qed.
+
+  (** Writing register [rd] (1..31) puts into the register map, nothing else. *)
+  Lemma setReg_red : forall (m:RiscvMachine) rd v, 1 <= rd < 32 ->
+    Machine.setRegister rd v m = (Some tt, withRegs (map.put m.(getRegs) rd v) m).
+  Proof.
+    intros m rd v Hr.
+    unfold Machine.setRegister, IsRiscvMachine.
+    destruct (Z.eq_dec rd Register0) as [E|_].
+    - exfalso; cbn in E; lia.
+    - replace ((0 <? rd) && (rd <? 32)) with true by (symmetry; apply andb_true_iff; split; apply Z.ltb_lt; lia).
+      unfold update. cbv [Bind Return OState_Monad get put]. cbn [fst snd]. reflexivity.
+  Qed.
+
+  (** [endCycleNormal]: pc := nextPc, nextPc := nextPc + 4. *)
+  Lemma endcycle_red : forall (m:RiscvMachine),
+    endCycleNormal m = (Some tt, withPc m.(getNextPc) (withNextPc (word.add m.(getNextPc) (word.of_Z 4)) m)).
+  Proof.
+    intros m. unfold endCycleNormal, IsRiscvMachine, update.
+    cbv [Bind Return OState_Monad get put]. cbn [fst snd]. reflexivity.
+  Qed.
+End Run1.
 
 (* ================================================================== *)
 (* The state-bridge relation (CROSSCHECK.md §3), for [step_agrees].    *)
