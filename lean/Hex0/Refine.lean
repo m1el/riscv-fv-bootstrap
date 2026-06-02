@@ -1162,6 +1162,105 @@ theorem li_blt_t (s : State) (off K c : Nat) (imm : BitVec 13) (target : Word) (
   show runFuel 0 2 s = s1.setPc _
   simp only [runFuel]; rw [hu1, hu2, if_neg hp0, if_neg hp1]
 
+set_option maxRecDepth 4000 in
+/-- The high `beq`-chain (offsets 24..60) when `c` is none of the five stop
+    chars: all five `beq` fall through, reaching offset 64 in 10 steps, touching
+    only `t3`/`pc`. -/
+theorem high_beq_ft (s : State) (hcode : CodeLoaded s) (c : Nat)
+    (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + 24)) (h7 : s.rget 7 = BitVec.ofNat 64 c)
+    (hc256 : c < 256)
+    (h35 : c ≠ 35) (h59 : c ≠ 59) (h10 : c ≠ 10) (h32 : c ≠ 32) (h95 : c ≠ 95) :
+    (runFuel 0 10 s).pc = BitVec.ofNat 64 (Image.coreAddr + 64) ∧
+    (runFuel 0 10 s).mem = s.mem ∧
+    (∀ i, i ≠ 28 → (runFuel 0 10 s).rget i = s.rget i) := by
+  have hc64 : c < 2 ^ 64 := Nat.lt_trans hc256 (by decide)
+  have b1 := li_beq_ne s 24 35 c 0x00d0#13 hcode hpc h7 (by decide) (by decide) (by decide)
+    (ofNat_ne c 35 hc64 (by decide) h35) (by decide)
+  set sb := (s.rset 28 (BitVec.ofNat 64 35)).setPc (BitVec.ofNat 64 (Image.coreAddr + (24 + 8)))
+    with hsb
+  have hcb : CodeLoaded sb := by intro i hi; rw [hsb]; simp [hcode i hi]
+  have h7b : sb.rget 7 = BitVec.ofNat 64 c := by rw [hsb, li_block_frame _ _ _ _ (by decide)]; exact h7
+  have b2 := li_beq_ne sb 32 59 c 0x00c8#13 hcb rfl h7b (by decide) (by decide) (by decide)
+    (ofNat_ne c 59 hc64 (by decide) h59) (by decide)
+  set sc := (sb.rset 28 (BitVec.ofNat 64 59)).setPc (BitVec.ofNat 64 (Image.coreAddr + (32 + 8)))
+    with hsc
+  have hcc : CodeLoaded sc := by intro i hi; rw [hsc]; simp [hcb i hi]
+  have h7c : sc.rget 7 = BitVec.ofNat 64 c := by rw [hsc, li_block_frame _ _ _ _ (by decide)]; exact h7b
+  have b3 := li_beq_ne sc 40 10 c 0x1fdc#13 hcc rfl h7c (by decide) (by decide) (by decide)
+    (ofNat_ne c 10 hc64 (by decide) h10) (by decide)
+  set sd := (sc.rset 28 (BitVec.ofNat 64 10)).setPc (BitVec.ofNat 64 (Image.coreAddr + (40 + 8)))
+    with hsd
+  have hcd : CodeLoaded sd := by intro i hi; rw [hsd]; simp [hcc i hi]
+  have h7d : sd.rget 7 = BitVec.ofNat 64 c := by rw [hsd, li_block_frame _ _ _ _ (by decide)]; exact h7c
+  have b4 := li_beq_ne sd 48 32 c 0x1fd4#13 hcd rfl h7d (by decide) (by decide) (by decide)
+    (ofNat_ne c 32 hc64 (by decide) h32) (by decide)
+  set se := (sd.rset 28 (BitVec.ofNat 64 32)).setPc (BitVec.ofNat 64 (Image.coreAddr + (48 + 8)))
+    with hse
+  have hce : CodeLoaded se := by intro i hi; rw [hse]; simp [hcd i hi]
+  have h7e : se.rget 7 = BitVec.ofNat 64 c := by rw [hse, li_block_frame _ _ _ _ (by decide)]; exact h7d
+  have b5 := li_beq_ne se 56 95 c 0x1fcc#13 hce rfl h7e (by decide) (by decide) (by decide)
+    (ofNat_ne c 95 hc64 (by decide) h95) (by decide)
+  refine ⟨?_, ?_, ?_⟩
+  · rw [show (10:Nat) = 2+(2+(2+(2+2))) from rfl, runFuel_add, b1, runFuel_add, b2,
+        runFuel_add, b3, runFuel_add, b4, b5]; rfl
+  · rw [show (10:Nat) = 2+(2+(2+(2+2))) from rfl, runFuel_add, b1, runFuel_add, b2,
+        runFuel_add, b3, runFuel_add, b4, b5]
+    simp only [setPc_mem, rset_mem, hse, hsd, hsc, hsb]
+  · intro i hi
+    rw [show (10:Nat) = 2+(2+(2+(2+2))) from rfl, runFuel_add, b1, runFuel_add, b2,
+        runFuel_add, b3, runFuel_add, b4, b5, li_block_frame _ _ _ _ hi, hse,
+        li_block_frame _ _ _ _ hi, hsd, li_block_frame _ _ _ _ hi, hsc,
+        li_block_frame _ _ _ _ hi, hsb, li_block_frame _ _ _ _ hi]
+
+set_option maxRecDepth 4000 in
+/-- The low `beq`-chain (offsets 124..160) when `c` is none of the five stop
+    chars: all five fall through, reaching offset 164 in 10 steps. -/
+theorem low_beq_ft (s : State) (hcode : CodeLoaded s) (c : Nat)
+    (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + 124)) (h7 : s.rget 7 = BitVec.ofNat 64 c)
+    (hc256 : c < 256)
+    (h35 : c ≠ 35) (h59 : c ≠ 59) (h10 : c ≠ 10) (h32 : c ≠ 32) (h95 : c ≠ 95) :
+    (runFuel 0 10 s).pc = BitVec.ofNat 64 (Image.coreAddr + 164) ∧
+    (runFuel 0 10 s).mem = s.mem ∧
+    (∀ i, i ≠ 28 → (runFuel 0 10 s).rget i = s.rget i) := by
+  have hc64 : c < 2 ^ 64 := Nat.lt_trans hc256 (by decide)
+  have b1 := li_beq_ne s 124 10 c 0x00a0#13 hcode hpc h7 (by decide) (by decide) (by decide)
+    (ofNat_ne c 10 hc64 (by decide) h10) (by decide)
+  set sb := (s.rset 28 (BitVec.ofNat 64 10)).setPc (BitVec.ofNat 64 (Image.coreAddr + (124 + 8)))
+    with hsb
+  have hcb : CodeLoaded sb := by intro i hi; rw [hsb]; simp [hcode i hi]
+  have h7b : sb.rget 7 = BitVec.ofNat 64 c := by rw [hsb, li_block_frame _ _ _ _ (by decide)]; exact h7
+  have b2 := li_beq_ne sb 132 32 c 0x098#13 hcb rfl h7b (by decide) (by decide) (by decide)
+    (ofNat_ne c 32 hc64 (by decide) h32) (by decide)
+  set sc := (sb.rset 28 (BitVec.ofNat 64 32)).setPc (BitVec.ofNat 64 (Image.coreAddr + (132 + 8)))
+    with hsc
+  have hcc : CodeLoaded sc := by intro i hi; rw [hsc]; simp [hcb i hi]
+  have h7c : sc.rget 7 = BitVec.ofNat 64 c := by rw [hsc, li_block_frame _ _ _ _ (by decide)]; exact h7b
+  have b3 := li_beq_ne sc 140 95 c 0x090#13 hcc rfl h7c (by decide) (by decide) (by decide)
+    (ofNat_ne c 95 hc64 (by decide) h95) (by decide)
+  set sd := (sc.rset 28 (BitVec.ofNat 64 95)).setPc (BitVec.ofNat 64 (Image.coreAddr + (140 + 8)))
+    with hsd
+  have hcd : CodeLoaded sd := by intro i hi; rw [hsd]; simp [hcc i hi]
+  have h7d : sd.rget 7 = BitVec.ofNat 64 c := by rw [hsd, li_block_frame _ _ _ _ (by decide)]; exact h7c
+  have b4 := li_beq_ne sd 148 35 c 0x088#13 hcd rfl h7d (by decide) (by decide) (by decide)
+    (ofNat_ne c 35 hc64 (by decide) h35) (by decide)
+  set se := (sd.rset 28 (BitVec.ofNat 64 35)).setPc (BitVec.ofNat 64 (Image.coreAddr + (148 + 8)))
+    with hse
+  have hce : CodeLoaded se := by intro i hi; rw [hse]; simp [hcd i hi]
+  have h7e : se.rget 7 = BitVec.ofNat 64 c := by rw [hse, li_block_frame _ _ _ _ (by decide)]; exact h7d
+  have b5 := li_beq_ne se 156 59 c 0x080#13 hce rfl h7e (by decide) (by decide) (by decide)
+    (ofNat_ne c 59 hc64 (by decide) h59) (by decide)
+  refine ⟨?_, ?_, ?_⟩
+  · rw [show (10:Nat) = 2+(2+(2+(2+2))) from rfl, runFuel_add, b1, runFuel_add, b2,
+        runFuel_add, b3, runFuel_add, b4, b5]; rfl
+  · rw [show (10:Nat) = 2+(2+(2+(2+2))) from rfl, runFuel_add, b1, runFuel_add, b2,
+        runFuel_add, b3, runFuel_add, b4, b5]
+    simp only [setPc_mem, rset_mem, hse, hsd, hsc, hsb]
+  · intro i hi
+    rw [show (10:Nat) = 2+(2+(2+(2+2))) from rfl, runFuel_add, b1, runFuel_add, b2,
+        runFuel_add, b3, runFuel_add, b4, b5, li_block_frame _ _ _ _ hi, hse,
+        li_block_frame _ _ _ _ hi, hsd, li_block_frame _ _ _ _ hi, hsc,
+        li_block_frame _ _ _ _ hi, hsb, li_block_frame _ _ _ _ hi]
+
 /-- One main-loop iteration (the machine side of step 3). From a non-empty
     remaining input, the machine either halts correctly (error / output-short)
     or returns to the loop head with strictly less remaining input and the
