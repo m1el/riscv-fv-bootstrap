@@ -8,11 +8,23 @@ architecture as built, the exact remaining work, and the recipes that work.
 
 - **Everything builds green**: `cd lean && lake build`; `cd coq && make -jN`;
   `cd bare && make run` → prints `Hello\n`.
-- The Lean general refinement **`core_refines` is PROVED** — there is exactly
-  **one `sorry`**, in `loop_iteration` (`lean/Hex0/Refine.lean`). Everything that
-  uses it (`loop_correct`, `core_refines`) is proved against it.
-- To finish: discharge `loop_iteration` (machine-step every token class + a
-  dispatch). All the hard reusable pieces are already proved (see below).
+- The Lean general refinement **`core_refines` is FULLY PROVED, `sorry`-free**
+  (`lean/Hex0/Refine.lean`). `loop_iteration` is discharged via a head-char
+  dispatch (`loop_spacing`/`loop_byte`/`loop_comment` + the halting classes
+  `loop_trailing/split/unknown_high/unknown_low/short`).
+  `#print axioms Hex0.Refine.core_refines` → `[propext, Classical.choice, Quot.sound]`
+  (no `sorryAx`). `grep -c '  sorry' lean/Hex0/Refine.lean` → 0.
+- **BUILD GOTCHA (cost real time):** `lake build`'s default target only built
+  what `lean/Hex0.lean` imports. That root did NOT import `Refine`, so
+  `lake build` reported success *without ever type-checking `Refine.lean`* (and
+  served a stale `.olean`). Fixed: `Hex0.lean` now imports `Refine`/`Image`/
+  `Harness`/`Certify`. **To validate `Refine` directly without cache, use
+  `lake env lean Hex0/Refine.lean`** (errors print top-down; exit 0 = clean).
+  Also note `set`/`List.getD_eq_getElem` are Mathlib/Batteries-only — unavailable
+  here; use `let x := e; have h : x = e := rfl; rw [← h] at <hyp>` and
+  `(List.getElem_eq_getD 0)` instead.
+- The remaining frontier is now **task #7** (ISA cross-check) and porting the
+  Coq `Refine.v` (still `Admitted`).
 
 ## Environment gotchas (these cost real time — don't rediscover)
 
