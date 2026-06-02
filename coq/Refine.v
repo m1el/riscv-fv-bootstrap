@@ -12,6 +12,7 @@
     `observe↔coreSpec` conversion. Methodology + port map: PROOF.md §5,§8. *)
 
 From Coq Require Import ZArith List Lia Bool.
+From Equations Require Import Equations.
 From Hex0Coq Require Import Spec Rv64i Image Harness.
 Import ListNotations.
 Local Open Scope Z_scope.
@@ -209,6 +210,26 @@ Proof.
   - apply Z.eqb_eq in E. now rewrite (runUntil_halt b s E).
   - apply ih.
 Qed.
+
+(** ** Spec-side token decomposition (mirror of decodeS_spacing/byte/comment). *)
+
+Lemma decodeS_spacing c rest : isComment c = false -> isSpace c = true ->
+  decodeS High (c :: rest) = decodeS High rest.
+Proof. intros hc hs. simp decodeS. rewrite hc, hs. reflexivity. Qed.
+
+Lemma decodeS_byte chi clo rest hi lo :
+  isComment chi = false -> isSpace chi = false -> nibble chi = Some hi ->
+  isLowStop clo = false -> nibble clo = Some lo ->
+  decodeS High (chi :: clo :: rest) =
+    ((hi * 16 + lo)%nat :: fst (decodeS High rest), snd (decodeS High rest)).
+Proof.
+  intros hc hs hh hlc hl. simp decodeS. rewrite hc, hs, hh. simp decodeS. rewrite hlc, hl.
+  destruct (decodeS High rest) as [out st]. reflexivity.
+Qed.
+
+Lemma decodeS_comment c rest : isComment c = true ->
+  decodeS High (c :: rest) = decodeS High (skipComment rest).
+Proof. intros hc. simp decodeS. rewrite hc. reflexivity. Qed.
 
 (** ** Well-formedness: input region fits before the output region, etc. *)
 Record WellFormed (inp : list Z) (cap : Z) : Prop := {
