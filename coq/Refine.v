@@ -846,6 +846,143 @@ Proof.
   - rewrite (htother 13 ltac:(lia)); exact (hother4 13 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)).
 Qed.
 
+(** ** Error infrastructure (mirror of error_result/halt_epilogue/bgeu_eq_taken/
+    reach_error).  The halting epilogue + spec packaging shared by every error
+    class (and the comment-EOF Ok exit). *)
+
+(* From a halted state with the right a0/a1/output, package a [Result] for a
+   non-truncating decode.  Mirror of Lean [error_result]. *)
+Lemma error_result s inp cap emitted st :
+  s.(pc) = 0 -> rget s 10 = Z.of_nat (statusCode st) ->
+  rget s 11 = Z.of_nat (length emitted) ->
+  (forall j, (j < length emitted)%nat ->
+     s.(mem) (outAddr + Z.of_nat j) = Z.of_nat (nth j emitted 0%nat)) ->
+  Spec.decode (zin inp) = (emitted, st) -> (length emitted <= Z.to_nat cap)%nat ->
+  Result s inp cap.
+Proof.
+  intros hp ha0 ha1 hmem hdec hle.
+  assert (hcs : coreSpec (zin inp) (Z.to_nat cap) = (statusCode st, emitted, length emitted)).
+  { unfold coreSpec. rewrite hdec. destruct (Z.to_nat cap <? length emitted)%nat eqn:E.
+    - apply Nat.ltb_lt in E. lia.
+    - reflexivity. }
+  unfold Result. rewrite hcs. repeat apply conj.
+  - exact hp.
+  - exact ha0.
+  - exact ha1.
+  - apply readMem_eq. exact hmem.
+Qed.
+
+(* The halting epilogue (li a0,code; mv a1,t1; ret): 3 steps to pc=0 with
+   a0=code, a1=t1, memory preserved.  Mirror of Lean [halt_epilogue]. *)
+Lemma halt_epilogue s off code n :
+  CodeLoaded s -> 0 <= off -> off + 8 + 3 < Z.of_nat (length coreBytes) ->
+  s.(pc) = coreAddr + off ->
+  decode (wordAt off) = Iaddi 10 0 code ->
+  decode (wordAt (off + 4)) = Iaddi 11 6 0 ->
+  decode (wordAt (off + 8)) = Ijalr 0 1 0 ->
+  0 <= code < 2 ^ 64 -> 0 <= n < 2 ^ 64 ->
+  rget s 6 = n -> rget s 1 = 0 ->
+  (runUntil 0 3 s).(pc) = 0 /\ rget (runUntil 0 3 s) 10 = code /\
+  rget (runUntil 0 3 s) 11 = n /\ (runUntil 0 3 s).(mem) = s.(mem).
+Proof.
+  intros hcode ho hoff hpc hli hmv hret hcodeR hnR h6 h1.
+  rewrite coreBytes_len in hoff.
+  assert (hs1 : step s = setPc (rset s 10 code) (coreAddr + (off + 4))).
+  { rewrite (step_addi s off 10 0 code hcode ho ltac:(rewrite coreBytes_len; lia) hpc hli), rget_zero,
+      (wadd_id 0 code ltac:(lia)), Z.add_0_l, hpc,
+      (wadd_id (coreAddr + off) 4 ltac:(unfold coreAddr; lia)). f_equal. lia. }
+  set (s1 := setPc (rset s 10 code) (coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded s1) by
+    (apply (CodeLoaded_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpc1 : s1.(pc) = coreAddr + (off + 4)) by reflexivity.
+  assert (h6_1 : rget s1 6 = n).
+  { unfold s1. rewrite setPc_rget, (rset_rget s 10 code 6 ltac:(lia) ltac:(lia)).
+    replace (6 =? 10) with false by reflexivity. exact h6. }
+  assert (hs2 : step s1 = setPc (rset s1 11 n) (coreAddr + (off + 8))).
+  { rewrite (step_addi s1 (off + 4) 11 6 0 hc1 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc1 hmv), h6_1,
+      (wadd_id n 0 ltac:(lia)), Z.add_0_r, hpc1,
+      (wadd_id (coreAddr + (off + 4)) 4 ltac:(unfold coreAddr; lia)). f_equal. lia. }
+  set (s2 := setPc (rset s1 11 n) (coreAddr + (off + 8))) in *.
+  assert (hc2 : CodeLoaded s2) by
+    (apply (CodeLoaded_eqmem s); [unfold s2, s1; rewrite !setPc_mem, !rset_mem; reflexivity| exact hcode]).
+  assert (hpc2 : s2.(pc) = coreAddr + (off + 8)) by reflexivity.
+  assert (h1_2 : rget s2 1 = 0).
+  { unfold s2. rewrite setPc_rget, (rset_rget s1 11 n 1 ltac:(lia) ltac:(lia)).
+    replace (1 =? 11) with false by reflexivity. unfold s1.
+    rewrite setPc_rget, (rset_rget s 10 code 1 ltac:(lia) ltac:(lia)).
+    replace (1 =? 10) with false by reflexivity. exact h1. }
+  assert (hs3 : step s2 = setPc s2 0).
+  { rewrite (step_jalr s2 (off + 8) 0 1 0 hc2 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc2 hret).
+    assert (Hr : rset s2 0 (wadd s2.(pc) 4) = s2) by (unfold rset; reflexivity).
+    rewrite Hr, h1_2, (wadd_id 0 0 ltac:(lia)). reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; apply coreAddr_pos; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; apply coreAddr_pos; lia).
+  assert (hp2 : s2.(pc) <> 0) by (rewrite hpc2; apply coreAddr_pos; lia).
+  assert (hrun : runUntil 0 3 s = setPc s2 0).
+  { rewrite (runUntil_S 2 s hp0), hs1, (runUntil_S 1 s1 hp1), hs2,
+            (runUntil_S 0 s2 hp2), hs3. reflexivity. }
+  rewrite hrun. repeat apply conj.
+  - apply setPc_pc.
+  - rewrite setPc_rget. unfold s2.
+    rewrite setPc_rget, (rset_rget s1 11 n 10 ltac:(lia) ltac:(lia)).
+    replace (10 =? 11) with false by reflexivity. unfold s1.
+    rewrite setPc_rget, (rset_rget s 10 code 10 ltac:(lia) ltac:(lia)), Z.eqb_refl. reflexivity.
+  - rewrite setPc_rget. unfold s2.
+    rewrite setPc_rget, (rset_rget s1 11 n 11 ltac:(lia) ltac:(lia)), Z.eqb_refl. reflexivity.
+  - rewrite setPc_mem. unfold s2, s1. rewrite !setPc_mem, !rset_mem. reflexivity.
+Qed.
+
+(* A [bgeu rs1,rs2] with equal operands branches (1 step to the target).  Mirror
+   of Lean [bgeu_eq_taken]. *)
+Lemma bgeu_eq_taken s off rs1 rs2 A immB target :
+  CodeLoaded s -> 0 <= off -> off + 3 < Z.of_nat (length coreBytes) ->
+  s.(pc) = coreAddr + off ->
+  rget s rs1 = A -> rget s rs2 = A ->
+  decode (wordAt off) = Ibgeu rs1 rs2 immB ->
+  wadd (coreAddr + off) immB = target ->
+  runUntil 0 1 s = setPc s target.
+Proof.
+  intros hcode ho hoff hpc h1 h2 hbgeu htgt.
+  assert (hult : ultb (rget s rs1) (rget s rs2) = false)
+    by (rewrite h1, h2; unfold ultb; apply Z.ltb_irrefl).
+  assert (hu1 : step s = setPc s target).
+  { rewrite (step_bgeu s off rs1 rs2 immB hcode ho hoff hpc hbgeu), hult. cbn match.
+    rewrite hpc, htgt. reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; apply coreAddr_pos; lia).
+  rewrite (runUntil_one s hp0), hu1. reflexivity.
+Qed.
+
+(* Run from the loop head to an error label, then halt; package a [Result].
+   Mirror of Lean [reach_error]. *)
+Lemma reach_error s sE inp cap emitted off code k st :
+  runUntil 0 k s = sE ->
+  sE.(pc) = coreAddr + off -> CodeLoaded sE -> sE.(mem) = s.(mem) ->
+  rget sE 6 = Z.of_nat (length emitted) -> rget sE 1 = 0 ->
+  decode (wordAt off) = Iaddi 10 0 code ->
+  decode (wordAt (off + 4)) = Iaddi 11 6 0 ->
+  decode (wordAt (off + 8)) = Ijalr 0 1 0 ->
+  0 <= off -> off + 8 + 3 < Z.of_nat (length coreBytes) ->
+  0 <= code < 2 ^ 64 -> Z.of_nat (length emitted) < 2 ^ 64 ->
+  code = Z.of_nat (statusCode st) ->
+  Spec.decode (zin inp) = (emitted, st) -> (length emitted <= Z.to_nat cap)%nat ->
+  (forall j, (j < length emitted)%nat ->
+     s.(mem) (outAddr + Z.of_nat j) = Z.of_nat (nth j emitted 0%nat)) ->
+  exists m, Result (runUntil 0 m s) inp cap.
+Proof.
+  intros hrun hpcE hcodeE hmemE h6E h1E hli hmv hret ho hoff hcodeR hemit_lt
+         hcodeval hdec hle hout.
+  destruct (halt_epilogue sE off code (Z.of_nat (length emitted)) hcodeE ho hoff hpcE
+              hli hmv hret hcodeR ltac:(lia) h6E h1E) as [hp [ha0 [ha1 hm]]].
+  exists (k + 3)%nat. rewrite runUntil_add, hrun.
+  apply (error_result (runUntil 0 3 sE) inp cap emitted st).
+  - exact hp.
+  - rewrite ha0; exact hcodeval.
+  - exact ha1.
+  - intros j hj. rewrite hm, hmemE. exact (hout j hj).
+  - exact hdec.
+  - exact hle.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
