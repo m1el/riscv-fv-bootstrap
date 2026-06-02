@@ -2252,6 +2252,86 @@ Proof.
   - lia.
 Qed.
 
+(** ** Error-case infrastructure: spec-side token decode + Result packaging. *)
+
+Lemma nibble_not_lowstop l lo : nibble l = Some lo -> isLowStop l = false.
+Proof.
+  unfold nibble, isLowStop, isSpace, isComment, c_nl, c_sp, c_us, c_hash, c_semi.
+  destruct ((48 <=? l) && (l <=? 57))%nat eqn:Ed.
+  - apply andb_true_iff in Ed. destruct Ed as [E1 E2].
+    apply Nat.leb_le in E1. apply Nat.leb_le in E2. intros _.
+    repeat (replace (l =? _)%nat with false by (symmetry; apply Nat.eqb_neq; lia)). reflexivity.
+  - destruct ((65 <=? l) && (l <=? 70))%nat eqn:El; [|discriminate].
+    apply andb_true_iff in El. destruct El as [E1 E2].
+    apply Nat.leb_le in E1. apply Nat.leb_le in E2. intros _.
+    repeat (replace (l =? _)%nat with false by (symmetry; apply Nat.eqb_neq; lia)). reflexivity.
+Qed.
+
+Lemma isLowStop_false_ne l : 0 <= l -> isLowStop (Z.to_nat l) = false ->
+  l <> 10 /\ l <> 32 /\ l <> 95 /\ l <> 35 /\ l <> 59.
+Proof.
+  intros h0 hs. unfold isLowStop in hs. apply orb_false_iff in hs. destruct hs as [Hsp Hcm].
+  destruct (isSpace_false_ne l h0 Hsp) as [H10 [H32 H95]].
+  destruct (isComment_false_ne l h0 Hcm) as [H35 H59].
+  repeat split; assumption.
+Qed.
+
+Lemma emitted_lt inp cap s rest emitted :
+  LoopInv inp cap s rest emitted -> Z.of_nat (length emitted) < 2 ^ 64.
+Proof.
+  intros inv. destruct inv as [_ _ _ _ _ _ _ _ _ _ _ Houtlt _ _ _ Hemitle _ _].
+  apply Nat2Z.inj_le in Hemitle. unfold outAddr in Houtlt. lia.
+Qed.
+
+Lemma decode_err inp emitted rest st :
+  decodeS High (zin inp) =
+    (emitted ++ fst (decodeS High (zin rest)), snd (decodeS High (zin rest))) ->
+  decodeS High (zin rest) = ([], st) -> Spec.decode (zin inp) = (emitted, st).
+Proof.
+  intros Hspec Hd. unfold Spec.decode. rewrite Hspec, Hd. simpl. rewrite app_nil_r. reflexivity.
+Qed.
+
+Lemma decodeS_high_trailing c hi : isComment c = false -> isSpace c = false ->
+  nibble c = Some hi -> decodeS High (c :: nil) = (nil, Trailing).
+Proof. intros hc hs hn. simp decodeS. rewrite hc, hs, hn. simp decodeS. reflexivity. Qed.
+
+Lemma decodeS_high_unknown c rest : isComment c = false -> isSpace c = false ->
+  nibble c = None -> decodeS High (c :: rest) = (nil, Unknown).
+Proof. intros hc hs hn. simp decodeS. rewrite hc, hs, hn. reflexivity. Qed.
+
+Lemma decodeS_low_split c l rest hi : isComment c = false -> isSpace c = false ->
+  nibble c = Some hi -> isLowStop l = true -> decodeS High (c :: l :: rest) = (nil, Split).
+Proof. intros hc hs hn hls. simp decodeS. rewrite hc, hs, hn. simp decodeS. rewrite hls. reflexivity. Qed.
+
+Lemma decodeS_low_unknown c l rest hi : isComment c = false -> isSpace c = false ->
+  nibble c = Some hi -> isLowStop l = false -> nibble l = None ->
+  decodeS High (c :: l :: rest) = (nil, Unknown).
+Proof.
+  intros hc hs hn hls hnl. simp decodeS. rewrite hc, hs, hn. simp decodeS. rewrite hls, hnl. reflexivity.
+Qed.
+
+(* output-short Result packaging (code 2): the decode [bs] exceeds [cap], so
+   coreSpec truncates to [firstn cap bs = emitted].  Mirror of Lean [short_result]. *)
+Lemma short_result s inp cap emitted bs st :
+  s.(pc) = 0 -> rget s 10 = 2 -> rget s 11 = Z.of_nat (Z.to_nat cap) ->
+  (forall j, (j < Z.to_nat cap)%nat ->
+     s.(mem) (outAddr + Z.of_nat j) = Z.of_nat (nth j emitted 0%nat)) ->
+  Spec.decode (zin inp) = (bs, st) -> (Z.to_nat cap < length bs)%nat ->
+  firstn (Z.to_nat cap) bs = emitted -> Result s inp cap.
+Proof.
+  intros hp ha0 ha1 hmem hdec hbs htake.
+  assert (hlen : length emitted = Z.to_nat cap) by (rewrite <- htake, firstn_length_le; lia).
+  assert (hcs : coreSpec (zin inp) (Z.to_nat cap) = (2%nat, emitted, Z.to_nat cap)).
+  { unfold coreSpec. rewrite hdec. destruct (Z.to_nat cap <? length bs)%nat eqn:E.
+    - rewrite htake. reflexivity.
+    - apply Nat.ltb_ge in E. lia. }
+  unfold Result. rewrite hcs. repeat apply conj.
+  - exact hp.
+  - rewrite ha0. reflexivity.
+  - exact ha1.
+  - rewrite <- hlen. apply readMem_eq. intros j hj. apply hmem. lia.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
