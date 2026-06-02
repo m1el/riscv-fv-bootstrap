@@ -1002,6 +1002,14 @@ theorem nibble_not_lowstop (l v : Nat) (h : Hex0.nibble l = some v) : Hex0.isLow
     Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff, beq_eq_false_iff_ne]
   omega
 
+/-- `skipComment` drops the newline that ends a comment. -/
+theorem skipComment_cons_nl (c : Nat) (rest : List Nat) (h : c = Hex0.c_nl) :
+    Hex0.skipComment (c :: rest) = rest := by simp [Hex0.skipComment, h]
+
+/-- `skipComment` keeps scanning past a non-newline. -/
+theorem skipComment_cons_ne (c : Nat) (rest : List Nat) (h : c ≠ Hex0.c_nl) :
+    Hex0.skipComment (c :: rest) = Hex0.skipComment rest := by simp [Hex0.skipComment, h]
+
 set_option maxRecDepth 8000 in
 /-- Closed enumeration (256 cases): combining two 4-bit nibbles. -/
 theorem comb4 : ∀ (x y : BitVec 4),
@@ -2763,10 +2771,12 @@ theorem comment_loop (inp : List Nat) : ∀ (n : Nat) (s : State) (idx : Nat),
       s.mem (BitVec.ofNat 64 (Image.inputAddr + j)) = BitVec.ofNat 8 (inp.getD j 0)) →
     inp.length < 2 ^ 64 → (∀ b ∈ inp, b < 256) → idx ≤ inp.length → inp.length - idx ≤ n →
     ∃ k, (∃ q, idx ≤ q ∧ q < inp.length ∧ inp.getD q 0 = 10 ∧
+            Hex0.skipComment (inp.drop idx) = inp.drop (q + 1) ∧
             (runFuel 0 k s).pc = LOOP ∧ (runFuel 0 k s).rget 5 = BitVec.ofNat 64 q ∧
             (runFuel 0 k s).mem = s.mem ∧
             (∀ i, i ≠ 5 → i ≠ 7 → i ≠ 28 → (runFuel 0 k s).rget i = s.rget i))
-         ∨ ((runFuel 0 k s).pc = BitVec.ofNat 64 (Image.coreAddr + 264) ∧
+         ∨ (Hex0.skipComment (inp.drop idx) = [] ∧
+            (runFuel 0 k s).pc = BitVec.ofNat 64 (Image.coreAddr + 264) ∧
             (runFuel 0 k s).rget 5 = BitVec.ofNat 64 inp.length ∧ (runFuel 0 k s).mem = s.mem ∧
             (∀ i, i ≠ 5 → i ≠ 7 → i ≠ 28 → (runFuel 0 k s).rget i = s.rget i)) := by
   intro n
@@ -2777,7 +2787,8 @@ theorem comment_loop (inp : List Nat) : ∀ (n : Nat) (s : State) (idx : Nat),
     subst hidx
     have hbt := bgeu_eq_taken s 236 5 11 inp.length 0x001c#13
       (BitVec.ofNat 64 (Image.coreAddr + 264)) hcode hpc h5 h11 (by decide) (by decide) (by decide)
-    refine ⟨1, Or.inr ⟨?_, ?_, ?_, ?_⟩⟩
+    refine ⟨1, Or.inr ⟨?_, ?_, ?_, ?_, ?_⟩⟩
+    · rw [List.drop_length]; rfl
     · rw [hbt]; simp only [setPc_pc]
     · rw [hbt, setPc_rget]; exact h5
     · rw [hbt]; simp only [setPc_mem]
@@ -2788,6 +2799,8 @@ theorem comment_loop (inp : List Nat) : ∀ (n : Nat) (s : State) (idx : Nat),
     · -- read inp[idx]
       have hch256 : inp.getD idx 0 < 256 := by
         apply hbytes; rw [List.getD_eq_getElem inp 0 hlt]; exact List.getElem_mem hlt
+      have hcons : inp.drop idx = inp.getD idx 0 :: inp.drop (idx + 1) := by
+        rw [List.getD_eq_getElem inp 0 hlt, List.drop_eq_getElem_cons hlt]
       obtain ⟨s4, hr4, hpc4, h7_4, h28_4, h5_4, hmem4, hcode4, hoth4⟩ :=
         comment_read s inp idx (inp.getD idx 0) hcode hpc h5 h10 h11 hlt hmem hinlt rfl hch256
       by_cases hnl : inp.getD idx 0 = 10
@@ -2797,7 +2810,9 @@ theorem comment_loop (inp : List Nat) : ∀ (n : Nat) (s : State) (idx : Nat),
               if_pos rfl, show s4.pc + (0x1f0c#13).signExtend 64 = LOOP from by rw [hpc4]; decide]
         have hp4 : s4.pc ≠ 0 := by rw [hpc4]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega)
           (by decide) (by simp only [Image.coreAddr]; omega)
-        refine ⟨4 + 1, Or.inl ⟨idx, Nat.le_refl _, hlt, hnl, ?_, ?_, ?_, ?_⟩⟩
+        have hskip : Hex0.skipComment (inp.drop idx) = inp.drop (idx + 1) := by
+          rw [hcons, skipComment_cons_nl _ _ (by rw [Hex0.c_nl]; exact hnl)]
+        refine ⟨4 + 1, Or.inl ⟨idx, Nat.le_refl _, hlt, hnl, hskip, ?_, ?_, ?_, ?_⟩⟩
         · rw [runFuel_add, hr4, runFuel_one _ hp4, hbeq]; simp only [setPc_pc]
         · rw [runFuel_add, hr4, runFuel_one _ hp4, hbeq, setPc_rget]; exact h5_4
         · rw [runFuel_add, hr4, runFuel_one _ hp4, hbeq]; simp only [setPc_mem, hmem4]
@@ -2866,13 +2881,16 @@ theorem comment_loop (inp : List Nat) : ∀ (n : Nat) (s : State) (idx : Nat),
         have hchain : runFuel 0 (4 + (3 + k)) s = runFuel 0 k s' := by
           rw [runFuel_add, hr4, runFuel_add, hrun3]
         refine ⟨4 + (3 + k), ?_⟩
-        rcases hk with ⟨q, hq1, hq2, hq3, hp, h5q, hmemq, hothq⟩ | ⟨hp, h5q, hmemq, hothq⟩
-        · refine Or.inl ⟨q, by omega, hq2, hq3, ?_, ?_, ?_, ?_⟩
+        rcases hk with ⟨q, hq1, hq2, hq3, hqskip, hp, h5q, hmemq, hothq⟩ |
+                       ⟨hqskip, hp, h5q, hmemq, hothq⟩
+        · refine Or.inl ⟨q, by omega, hq2, hq3, ?_, ?_, ?_, ?_, ?_⟩
+          · rw [hcons, skipComment_cons_ne _ _ (by rw [Hex0.c_nl]; exact hnl)]; exact hqskip
           · rw [hchain]; exact hp
           · rw [hchain, h5q]
           · rw [hchain, hmemq, hmems']
           · intro i h5i h7i h28i; rw [hchain, hothq i h5i h7i h28i, hother' i h5i h7i h28i]
-        · refine Or.inr ⟨?_, ?_, ?_, ?_⟩
+        · refine Or.inr ⟨?_, ?_, ?_, ?_, ?_⟩
+          · rw [hcons, skipComment_cons_ne _ _ (by rw [Hex0.c_nl]; exact hnl)]; exact hqskip
           · rw [hchain]; exact hp
           · rw [hchain, h5q]
           · rw [hchain, hmemq, hmems']
@@ -2882,7 +2900,8 @@ theorem comment_loop (inp : List Nat) : ∀ (n : Nat) (s : State) (idx : Nat),
       subst hidx
       have hbt := bgeu_eq_taken s 236 5 11 inp.length 0x001c#13
         (BitVec.ofNat 64 (Image.coreAddr + 264)) hcode hpc h5 h11 (by decide) (by decide) (by decide)
-      refine ⟨1, Or.inr ⟨?_, ?_, ?_, ?_⟩⟩
+      refine ⟨1, Or.inr ⟨?_, ?_, ?_, ?_, ?_⟩⟩
+      · rw [List.drop_length]; rfl
       · rw [hbt]; simp only [setPc_pc]
       · rw [hbt, setPc_rget]; exact h5
       · rw [hbt]; simp only [setPc_mem]
