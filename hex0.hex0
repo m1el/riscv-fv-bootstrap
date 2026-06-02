@@ -1,0 +1,227 @@
+## Copyright (C) 2026 Christian Westrom
+## This file is part of stage0.
+##
+## stage0 is free software: you can redistribute it and/or modify
+## it under the terms of the GNU General Public License as published by
+## the Free Software Foundation, either version 3 of the License, or
+## (at your option) any later version.
+##
+## stage0 is distributed in the hope that it will be useful,
+## but WITHOUT ANY WARRANTY; without even the implied warranty of
+## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+## GNU General Public License for more details.
+##
+## You should have received a copy of the GNU General Public License
+## along with stage0.  If not, see <http://www.gnu.org/licenses/>.
+
+# hex0 - A minimal hex loader for RISC-V (bare metal, QEMU virt)
+# Reads hex digits from UART, converts pairs to bytes, stores in memory.
+# On Ctrl-D, jumps to the loaded code.
+
+# Audited by Christian Westrom: 2026-03-15, 08:53 UTC
+
+; Register use:
+; s0: holder (first nibble)
+; s1: toggle (1 = first nibble, 0 = second nibble)
+; s2: pointer to code buffer
+
+; Memory layout:
+; Execution starts at 0x80000000 on QEMU
+; The code buffer starts right after the program
+; The stack is placed 8KB away from from the code buffer
+
+# _start: (0x0)
+    # Set stack pointer 0x3190 bytes from this instruction
+    17 31 00 00       # auipc sp, 0x3
+    13 01 01 19       # addi sp, sp, 0x190
+    # Set the code buffer pointer 0x1188 bytes from this instruction
+    17 19 00 00       # auipc s2, 0x1
+    13 09 89 18       # addi s2, s2, 0x188
+    # Initialize toggle
+    93 04 10 00       # addi s1, x0, 0x1
+    # Initialize holder
+    13 04 00 00       # addi s0, x0, 0
+
+# main: (0x18)
+    # Read a character
+    EF 00 80 04       # jal ra, read_char (0x60)
+    # Check for Ctrl-D (0x4)
+    # Load 0x4 into t0
+    93 02 40 00       # addi t0, x0, 4
+    # If we did not get 0x4, start processing input
+    63 16 55 00       # bne a0, t0, process_input (0x2C)
+    # If we're here, we did get 0x4, so we can go execute the code
+    EF 00 80 0E       # jal ra, execute_code (0x10C)
+    # Otherwise, go back to the top of the main loop to read characters
+    6F F0 1F FF       # jal x0, main (0x18)
+
+# process_input: (0x2C)
+    # The first thing we do is go to the hex processing routine
+    EF 00 40 05       # jal ra, hex
+    # If a0 comes back less than 0 from the hex routine, go back to the main loop
+    E3 44 05 FE       # blt a0, x0, main (0x18)
+    # Else, if s1 has been set to zero, we process the second nibble
+    63 88 04 00       # beq s1, x0, process_second_nibble (0x44)
+    # In any case, we extract the first nibble from the lower 4 bits by using a mask
+    13 74 F5 00       # andi s0, a0, 0xF
+    # We then reset s1 back to zero to prepare to go back to the main loop
+    93 04 00 00       # addi s1, x0, 0
+    # Processing one hex is done
+    6F F0 9F FD       # jal x0, main (0x18)
+
+# process_second_nibble: (0x44)
+    # We shift the first nibble by 4
+    13 14 44 00       # slli s0, s0, 4
+    # Then we extract the lower for bits from a0
+    13 75 F5 00       # andi a0, a0, 0xF
+    # We combine the first (shifted) and second nibbles
+    33 05 A4 00       # add a0, s0, a0
+    # Now that we've processed the second nibble we'll flag it in s1
+    93 04 10 00       # addi s1, x0, 1
+    # Write out the byte to the buffer
+    23 00 A9 00       # sb a0, 0(s2)
+    # Update the pointer to the buffer
+    13 09 19 00       # addi s2, s2, 1
+    # Jump back to the main loop
+    6F F0 DF FB       # jal x0, main (0x18)
+
+# read_char: (0x60)
+    # Load UART RX into t0
+    B7 02 00 10       # lui t0, 0x10000
+    9B 82 52 00       # addiw t0, t0, 5
+# poll_rx: (0x68)
+    # Load a byte from RX to a0
+    03 85 02 00       # lb a0, 0(t0)
+    # Check if a0 is odd
+    13 75 15 00       # andi a0, a0, 1
+    # If a0 is 0 then RX is not ready so jump back
+    E3 0C 05 FE       # beq a0, x0, poll_rx (0x68)
+    # Set t0 to 0x10000000 (UART data register)
+    B7 02 00 10       # lui t0, 0x10000
+    # Load a byte from the data register
+    03 85 02 00       # lb a0, 0(t0)
+    # Jump back to address in ra
+    67 80 00 00       # jalr x0, ra, 0
+
+# hex: (0x80)
+    # Deal with line comments starting with #
+    93 02 30 02       # addi t0, x0, 0x23
+    63 00 55 06       # beq a0, t0, ascii_comment (0xE4)
+    # Deal with line comments starting with ;
+    93 02 B0 03       # addi t0, x0, 0x3B
+    63 0C 55 04       # beq a0, t0, ascii_comment (0xE4)
+    # Deal with all ASCII less than '0'
+    93 02 00 03       # addi t0, x0, 0x30
+    63 44 55 04       # blt a0, t0, ignore_byte (0xDC)
+    # Deal with '0' through '9'
+    93 02 A0 03       # addi t0, x0, 0x3A
+    63 44 55 02       # blt a0, t0, ascii_num (0xC4)
+    # Deal with all ASCII less than 'A'
+    93 02 10 04       # addi t0, x0, 0x41
+    63 4C 55 02       # blt a0, t0, ignore_byte (0xDC)
+    # Deal with 'A' through 'F'
+    93 02 70 04       # addi t0, x0, 0x47
+    63 44 55 02       # blt a0, t0, ascii_high (0xD4)
+    # Deal with all ASCII less than 'a'
+    93 02 10 06       # addi t0, x0, 0x61
+    63 44 55 02       # blt a0, t0, ignore_byte (0xDC)
+    # Deal with 'a' through 'f'
+    93 02 70 06       # addi t0, x0, 0x67
+    63 48 55 00       # blt a0, t0, ascii_low (0xCC)
+    # Deal with everything else
+    6F 00 C0 01       # jal x0, ignore_byte (0xDC)
+
+# ascii_num: (0xC4)
+    # Ascii numbers to hex
+    13 05 05 FD       # addi a0, a0, -48
+    67 80 00 00       # jalr x0, ra, 0
+
+# ascii_low: (0xCC)
+    # 'a'-'f' -> 10-15: subtract 87
+    13 05 95 FA       # addi a0, a0, -87
+    67 80 00 00       # jalr x0, ra, 0
+
+# ascii_high: (0xD4)
+    # 'A'-'F' -> 10-15: subtract -55
+    13 05 95 FC       # addi a0, a0, -55
+    67 80 00 00       # jalr x0, ra, 0
+
+# ignore_byte: (0xDC)
+    # Returns -1 to signal the caller to discard this character.
+    #
+    # Behavioral note: non-hex characters (including whitespace, newlines, and
+    # comments) are transparent to nibble pairing. This means hex digits CAN be
+    # split across a comment or newline and will still combine into one byte.
+    #
+    # Example: "A # comment\nB" produces byte 0xAB.
+    # This matches the hex0 spec (non-hex = ignored), but may be surprising.
+    #
+    # Also: if Ctrl-D arrives while s1==0 (a first nibble was stored but no
+    # second arrived), the partial nibble in s0 is silently discarded.
+    13 05 F0 FF       # addi a0, x0, -1
+    67 80 00 00       # jalr x0, ra, 0
+
+# ascii_comment: (0xE4)
+    # We're going to loop multiple times, so we'll allocate 16 bytes of stack space
+    13 01 01 FF       # addi sp, sp, -16
+    # Then we'll save the return address before reading more characters
+    23 30 11 00       # sd ra, 0(sp)
+# ascii_comment_loop: (0xEC)
+    # This loop will read characters until we're done with comments
+    EF F0 5F F7       # jal ra, read_char (0x60)
+    # Set t0 to carriage return
+    93 02 D0 00       # addi t0, x0, 0xD
+    # Check if we got carriage return we're done
+    63 06 55 00       # beq a0, t0, ascii_comment_done (0x100)
+    # Set t0 to newline
+    93 02 A0 00       # addi t0, x0, 0xA
+    # Loop back if we didn't get a newline
+    E3 18 55 FE       # bne a0, t0, ascii_comment_loop (0xEC)
+# ascii_comment_done: (0x100)
+    # We're here if we got \r or \n, so we'll restore the return address
+    83 30 01 00       # ld ra, 0(sp)
+    # Deallocate the 16 bytes of stack space
+    13 01 01 01       # addi sp, sp, 16
+    # Jump back to ignore_byte, which returns -1 to ignore as it's not program bytes
+    6F F0 5F FD       # jal x0, ignore_byte (0xDC)
+
+# execute_code: (0x10C)
+    # Zero all registers before jump (except sp and code location)
+    13 05 00 00       # addi a0, x0, 0
+    93 05 00 00       # addi a1, x0, 0
+    13 06 00 00       # addi a2, x0, 0
+    93 06 00 00       # addi a3, x0, 0
+    13 07 00 00       # addi a4, x0, 0
+    93 07 00 00       # addi a5, x0, 0
+    13 08 00 00       # addi a6, x0, 0
+    93 08 00 00       # addi a7, x0, 0
+    93 02 00 00       # addi t0, x0, 0
+    13 03 00 00       # addi t1, x0, 0
+    93 03 00 00       # addi t2, x0, 0
+    13 0E 00 00       # addi t3, x0, 0
+    93 0E 00 00       # addi t4, x0, 0
+    13 0F 00 00       # addi t5, x0, 0
+    93 0F 00 00       # addi t6, x0, 0
+    13 04 00 00       # addi s0, x0, 0
+    93 04 00 00       # addi s1, x0, 0
+    # s2 already points to CODE_BASE, keep it
+    93 09 00 00       # addi s3, x0, 0
+    13 0A 00 00       # addi s4, x0, 0
+    93 0A 00 00       # addi s5, x0, 0
+    13 0B 00 00       # addi s6, x0, 0
+    93 0B 00 00       # addi s7, x0, 0
+    13 0C 00 00       # addi s8, x0, 0
+    93 0C 00 00       # addi s9, x0, 0
+    13 0D 00 00       # addi s10, x0, 0
+    93 0D 00 00       # addi s11, x0, 0
+    # Jump to CODE_BASE (0x1190) using PC-relative addressing
+    # auipc captures the current PC (0x110) and adds one 4KB page -> 0x1174
+    97 12 00 00       # auipc t0, 0x1
+    # Adds 0x1C to bridge from 0x1174 to CODE_BASE (0x1190)
+    93 82 C2 01       # addi t0, t0, 0x1C
+    # Jump to CODE_BASE, discard return address
+    67 80 02 00       # jalr x0, t0, 0
+
+# done: (0x180)
+    # Infinite loop
+    6F 00 00 00       # jal x0, done (0x180)
