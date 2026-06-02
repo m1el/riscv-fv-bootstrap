@@ -948,6 +948,220 @@ theorem li_beq_eq (s : State) (off K c : Nat) (imm : BitVec 13) (target : Word)
   show runFuel 0 2 s = s1.setPc _
   simp only [runFuel]; rw [hu1, hu2, if_neg hp0, if_neg hp1]
 
+/-- Signed `<` on `ofNat` values below `2^63` agrees with `Nat` `<` (resolves
+    the `blt`/`bge` in the nibble-parse chains, where operands are `< 256`). -/
+theorem slt_ofNat (a b : Nat) (ha : a < 2 ^ 63) (hb : b < 2 ^ 63) :
+    (BitVec.ofNat 64 a).slt (BitVec.ofNat 64 b) = decide (a < b) := by
+  rw [BitVec.slt,
+      BitVec.toInt_eq_toNat_of_lt (by rw [BitVec.toNat_ofNat]; omega),
+      BitVec.toInt_eq_toNat_of_lt (by rw [BitVec.toNat_ofNat]; omega),
+      BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega),
+      Nat.mod_eq_of_lt (by omega)]
+  exact decide_eq_decide.mpr (by omega)
+
+/-- `addi rd,rs1,imm` with `imm` a (negative) two's-complement offset `-sub`
+    computes `rs1 - sub` when `rs1 ≥ sub`. Used for the nibble value `c - 48` /
+    `c - 55`. -/
+theorem nibble_addi (c sub : Nat) (imm : BitVec 12)
+    (hsx : imm.signExtend 64 = BitVec.ofNat 64 (2 ^ 64 - sub)) (hsub : sub ≤ c) (hc : c < 2 ^ 64) :
+    BitVec.ofNat 64 c + imm.signExtend 64 = BitVec.ofNat 64 (c - sub) := by
+  rw [hsx, addr_ofNat_succ]
+  apply BitVec.eq_of_toNat_eq; simp only [BitVec.toNat_ofNat]; omega
+
+set_option maxRecDepth 4000 in
+/-- `li t3,K; blt t2,t3` with `t2 = c ≥ K`: the `blt` is NOT taken; 2 steps
+    advance `pc` by 8, clobbering only `t3`. -/
+theorem li_blt_nt (s : State) (off K c : Nat) (imm : BitVec 13) (hcode : CodeLoaded s)
+    (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (h7 : s.rget 7 = BitVec.ofNat 64 c)
+    (hli : Rv64i.decode (wordAt off) = Rv64i.Instr.addi 28 0 (BitVec.ofNat 12 K))
+    (hblt : Rv64i.decode (wordAt (off + 4)) = Rv64i.Instr.blt 7 28 imm)
+    (hKsx : (BitVec.ofNat 12 K).signExtend 64 = BitVec.ofNat 64 K)
+    (hge : ¬ c < K) (hc63 : c < 2 ^ 63) (hK63 : K < 2 ^ 63)
+    (ho2 : off + 4 + 3 < Image.coreBytes.length) :
+    runFuel 0 2 s = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 8))) := by
+  have hcl : Image.coreBytes.length = 324 := by decide
+  have hb : off + 4 + 3 < 324 := hcl ▸ ho2
+  have ho1 : off + 3 < Image.coreBytes.length := by omega
+  have e4 : s.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := by
+    rw [hpc, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ, Nat.add_assoc]
+  have hu1 : step s = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := by
+    rw [step_addi s off 28 0 (BitVec.ofNat 12 K) hcode ho1 hpc hli,
+        show s.rget 0 + (BitVec.ofNat 12 K).signExtend 64 = BitVec.ofNat 64 K from by
+          rw [rget_zero, hKsx]; simp, e4]
+  let s1 := (s.rset 28 (BitVec.ofNat 64 K)).setPc (BitVec.ofNat 64 (Image.coreAddr + (off + 4)))
+  have hs1 : s1 = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := rfl
+  rw [← hs1] at hu1
+  have hc1 : CodeLoaded s1 := by intro i hi; rw [hs1]; simp [hcode i hi]
+  have hpc1 : s1.pc = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := rfl
+  have h7s1 : s1.rget 7 = BitVec.ofNat 64 c := by
+    rw [hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (7:Nat)≠28)]
+    exact h7
+  have h28s1 : s1.rget 28 = BitVec.ofNat 64 K := by
+    rw [hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  have hslt : (s1.rget 7).slt (s1.rget 28) = false := by
+    rw [h7s1, h28s1, slt_ofNat _ _ hc63 hK63]; exact decide_eq_false (by omega)
+  have e8 : s1.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + (off + 8)) := by
+    rw [hpc1, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ]; congr 1
+  have hu2 : step s1 = s1.setPc (BitVec.ofNat 64 (Image.coreAddr + (off + 8))) := by
+    rw [step_blt s1 (off+4) 7 28 imm hc1 (by omega) hpc1 hblt, hslt,
+        if_neg (by decide : ¬((false:Bool)=true)), e8]
+  have hp0 : s.pc ≠ 0 := by
+    rw [hpc]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega) (by decide)
+      (by simp only [Image.coreAddr]; omega)
+  have hp1 : s1.pc ≠ 0 := by
+    rw [hpc1]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega) (by decide)
+      (by simp only [Image.coreAddr]; omega)
+  show runFuel 0 2 s = s1.setPc _
+  simp only [runFuel]; rw [hu1, hu2, if_neg hp0, if_neg hp1]
+
+set_option maxRecDepth 4000 in
+/-- `li t3,K; bge t2,t3` with `t2 = c < K`: the `bge` is NOT taken; 2 steps
+    advance `pc` by 8, clobbering only `t3`. -/
+theorem li_bge_nt (s : State) (off K c : Nat) (imm : BitVec 13) (hcode : CodeLoaded s)
+    (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (h7 : s.rget 7 = BitVec.ofNat 64 c)
+    (hli : Rv64i.decode (wordAt off) = Rv64i.Instr.addi 28 0 (BitVec.ofNat 12 K))
+    (hbge : Rv64i.decode (wordAt (off + 4)) = Rv64i.Instr.bge 7 28 imm)
+    (hKsx : (BitVec.ofNat 12 K).signExtend 64 = BitVec.ofNat 64 K)
+    (hlt : c < K) (hc63 : c < 2 ^ 63) (hK63 : K < 2 ^ 63)
+    (ho2 : off + 4 + 3 < Image.coreBytes.length) :
+    runFuel 0 2 s = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 8))) := by
+  have hcl : Image.coreBytes.length = 324 := by decide
+  have hb : off + 4 + 3 < 324 := hcl ▸ ho2
+  have ho1 : off + 3 < Image.coreBytes.length := by omega
+  have e4 : s.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := by
+    rw [hpc, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ, Nat.add_assoc]
+  have hu1 : step s = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := by
+    rw [step_addi s off 28 0 (BitVec.ofNat 12 K) hcode ho1 hpc hli,
+        show s.rget 0 + (BitVec.ofNat 12 K).signExtend 64 = BitVec.ofNat 64 K from by
+          rw [rget_zero, hKsx]; simp, e4]
+  let s1 := (s.rset 28 (BitVec.ofNat 64 K)).setPc (BitVec.ofNat 64 (Image.coreAddr + (off + 4)))
+  have hs1 : s1 = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := rfl
+  rw [← hs1] at hu1
+  have hc1 : CodeLoaded s1 := by intro i hi; rw [hs1]; simp [hcode i hi]
+  have hpc1 : s1.pc = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := rfl
+  have h7s1 : s1.rget 7 = BitVec.ofNat 64 c := by
+    rw [hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (7:Nat)≠28)]
+    exact h7
+  have h28s1 : s1.rget 28 = BitVec.ofNat 64 K := by
+    rw [hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  have hslt : (s1.rget 7).slt (s1.rget 28) = true := by
+    rw [h7s1, h28s1, slt_ofNat _ _ hc63 hK63]; exact decide_eq_true (by omega)
+  have e8 : s1.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + (off + 8)) := by
+    rw [hpc1, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ]; congr 1
+  have hu2 : step s1 = s1.setPc (BitVec.ofNat 64 (Image.coreAddr + (off + 8))) := by
+    rw [step_bge s1 (off+4) 7 28 imm hc1 (by omega) hpc1 hbge, hslt, if_pos rfl, e8]
+  have hp0 : s.pc ≠ 0 := by
+    rw [hpc]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega) (by decide)
+      (by simp only [Image.coreAddr]; omega)
+  have hp1 : s1.pc ≠ 0 := by
+    rw [hpc1]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega) (by decide)
+      (by simp only [Image.coreAddr]; omega)
+  show runFuel 0 2 s = s1.setPc _
+  simp only [runFuel]; rw [hu1, hu2, if_neg hp0, if_neg hp1]
+
+set_option maxRecDepth 4000 in
+/-- `li t3,K; bge t2,t3` with `t2 = c ≥ K`: the `bge` IS taken, branching to
+    `target`. Clobbers only `t3`/`pc`. -/
+theorem li_bge_t (s : State) (off K c : Nat) (imm : BitVec 13) (target : Word) (hcode : CodeLoaded s)
+    (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (h7 : s.rget 7 = BitVec.ofNat 64 c)
+    (hli : Rv64i.decode (wordAt off) = Rv64i.Instr.addi 28 0 (BitVec.ofNat 12 K))
+    (hbge : Rv64i.decode (wordAt (off + 4)) = Rv64i.Instr.bge 7 28 imm)
+    (hKsx : (BitVec.ofNat 12 K).signExtend 64 = BitVec.ofNat 64 K)
+    (hge : ¬ c < K) (hc63 : c < 2 ^ 63) (hK63 : K < 2 ^ 63)
+    (htgt : BitVec.ofNat 64 (Image.coreAddr + (off + 4)) + imm.signExtend 64 = target)
+    (ho2 : off + 4 + 3 < Image.coreBytes.length) :
+    runFuel 0 2 s = (s.rset 28 (BitVec.ofNat 64 K)).setPc target := by
+  have hcl : Image.coreBytes.length = 324 := by decide
+  have hb : off + 4 + 3 < 324 := hcl ▸ ho2
+  have ho1 : off + 3 < Image.coreBytes.length := by omega
+  have e4 : s.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := by
+    rw [hpc, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ, Nat.add_assoc]
+  have hu1 : step s = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := by
+    rw [step_addi s off 28 0 (BitVec.ofNat 12 K) hcode ho1 hpc hli,
+        show s.rget 0 + (BitVec.ofNat 12 K).signExtend 64 = BitVec.ofNat 64 K from by
+          rw [rget_zero, hKsx]; simp, e4]
+  let s1 := (s.rset 28 (BitVec.ofNat 64 K)).setPc (BitVec.ofNat 64 (Image.coreAddr + (off + 4)))
+  have hs1 : s1 = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := rfl
+  rw [← hs1] at hu1
+  have hc1 : CodeLoaded s1 := by intro i hi; rw [hs1]; simp [hcode i hi]
+  have hpc1 : s1.pc = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := rfl
+  have h7s1 : s1.rget 7 = BitVec.ofNat 64 c := by
+    rw [hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (7:Nat)≠28)]
+    exact h7
+  have h28s1 : s1.rget 28 = BitVec.ofNat 64 K := by
+    rw [hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  have hslt : (s1.rget 7).slt (s1.rget 28) = false := by
+    rw [h7s1, h28s1, slt_ofNat _ _ hc63 hK63]; exact decide_eq_false (by omega)
+  have hu2 : step s1 = s1.setPc target := by
+    rw [step_bge s1 (off+4) 7 28 imm hc1 (by omega) hpc1 hbge, hslt,
+        if_neg (by decide : ¬((false:Bool)=true)), hpc1, htgt]
+  have hp0 : s.pc ≠ 0 := by
+    rw [hpc]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega) (by decide)
+      (by simp only [Image.coreAddr]; omega)
+  have hp1 : s1.pc ≠ 0 := by
+    rw [hpc1]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega) (by decide)
+      (by simp only [Image.coreAddr]; omega)
+  show runFuel 0 2 s = s1.setPc _
+  simp only [runFuel]; rw [hu1, hu2, if_neg hp0, if_neg hp1]
+
+set_option maxRecDepth 4000 in
+/-- `li t3,K; blt t2,t3` with `t2 = c < K`: the `blt` IS taken, branching to
+    `target`. Clobbers only `t3`/`pc`. (Used by the error/`unknown` paths.) -/
+theorem li_blt_t (s : State) (off K c : Nat) (imm : BitVec 13) (target : Word) (hcode : CodeLoaded s)
+    (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (h7 : s.rget 7 = BitVec.ofNat 64 c)
+    (hli : Rv64i.decode (wordAt off) = Rv64i.Instr.addi 28 0 (BitVec.ofNat 12 K))
+    (hblt : Rv64i.decode (wordAt (off + 4)) = Rv64i.Instr.blt 7 28 imm)
+    (hKsx : (BitVec.ofNat 12 K).signExtend 64 = BitVec.ofNat 64 K)
+    (hlt : c < K) (hc63 : c < 2 ^ 63) (hK63 : K < 2 ^ 63)
+    (htgt : BitVec.ofNat 64 (Image.coreAddr + (off + 4)) + imm.signExtend 64 = target)
+    (ho2 : off + 4 + 3 < Image.coreBytes.length) :
+    runFuel 0 2 s = (s.rset 28 (BitVec.ofNat 64 K)).setPc target := by
+  have hcl : Image.coreBytes.length = 324 := by decide
+  have hb : off + 4 + 3 < 324 := hcl ▸ ho2
+  have ho1 : off + 3 < Image.coreBytes.length := by omega
+  have e4 : s.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := by
+    rw [hpc, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ, Nat.add_assoc]
+  have hu1 : step s = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := by
+    rw [step_addi s off 28 0 (BitVec.ofNat 12 K) hcode ho1 hpc hli,
+        show s.rget 0 + (BitVec.ofNat 12 K).signExtend 64 = BitVec.ofNat 64 K from by
+          rw [rget_zero, hKsx]; simp, e4]
+  let s1 := (s.rset 28 (BitVec.ofNat 64 K)).setPc (BitVec.ofNat 64 (Image.coreAddr + (off + 4)))
+  have hs1 : s1 = (s.rset 28 (BitVec.ofNat 64 K)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := rfl
+  rw [← hs1] at hu1
+  have hc1 : CodeLoaded s1 := by intro i hi; rw [hs1]; simp [hcode i hi]
+  have hpc1 : s1.pc = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := rfl
+  have h7s1 : s1.rget 7 = BitVec.ofNat 64 c := by
+    rw [hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (7:Nat)≠28)]
+    exact h7
+  have h28s1 : s1.rget 28 = BitVec.ofNat 64 K := by
+    rw [hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  have hslt : (s1.rget 7).slt (s1.rget 28) = true := by
+    rw [h7s1, h28s1, slt_ofNat _ _ hc63 hK63]; exact decide_eq_true (by omega)
+  have hu2 : step s1 = s1.setPc target := by
+    rw [step_blt s1 (off+4) 7 28 imm hc1 (by omega) hpc1 hblt, hslt, if_pos rfl, hpc1, htgt]
+  have hp0 : s.pc ≠ 0 := by
+    rw [hpc]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega) (by decide)
+      (by simp only [Image.coreAddr]; omega)
+  have hp1 : s1.pc ≠ 0 := by
+    rw [hpc1]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega) (by decide)
+      (by simp only [Image.coreAddr]; omega)
+  show runFuel 0 2 s = s1.setPc _
+  simp only [runFuel]; rw [hu1, hu2, if_neg hp0, if_neg hp1]
+
 /-- One main-loop iteration (the machine side of step 3). From a non-empty
     remaining input, the machine either halts correctly (error / output-short)
     or returns to the loop head with strictly less remaining input and the
