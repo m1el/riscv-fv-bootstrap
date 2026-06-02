@@ -1,4 +1,7 @@
 -R . Hex0Coq
 Spec.v
 Rv64i.v
+Image.v
+Harness.v
+Certify.v
 Refine.v

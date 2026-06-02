@@ -28,3 +28,13 @@ coq/*.vos
 coq/*.glob
 coq/.*.aux
 bare/hex0.bin
+coq/Makefile.conf
+coq/.Makefile.d
+coq/.*.aux
+coq/.lia.cache
+coq/.nia.cache
+*.glob
+lean/*.log
+lean/*-install.log
+elan-init.sh
+*.output
