@@ -928,6 +928,34 @@ theorem coreSpec_props (inp : List Nat) (cap : Nat) :
 /-! ## The general refinement theorem. -/
 theorem core_refines (inp : List Nat) (cap : Nat) (hwf : WellFormed inp cap) :
     ∃ fuel, Harness.observe inp cap fuel = Hex0.coreSpec inp cap := by
-  sorry
+  obtain ⟨m, hres⟩ :=
+    loop_correct inp cap inp.length inp [] _ (Nat.le_refl _) (init_loopinv inp cap hwf)
+  obtain ⟨_, h10, h11, hmem⟩ := hres
+  obtain ⟨hst, hlen, hle, hbytes⟩ := coreSpec_props inp cap
+  have hol : (Hex0.coreSpec inp cap).2.2 < 2 ^ 64 := by have := hwf.out_fits; omega
+  refine ⟨2 + m, ?_⟩
+  -- the three components
+  have e10 : ((runFuel 0 m (runFuel 0 2 (Harness.initOn inp cap))).rget 10).toNat
+           = (Hex0.coreSpec inp cap).1 := by
+    rw [h10, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hst]
+  have e11 : ((runFuel 0 m (runFuel 0 2 (Harness.initOn inp cap))).rget 11).toNat
+           = (Hex0.coreSpec inp cap).2.2 := by
+    rw [h11, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hol]
+  have eOut : Harness.readMem (runFuel 0 m (runFuel 0 2 (Harness.initOn inp cap))).mem
+                Image.outAddr ((runFuel 0 m (runFuel 0 2 (Harness.initOn inp cap))).rget 11).toNat
+            = (Hex0.coreSpec inp cap).2.1 := by
+    rw [e11, hlen]
+    unfold Harness.readMem
+    apply List.ext_getElem
+    · simp
+    · intro i h1 _
+      have hi : i < (Hex0.coreSpec inp cap).2.1.length := by simpa using h1
+      have hi2 : i < (Hex0.coreSpec inp cap).2.2 := by rw [hlen]; exact hi
+      simp only [List.getElem_map, List.getElem_range]
+      rw [hmem i hi2, BitVec.toNat_ofNat, List.getD_eq_getElem?_getD,
+          List.getElem?_eq_getElem hi, Option.getD_some]
+      exact Nat.mod_eq_of_lt (hbytes _ (List.getElem_mem hi))
+  simp only [Harness.observe, runFuel_add]
+  rw [eOut, e10, e11]
 
 end Hex0.Refine
