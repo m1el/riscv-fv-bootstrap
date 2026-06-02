@@ -1,0 +1,32 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["29428df0d88f67c8.olean"],
+  "m": false,
+  "i": "49950c461fca677b.ilean",
+  "c": "8aa6dcdedc911180.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/var/data/bootstrap/lean/.lake/build/lib/lean /home/null/.elan/toolchains/leanprover--lean4---v4.30.0/bin/lean /var/data/bootstrap/lean/Hex0.lean -o /var/data/bootstrap/lean/.lake/build/lib/lean/Hex0.olean -i /var/data/bootstrap/lean/.lake/build/lib/lean/Hex0.ilean -c /var/data/bootstrap/lean/.lake/build/ir/Hex0.c --setup /var/data/bootstrap/lean/.lake/build/ir/Hex0.setup.json --json",
+   "level": "trace"}],
+ "inputs":
+ [["Hex0:deps",
+   [["deps",
+     [["hex0/Hex0:extraDep", [["@hex0:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["Hex0.Spec transitive imports (legacy)", "00000000000006bb"],
+        ["Hex0.Spec:importAllArts", "bf118dc015852dad"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.30.0, commit d024af099ca4bf2c86f649261ebf59565dc8c622",
+   "2f4703bb19086252"],
+  ["/var/data/bootstrap/lean/Hex0.lean", "0ac35f1b7a792475"],
+  ["options", "00000000000006bb"],
+  ["isModule: false", "feefd2a0d3a1847e"],
+  ["Module.name: Hex0", "e214cc46a1aa0328"],
+  ["Package.id?: (some hex0)", "42ff094177d776c5"],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "a38f4d2d62d161d3"}
