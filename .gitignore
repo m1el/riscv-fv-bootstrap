@@ -1,0 +1,18 @@
+# build artifacts
+hex0
+*.o
+*.elf
+*.bin
+/build/
+
+# lean
+/.lake/
+/lake-packages/
+
+# coq
+*.vo
+*.vok
+*.vos
+*.glob
+.*.aux
+_build/
