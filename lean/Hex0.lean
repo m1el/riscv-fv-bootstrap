@@ -4,3 +4,4 @@ import Hex0.Image
 import Hex0.Harness
 import Hex0.Certify
 import Hex0.Refine
+import Hex0.Grammar
