@@ -496,6 +496,40 @@ theorem loop_prefix (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : List
         hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg h28,
         hs1d, setPc_rget]
 
+/-- Rebuild the loop invariant after a spacing token: same `emitted`, suffix
+    shortened by one, index bumped. Used by the spacing case of `loop_iteration`. -/
+theorem spacing_loopinv (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : List Nat)
+    (s s' : State) (inv : LoopInv inp cap s (c :: rest') emitted)
+    (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = true)
+    (hpc' : s'.pc = LOOP) (hmem' : s'.mem = s.mem)
+    (h5 : s'.rget 5 = s.rget 5 + 1)
+    (hp1 : s'.rget 1 = s.rget 1) (hp6 : s'.rget 6 = s.rget 6)
+    (hp10 : s'.rget 10 = s.rget 10) (hp11 : s'.rget 11 = s.rget 11)
+    (hp12 : s'.rget 12 = s.rget 12) (hp13 : s'.rget 13 = s.rget 13) :
+    LoopInv inp cap s' rest' emitted := by
+  have hge : rest'.length + 1 ≤ inp.length := by
+    have h := congrArg List.length inv.suffix
+    simp only [List.length_drop, List.length_cons] at h; omega
+  refine { at_loop := hpc', code := ?_, a0 := ?_, a1 := ?_, a2 := ?_, a3 := ?_,
+           ra0 := ?_, in_mem := ?_, in_lt := inv.in_lt, bytes_lt := inv.bytes_lt,
+           idx := ?_, suffix := ?_, outidx := ?_, emitted_le := inv.emitted_le,
+           out_mem := ?_, spec_link := ?_ }
+  · intro i hi; rw [hmem']; exact inv.code i hi
+  · rw [hp10]; exact inv.a0
+  · rw [hp11]; exact inv.a1
+  · rw [hp12]; exact inv.a2
+  · rw [hp13]; exact inv.a3
+  · rw [hp1]; exact inv.ra0
+  · intro j hj; rw [hmem']; exact inv.in_mem j hj
+  · rw [h5, inv.idx, show (1 : Word) = BitVec.ofNat 64 1 from rfl, addr_ofNat_succ]
+    congr 1; simp only [List.length_cons]; omega
+  · have hk : inp.length - rest'.length = (inp.length - (c :: rest').length) + 1 := by
+      simp only [List.length_cons]; omega
+    rw [hk, ← List.tail_drop, inv.suffix]; rfl
+  · rw [hp6]; exact inv.outidx
+  · intro j hj; rw [hmem']; exact inv.out_mem j hj
+  · rw [inv.spec_link, decodeS_spacing c rest' hsc hss]
+
 /-- One main-loop iteration (the machine side of step 3). From a non-empty
     remaining input, the machine either halts correctly (error / output-short)
     or returns to the loop head with strictly less remaining input and the
