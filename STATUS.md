@@ -31,16 +31,22 @@ Goal: run hex0 on bare-metal `qemu-system-riscv` **and** have a formal proof
 3. **Token decomposition** `decode (token ++ rest) = decode token ++ decode rest`
    ≡ machine `core(in, a, b) ≡ core(in, a+Δin, b+Δout)`:
    - spec side — ✅ `decodeS_spacing / decodeS_byte / decodeS_comment_skip`.
-   - machine side — 🚧 the one-iteration lemma: from `LoopInv .. rest emitted`,
-     case-split on `rest.head`'s char class and run the body (`bgeu`-not-taken,
-     `lbu` input read, char-compares, then spacing→loop / nibble→`sb`+loop /
-     comment→sub-loop / error→halt), landing in `LoopInv .. rest' emitted'` with
-     `rest'.length < rest.length`. Needs: the input/output disjointness frame for
-     the `sb` store, and BitVec↔Nat arithmetic (`nibble = c-48/-55`, `hi*16+lo`
-     via `slli`+`or`, `ult/slt` vs spec compares). The engine + spec lemmas above
-     reduce this to mechanical (if lengthy) case work.
-4. **Induction** on `rest.length` — 🚧 base = `core_eof`, step = the iteration
-   lemma; telescopes `emitted ++ decode rest` to `coreSpec inp cap`.
+   - machine side — 🚧 `loop_iteration` (the one remaining `sorry` of substance):
+     from `LoopInv .. rest emitted`, case-split on `rest.head`'s char class and
+     run the body (`bgeu`-not-taken, `lbu` input read, char-compares, then
+     spacing→loop / nibble→`sb`+loop / comment→sub-loop / error→halt), landing in
+     `LoopInv .. rest' emitted'` with `rest'.length < rest.length`. The engine,
+     arithmetic toolkit (`ult_ofNat`, `ofNat_ne`, `getD_drop`), and spec lemmas
+     reduce this to mechanical (if lengthy) case work; the `sb`/comment cases are
+     the meatiest (output/code disjointness frame).
+4. **Induction** — ✅ **`loop_correct`** (structural induction on a fuel bound on
+   `rest.length`; base = `eof_result`/`core_eof`, step = `loop_iteration`,
+   chaining via `runFuel_add`, telescoping via `spec_link`). PROVED.
+
+Remaining `sorry`s: just **`loop_iteration`** (step-3 machine side) and
+**`core_refines`** (the prologue `initOn → LoopInv inp cap _ inp []`, i.e.
+`loadBytes` correctness + the 2-instruction `li t0,0; li t1,0` entry, then
+`loop_correct`).
 
 2. **Cross-check the ISA model** (task #7): prove our decode+step of these
    instructions agrees with `sail-riscv-lean` (Lean) and `riscv-coq` (Coq). This

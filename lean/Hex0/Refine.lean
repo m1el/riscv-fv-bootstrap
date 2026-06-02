@@ -358,6 +358,79 @@ theorem decodeS_comment_skip (c : Nat) (rest : List Nat)
     Hex0.decodeS .High (c :: rest) = Hex0.decodeS .High (Hex0.skipComment rest) := by
   rw [Hex0.decodeS]; simp [hc]
 
+/-! ## Step 4: the induction.
+
+    `Result f` says the halted state `f` matches `coreSpec inp cap`. `loop_correct`
+    proves, by induction on the remaining input, that from any `LoopInv` the
+    machine reaches such a state -- using `core_eof` (base), the per-token
+    `loop_iteration` (step), `runFuel_add` (chaining), and `spec_link` (telescope). -/
+
+def Result (f : State) (inp : List Nat) (cap : Nat) : Prop :=
+  f.pc = 0 ∧
+  f.rget 10 = BitVec.ofNat 64 (Hex0.coreSpec inp cap).1 ∧
+  f.rget 11 = BitVec.ofNat 64 (Hex0.coreSpec inp cap).2.2 ∧
+  ∀ j, j < (Hex0.coreSpec inp cap).2.2 →
+    f.mem (BitVec.ofNat 64 (Image.outAddr + j))
+      = BitVec.ofNat 8 ((Hex0.coreSpec inp cap).2.1.getD j 0)
+
+/-- One main-loop iteration (the machine side of step 3). From a non-empty
+    remaining input, the machine either halts correctly (error / output-short)
+    or returns to the loop head with strictly less remaining input and the
+    invariant preserved. THIS is the remaining frontier: a case analysis on the
+    head char's class, each a straight-line `step_*` chain + the arithmetic
+    toolkit + (for `sb`) the output/code disjointness frame. -/
+theorem loop_iteration (inp : List Nat) (cap : Nat) (rest emitted : List Nat) (s : State)
+    (hne : rest ≠ []) (inv : LoopInv inp cap s rest emitted) :
+    ∃ k, (∃ rest' emitted', rest'.length < rest.length ∧
+            LoopInv inp cap (runFuel 0 k s) rest' emitted')
+         ∨ Result (runFuel 0 k s) inp cap := by
+  sorry
+
+/-- The EOF case as a `Result` (base case of the induction). -/
+theorem eof_result (inp : List Nat) (cap : Nat) (emitted : List Nat) (s : State)
+    (inv : LoopInv inp cap s [] emitted) : ∃ n, Result (runFuel 0 n s) inp cap := by
+  have hpc8 : s.pc = BitVec.ofNat 64 (Image.coreAddr + 8) := inv.at_loop.trans (by decide)
+  have ht0 : s.rget 5 = BitVec.ofNat 64 inp.length := by simpa using inv.idx
+  have heof := core_eof s inp emitted.length inv.code hpc8 inv.a1 ht0 inv.outidx inv.ra0
+  have hdec : Hex0.decode inp = (emitted, Hex0.Status.Ok) := by
+    have hsl := inv.spec_link; simp [Hex0.decode, Hex0.decodeS] at hsl ⊢; exact hsl
+  have hnlt : ¬ cap < emitted.length := Nat.not_lt.mpr inv.emitted_le
+  have hcs : Hex0.coreSpec inp cap = (0, emitted, emitted.length) := by
+    simp only [Hex0.coreSpec, hdec, hnlt, if_false, Hex0.statusCode]
+  obtain ⟨hp, ha0, ha1, hmem⟩ := heof
+  refine ⟨4, hp, ?_, ?_, ?_⟩
+  · rw [ha0]; simp [hcs]
+  · rw [ha1]; simp [hcs]
+  · intro j hj; rw [hcs] at hj ⊢; rw [hmem]; exact inv.out_mem j hj
+
+/-- The induction (step 4): from any loop-invariant state the machine halts in a
+    `coreSpec`-correct state. Structural induction on a fuel bound on the
+    remaining input length; base = `eof_result`, step = `loop_iteration`. -/
+theorem loop_correct (inp : List Nat) (cap : Nat) :
+    ∀ (n : Nat) (rest emitted : List Nat) (s : State),
+      rest.length ≤ n → LoopInv inp cap s rest emitted →
+      ∃ m, Result (runFuel 0 m s) inp cap := by
+  intro n
+  induction n with
+  | zero =>
+    intro rest emitted s hn inv
+    have : rest = [] := List.length_eq_zero_iff.mp (Nat.le_zero.mp hn)
+    subst this; exact eof_result inp cap emitted s inv
+  | succ n ih =>
+    intro rest emitted s hn inv
+    cases rest with
+    | nil => exact eof_result inp cap emitted s inv
+    | cons c rest'' =>
+      obtain ⟨k, hk⟩ := loop_iteration inp cap (c :: rest'') emitted s (by simp) inv
+      cases hk with
+      | inr hres => exact ⟨k, hres⟩
+      | inl hstep =>
+        obtain ⟨rest', emitted', hlt, inv'⟩ := hstep
+        have hn' : rest'.length ≤ n := by
+          simp only [List.length_cons] at hn hlt; omega
+        obtain ⟨m, hm⟩ := ih rest' emitted' _ hn' inv'
+        exact ⟨k + m, by rw [runFuel_add]; exact hm⟩
+
 /-! ## The general refinement theorem (FRONTIER)
 
     The whole-program correctness statement. Proof outline:
