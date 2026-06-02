@@ -207,6 +207,24 @@ structure LoopInv (inp : List Nat) (cap : Nat) (s : State)
 @[simp] theorem rset_zero (s : State) (v : Word) : s.rset 0 v = s := by
   unfold State.rset; simp
 
+/-- Once halted (pc = 0), more fuel changes nothing. -/
+theorem runFuel_halt (b : Nat) (s : State) (h : s.pc = 0) : runFuel 0 b s = s := by
+  cases b with
+  | zero => rfl
+  | succ n => simp [runFuel, h]
+
+/-- Fuel composition: running `a+b` steps = running `b` more after the first `a`.
+    Holds unconditionally (halting is absorbed). The backbone of the induction. -/
+theorem runFuel_add (a b : Nat) (s : State) :
+    runFuel 0 (a + b) s = runFuel 0 b (runFuel 0 a s) := by
+  induction a generalizing s with
+  | zero => simp [runFuel]
+  | succ a ih =>
+    rw [show a + 1 + b = (a + b) + 1 from by omega]
+    by_cases h : s.pc = 0
+    · rw [runFuel_halt (a + b + 1) s h, runFuel_halt (a + 1) s h, runFuel_halt b s h]
+    · simp only [runFuel, h, if_false]; rw [ih]
+
 /-! ## EOF base case (PROVED): input exhausted ⇒ halts Ok, output preserved.
 
     From the loop head with `rest = []` (so `t0 = a1 = in_len`), the machine runs
