@@ -2134,6 +2134,61 @@ Proof.
       unfold sa. rewrite (li_block_frame s 10 (coreAddr + (124 + 8)) i hi). reflexivity.
 Qed.
 
+(** ** Composite navigators reach64 / reach124 (mirror of Lean). *)
+
+Lemma isComment_false_ne c : 0 <= c -> isComment (Z.to_nat c) = false -> c <> 35 /\ c <> 59.
+Proof.
+  intros h0 hc. unfold isComment, c_hash, c_semi in hc. apply orb_false_iff in hc.
+  destruct hc as [H1 H2]. apply Nat.eqb_neq in H1. apply Nat.eqb_neq in H2.
+  split; intro E; subst c; [apply H1| apply H2]; reflexivity.
+Qed.
+
+Lemma isSpace_false_ne c : 0 <= c -> isSpace (Z.to_nat c) = false ->
+  c <> 10 /\ c <> 32 /\ c <> 95.
+Proof.
+  intros h0 hs. unfold isSpace, c_nl, c_sp, c_us in hs. apply orb_false_iff in hs.
+  destruct hs as [H12 H95]. apply orb_false_iff in H12. destruct H12 as [H10 H32].
+  apply Nat.eqb_neq in H10. apply Nat.eqb_neq in H32. apply Nat.eqb_neq in H95.
+  split; [|split]; intro E; subst c; [apply H10| apply H32| apply H95]; reflexivity.
+Qed.
+
+(* From the loop head, a non-space/comment head char [c]: 14 steps reach the
+   high-nibble parse (offset 64), carrying all the loop bookkeeping. *)
+Lemma reach64 inp cap c rest' emitted s :
+  isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false ->
+  LoopInv inp cap s (c :: rest') emitted ->
+  (runUntil 0 14 s).(pc) = coreAddr + 64 /\ rget (runUntil 0 14 s) 7 = c /\
+  CodeLoaded (runUntil 0 14 s) /\ (runUntil 0 14 s).(mem) = s.(mem) /\
+  rget (runUntil 0 14 s) 5 = rget s 5 + 1 /\ rget (runUntil 0 14 s) 6 = Z.of_nat (length emitted) /\
+  rget (runUntil 0 14 s) 1 = 0 /\ rget (runUntil 0 14 s) 10 = inputAddr /\
+  rget (runUntil 0 14 s) 11 = Z.of_nat (length inp) /\ rget (runUntil 0 14 s) 13 = cap /\
+  0 <= c < 256.
+Proof.
+  intros hsc hss inv.
+  destruct (loopinv_head inp cap c rest' emitted s inv) as [Hin Hc].
+  destruct (isComment_false_ne c ltac:(lia) hsc) as [hc35 hc59].
+  destruct (isSpace_false_ne c ltac:(lia) hss) as [hc10 [hc32 hc95]].
+  destruct (loop_prefix inp cap c rest' emitted s inv) as [hpc4 [ht2 [ht0 [hmem4 [hcode4 hoth4]]]]].
+  destruct (high_beq_ft (runUntil 0 4 s) c hcode4 hpc4 ht2 Hc hc35 hc59 hc10 hc32 hc95)
+    as [hpcB [hmemB hothB]].
+  destruct inv as [_ _ Ha0 Ha1 _ Ha3 Hra _ _ _ _ _ _ _ Houtidx _ _ _].
+  assert (hrun : runUntil 0 14 s = runUntil 0 10 (runUntil 0 4 s))
+    by (rewrite <- (runUntil_add 4 10); reflexivity).
+  rewrite hrun. repeat apply conj.
+  - exact hpcB.
+  - rewrite (hothB 7 ltac:(lia)); exact ht2.
+  - apply (CodeLoaded_eqmem (runUntil 0 4 s)); [exact hmemB| exact hcode4].
+  - rewrite hmemB, hmem4. reflexivity.
+  - rewrite (hothB 5 ltac:(lia)); exact ht0.
+  - rewrite (hothB 6 ltac:(lia)), (hoth4 6 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact Houtidx.
+  - rewrite (hothB 1 ltac:(lia)), (hoth4 1 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact Hra.
+  - rewrite (hothB 10 ltac:(lia)), (hoth4 10 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact Ha0.
+  - rewrite (hothB 11 ltac:(lia)), (hoth4 11 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact Ha1.
+  - rewrite (hothB 13 ltac:(lia)), (hoth4 13 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact Ha3.
+  - lia.
+  - lia.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
