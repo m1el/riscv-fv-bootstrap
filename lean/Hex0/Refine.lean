@@ -675,6 +675,103 @@ theorem spacing_tail_nl (s4 : State) (hcode : CodeLoaded s4)
         rset_rget _ _ _ _ (by decide) h0, if_neg hi, hv2, setPc_rget,
         hv1, setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg hi]
 
+/-- The frame facts of a `(s.rset 28 v).setPc P` state: memory and every
+    register other than `t3` are inherited from `s`. -/
+theorem li_block_frame (s : State) (v P : Word) (i : Nat) (hi : i ≠ 28) :
+    ((s.rset 28 v).setPc P).rget i = s.rget i := by
+  by_cases h0 : i = 0
+  · simp [h0]
+  · rw [setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg hi]
+
+set_option maxRecDepth 4000 in
+/-- General spacing dispatch: from `s4` (offset 24, `t2 = c` with `c` a spacing
+    char `∈ {10,32,95}`), the `beq`-chain reaches LOOP touching only `t3`/`pc`.
+    Generalises `spacing_tail_nl` to all three spacing characters. -/
+theorem spacing_tail (s4 : State) (hcode : CodeLoaded s4) (c : Nat)
+    (hpc : s4.pc = BitVec.ofNat 64 (Image.coreAddr + 24))
+    (ht2 : s4.rget 7 = BitVec.ofNat 64 c)
+    (hs : Hex0.isSpace c = true) :
+    ∃ k, (runFuel 0 k s4).pc = LOOP ∧ (runFuel 0 k s4).mem = s4.mem ∧
+      (∀ i, i ≠ 28 → (runFuel 0 k s4).rget i = s4.rget i) := by
+  -- the three spacing characters
+  have hc : c = 10 ∨ c = 32 ∨ c = 95 := by
+    simp only [Hex0.isSpace, Hex0.c_nl, Hex0.c_sp, Hex0.c_us, beq_iff_eq, Bool.or_eq_true] at hs
+    exact hs
+  -- block at off 24 (K=35), not taken
+  have hb1 := li_beq_ne s4 24 35 c 0x00d0#13 hcode hpc ht2 (by decide) (by decide) (by decide)
+    (by rw [ht2] <;> rcases hc with h|h|h <;> subst h <;> decide) (by decide)
+  set s_b := (s4.rset 28 (BitVec.ofNat 64 35)).setPc (BitVec.ofNat 64 (Image.coreAddr + (24 + 8)))
+    with hs_bdef
+  have hcb : CodeLoaded s_b := by intro i hi; rw [hs_bdef]; simp [hcode i hi]
+  have hpcb : s_b.pc = BitVec.ofNat 64 (Image.coreAddr + 32) := rfl
+  have h7b : s_b.rget 7 = BitVec.ofNat 64 c := by rw [hs_bdef, li_block_frame _ _ _ _ (by decide)]; exact ht2
+  -- block at off 32 (K=59), not taken
+  have hb2 := li_beq_ne s_b 32 59 c 0x00c8#13 hcb hpcb h7b (by decide) (by decide) (by decide)
+    (by rw [h7b] <;> rcases hc with h|h|h <;> subst h <;> decide) (by decide)
+  set s_c := (s_b.rset 28 (BitVec.ofNat 64 59)).setPc (BitVec.ofNat 64 (Image.coreAddr + (32 + 8)))
+    with hs_cdef
+  have hcc : CodeLoaded s_c := by intro i hi; rw [hs_cdef]; simp [hcb i hi]
+  have hpcc : s_c.pc = BitVec.ofNat 64 (Image.coreAddr + 40) := rfl
+  have h7c : s_c.rget 7 = BitVec.ofNat 64 c := by rw [hs_cdef, li_block_frame _ _ _ _ (by decide)]; exact h7b
+  rcases hc with h|h|h
+  · -- c = 10: taken at off 40
+    subst h
+    have hb3 := li_beq_eq s_c 40 10 10 0x1fdc#13 LOOP hcc hpcc h7c (by decide) (by decide)
+      (by decide) rfl (by decide) (by decide)
+    refine ⟨2 + (2 + 2), ?_, ?_, ?_⟩
+    · rw [runFuel_add, hb1, runFuel_add, hb2, hb3]; rfl
+    · rw [runFuel_add, hb1, runFuel_add, hb2, hb3]
+      simp only [setPc_mem, rset_mem, hs_cdef, hs_bdef]
+    · intro i hi
+      rw [runFuel_add, hb1, runFuel_add, hb2, hb3, li_block_frame _ _ _ _ hi, hs_cdef,
+          li_block_frame _ _ _ _ hi, hs_bdef, li_block_frame _ _ _ _ hi]
+  · -- c = 32: not taken at 40, taken at 48
+    subst h
+    have hb3 := li_beq_ne s_c 40 10 32 0x1fdc#13 hcc hpcc h7c (by decide) (by decide) (by decide)
+      (by decide) (by decide)
+    set s_d := (s_c.rset 28 (BitVec.ofNat 64 10)).setPc (BitVec.ofNat 64 (Image.coreAddr + (40 + 8)))
+      with hs_ddef
+    have hcd : CodeLoaded s_d := by intro i hi; rw [hs_ddef]; simp [hcc i hi]
+    have hpcd : s_d.pc = BitVec.ofNat 64 (Image.coreAddr + 48) := rfl
+    have h7d : s_d.rget 7 = BitVec.ofNat 64 32 := by rw [hs_ddef, li_block_frame _ _ _ _ (by decide)]; exact h7c
+    have hb4 := li_beq_eq s_d 48 32 32 0x1fd4#13 LOOP hcd hpcd h7d (by decide) (by decide)
+      (by decide) rfl (by decide) (by decide)
+    refine ⟨2 + (2 + (2 + 2)), ?_, ?_, ?_⟩
+    · rw [runFuel_add, hb1, runFuel_add, hb2, runFuel_add, hb3, hb4]; rfl
+    · rw [runFuel_add, hb1, runFuel_add, hb2, runFuel_add, hb3, hb4]
+      simp only [setPc_mem, rset_mem, hs_ddef, hs_cdef, hs_bdef]
+    · intro i hi
+      rw [runFuel_add, hb1, runFuel_add, hb2, runFuel_add, hb3, hb4,
+          li_block_frame _ _ _ _ hi, hs_ddef, li_block_frame _ _ _ _ hi, hs_cdef,
+          li_block_frame _ _ _ _ hi, hs_bdef, li_block_frame _ _ _ _ hi]
+  · -- c = 95: not taken at 40 and 48, taken at 56
+    subst h
+    have hb3 := li_beq_ne s_c 40 10 95 0x1fdc#13 hcc hpcc h7c (by decide) (by decide) (by decide)
+      (by decide) (by decide)
+    set s_d := (s_c.rset 28 (BitVec.ofNat 64 10)).setPc (BitVec.ofNat 64 (Image.coreAddr + (40 + 8)))
+      with hs_ddef
+    have hcd : CodeLoaded s_d := by intro i hi; rw [hs_ddef]; simp [hcc i hi]
+    have hpcd : s_d.pc = BitVec.ofNat 64 (Image.coreAddr + 48) := rfl
+    have h7d : s_d.rget 7 = BitVec.ofNat 64 95 := by rw [hs_ddef, li_block_frame _ _ _ _ (by decide)]; exact h7c
+    have hb4 := li_beq_ne s_d 48 32 95 0x1fd4#13 hcd hpcd h7d (by decide) (by decide) (by decide)
+      (by decide) (by decide)
+    set s_e := (s_d.rset 28 (BitVec.ofNat 64 32)).setPc (BitVec.ofNat 64 (Image.coreAddr + (48 + 8)))
+      with hs_edef
+    have hce : CodeLoaded s_e := by intro i hi; rw [hs_edef]; simp [hcd i hi]
+    have hpce : s_e.pc = BitVec.ofNat 64 (Image.coreAddr + 56) := rfl
+    have h7e : s_e.rget 7 = BitVec.ofNat 64 95 := by rw [hs_edef, li_block_frame _ _ _ _ (by decide)]; exact h7d
+    have hb5 := li_beq_eq s_e 56 95 95 0x1fcc#13 LOOP hce hpce h7e (by decide) (by decide)
+      (by decide) rfl (by decide) (by decide)
+    refine ⟨2 + (2 + (2 + (2 + 2))), ?_, ?_, ?_⟩
+    · rw [runFuel_add, hb1, runFuel_add, hb2, runFuel_add, hb3, runFuel_add, hb4, hb5]; rfl
+    · rw [runFuel_add, hb1, runFuel_add, hb2, runFuel_add, hb3, runFuel_add, hb4, hb5]
+      simp only [setPc_mem, rset_mem, hs_edef, hs_ddef, hs_cdef, hs_bdef]
+    · intro i hi
+      rw [runFuel_add, hb1, runFuel_add, hb2, runFuel_add, hb3, runFuel_add, hb4, hb5,
+          li_block_frame _ _ _ _ hi, hs_edef, li_block_frame _ _ _ _ hi, hs_ddef,
+          li_block_frame _ _ _ _ hi, hs_cdef, li_block_frame _ _ _ _ hi, hs_bdef,
+          li_block_frame _ _ _ _ hi]
+
 /-- Rebuild the loop invariant after a spacing token: same `emitted`, suffix
     shortened by one, index bumped. Used by the spacing case of `loop_iteration`. -/
 theorem spacing_loopinv (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : List Nat)
@@ -722,6 +819,30 @@ theorem loop_spacing_nl (inp : List Nat) (cap : Nat) (rest' emitted : List Nat) 
   refine ⟨4 + 6, ?_⟩
   rw [runFuel_add, hrun4]
   exact spacing_loopinv inp cap 10 rest' emitted s (runFuel 0 6 s4) inv (by decide) (by decide)
+    htpc (by rw [htmem, hmem4])
+    (by rw [htother 5 (by decide), ht0])
+    (by rw [htother 1 (by decide), hother4 1 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 6 (by decide), hother4 6 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 10 (by decide), hother4 10 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 11 (by decide), hother4 11 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 12 (by decide), hother4 12 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 13 (by decide), hother4 13 (by decide) (by decide) (by decide) (by decide)])
+
+/-- A COMPLETE main-loop iteration for ANY spacing token (`c ∈ {10,32,95}`):
+    `loop_prefix` (read the char) + `spacing_tail` (dispatch to loop) +
+    `spacing_loopinv` (rebuild). Generalises `loop_spacing_nl`. -/
+theorem loop_spacing (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : List Nat) (s : State)
+    (hss : Hex0.isSpace c = true) (inv : LoopInv inp cap s (c :: rest') emitted) :
+    ∃ k, LoopInv inp cap (runFuel 0 k s) rest' emitted := by
+  have hsc : Hex0.isComment c = false := by
+    simp only [Hex0.isSpace, Hex0.c_nl, Hex0.c_sp, Hex0.c_us, beq_iff_eq, Bool.or_eq_true] at hss
+    rcases hss with h|h|h <;> subst h <;> decide
+  obtain ⟨s4, hrun4, hpc4, ht2, ht0, hmem4, hcode4, hother4⟩ :=
+    loop_prefix inp cap c rest' emitted s inv
+  obtain ⟨k, htpc, htmem, htother⟩ := spacing_tail s4 hcode4 c hpc4 ht2 hss
+  refine ⟨4 + k, ?_⟩
+  rw [runFuel_add, hrun4]
+  exact spacing_loopinv inp cap c rest' emitted s (runFuel 0 k s4) inv hsc hss
     htpc (by rw [htmem, hmem4])
     (by rw [htother 5 (by decide), ht0])
     (by rw [htother 1 (by decide), hother4 1 (by decide) (by decide) (by decide) (by decide)])
