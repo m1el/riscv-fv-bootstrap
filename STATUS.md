@@ -47,21 +47,20 @@ Goal: run hex0 on bare-metal `qemu-system-riscv` **and** have a formal proof
    `rest.length`; base = `eof_result`/`core_eof`, step = `loop_iteration`,
    chaining via `runFuel_add`, telescoping via `spec_link`). PROVED.
 
-Remaining `sorry`s: **`loop_iteration`** and **`core_refines`** — but both are now
-substantially de-risked:
+**`core_refines` is PROVED** — the general refinement theorem
+`∀ inp cap, WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`
+now type-checks, assembling the prologue (`loadBytes_frame`/`loadBytes_get`,
+`code_initOn`/`in_initOn`, `init_loopinv`), the induction (`loop_correct`),
+`runFuel_add`, and the `observe↔coreSpec` conversion (`decode_bytes_lt`,
+`range_getD`, `coreSpec_props`, `toNat`/`ofNat`). **The entire verified-tower
+refinement for hex0 is verified modulo a SINGLE remaining `sorry`:**
 
-- **`core_refines`**: the entire prologue is PROVED — `loadBytes_frame`/`loadBytes_get`
-  (recursive `loadBytes` correctness), `code_initOn`/`in_initOn` (initOn loads code+input
-  via region disjointness), and **`init_loopinv`** (`initOn` → 2 entry instrs → the full
-  `LoopInv inp cap _ inp []`). With `init_loopinv` + `loop_correct`, what's left is a
-  **pure spec↔observation conversion** (no machine code): `(ofNat status).toNat = status`,
-  `readMem … = out` via `(List.range out.length).map (out.getD ·) = out` + decoded bytes
-  `< 256`. (The bytes-`<256` lemma `decodeS_bytes_lt` is true and nearly mechanized; it
-  needs the `Low hi ⇒ hi<16` precondition threaded through `decodeS.induct`.)
-- **`loop_iteration`**: a COMPLETE iteration is proved for the newline spacing token
-  (`loop_spacing_nl` = `loop_prefix` + `spacing_tail_nl` + `spacing_loopinv`). Remaining:
-  the other spacing chars (analogous), the nibble→`sb`, comment→sub-loop, and 3 error
-  classes (same prefix+tail+rebuild pattern), then a head-char dispatch.
+- **`loop_iteration`** — the per-token machine-stepping lemma. One full instance is
+  proved (`loop_spacing_nl`, newline spacing token, end-to-end). Remaining: the other
+  spacing chars (`' '`, `'_'` — analogous longer `beq` tails), the nibble→`sb` case
+  (adds the output↔code/input disjointness frame for the store), the comment→inner-loop
+  case, the 3 error→halt classes, then a head-char dispatch combining them. All reuse
+  the proved `loop_prefix` + tail + `spacing_loopinv`-style pattern; no new techniques.
 
 2. **Cross-check the ISA model** (task #7): prove our decode+step of these
    instructions agrees with `sail-riscv-lean` (Lean) and `riscv-coq` (Coq). This
