@@ -2204,7 +2204,7 @@ Lemma reach124 inp cap c hi l rest'' emitted s :
   isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false ->
   nibble (Z.to_nat c) = Some hi ->
   LoopInv inp cap s (c :: l :: rest'') emitted ->
-  exists k, (runUntil 0 k s).(pc) = coreAddr + 124 /\ rget (runUntil 0 k s) 7 = l /\
+  exists k, (k <= 27)%nat /\ (runUntil 0 k s).(pc) = coreAddr + 124 /\ rget (runUntil 0 k s) 7 = l /\
     CodeLoaded (runUntil 0 k s) /\ (runUntil 0 k s).(mem) = s.(mem) /\
     rget (runUntil 0 k s) 6 = Z.of_nat (length emitted) /\ rget (runUntil 0 k s) 1 = 0 /\
     rget (runUntil 0 k s) 13 = cap /\ rget (runUntil 0 k s) 12 = outAddr /\
@@ -2251,6 +2251,7 @@ Proof.
   assert (hchain : runUntil 0 (14 + (k1 + 4)) s = runUntil 0 4 (runUntil 0 k1 s64))
     by (rewrite (runUntil_add 14 (k1 + 4)); fold s64; rewrite (runUntil_add k1 4); reflexivity).
   rewrite hchain. repeat apply conj.
+  - lia.
   - exact Hpc8.
   - exact H7_8.
   - exact Hcode8.
@@ -2442,7 +2443,7 @@ Lemma loop_split inp cap c hi l rest'' emitted s :
 Proof.
   intros hsc hss hnh hls inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]].
+    as [k0 [Hk0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]]].
   destruct (low_split (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 hls)
     as [k1 [HpcS [HmemS HothS]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
@@ -2476,7 +2477,7 @@ Lemma loop_unknown_low inp cap c hi l rest'' emitted s :
 Proof.
   intros hsc hss hnh hls hnl inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]].
+    as [k0 [Hk0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]]].
   destruct (isLowStop_false_ne l ltac:(lia) hls) as [Hl10 [Hl32 [Hl95 [Hl35 Hl59]]]].
   destruct (low_beq_ft (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 Hl35 Hl59 Hl10 Hl32 Hl95)
     as [HpcE [HmemE HothE]].
@@ -2537,7 +2538,7 @@ Proof.
     (destruct inv as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle _ _]; lia).
   pose proof (nibble_not_lowstop (Z.to_nat l) lo hnl) as hlls.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [H13_124 [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]].
+    as [k0 [Hk0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [H13_124 [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]]].
   destruct (isLowStop_false_ne l ltac:(lia) hlls) as [Hl10 [Hl32 [Hl95 [Hl35 Hl59]]]].
   destruct (low_beq_ft (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 Hl35 Hl59 Hl10 Hl32 Hl95)
     as [HpcE [HmemE HothE]].
@@ -2609,8 +2610,8 @@ Lemma loop_byte inp cap c hi l lo rest'' emitted s :
 Proof.
   intros hsc hss hnh hlls hnl hcap inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [H13_124 [H12_124 [H29_124
-        [H5_124 [H10_124 [H11_124 Hl256]]]]]]]]]]]]].
+    as [k0 [Hk0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [H13_124 [H12_124 [H29_124
+        [H5_124 [H10_124 [H11_124 Hl256]]]]]]]]]]]]]].
   destruct (isLowStop_false_ne l ltac:(lia) hlls) as [Hl10 [Hl32 [Hl95 [Hl35 Hl59]]]].
   destruct (low_beq_ft (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 Hl35 Hl59 Hl10 Hl32 Hl95)
     as [HpcE [HmemE HothE]].
