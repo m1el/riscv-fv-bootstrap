@@ -295,6 +295,12 @@ structure LoopInv (inp : List Nat) (cap : Nat) (s : State)
                 s.mem (BitVec.ofNat 64 (Image.inputAddr + j)) = BitVec.ofNat 8 (inp.getD j 0)
   in_lt     : Image.inputAddr + inp.length < 2 ^ 64    -- no address overflow
   bytes_lt  : ∀ b ∈ inp, b < 256                       -- inputs are bytes
+  -- region disjointness (static; from `WellFormed`): the input region ends at
+  -- or before the output region, and the output region fits in memory. Needed
+  -- so the `sb` store does not clobber code/input, and output indices are
+  -- distinct addresses.
+  in_fits   : Image.inputAddr + inp.length ≤ Image.outAddr
+  out_lt    : Image.outAddr + cap < 2 ^ 64
   -- in_idx (t0) is the consumed prefix length; `rest` is what remains
   idx       : s.rget 5  = BitVec.ofNat 64 (inp.length - rest.length)
   suffix    : inp.drop (inp.length - rest.length) = rest
@@ -792,6 +798,7 @@ theorem spacing_loopinv (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : 
     simp only [List.length_drop, List.length_cons] at h; omega
   refine { at_loop := hpc', code := ?_, a0 := ?_, a1 := ?_, a2 := ?_, a3 := ?_,
            ra0 := ?_, in_mem := ?_, in_lt := inv.in_lt, bytes_lt := inv.bytes_lt,
+           in_fits := inv.in_fits, out_lt := inv.out_lt,
            idx := ?_, suffix := ?_, outidx := ?_, emitted_le := inv.emitted_le,
            out_mem := ?_, spec_link := ?_ }
   · intro i hi; rw [hmem']; exact inv.code i hi
@@ -1698,6 +1705,7 @@ theorem init_loopinv (inp : List Nat) (cap : Nat) (hwf : WellFormed inp cap) :
   rw [hfinal]
   refine { at_loop := rfl, code := ?_, a0 := ?_, a1 := ?_, a2 := ?_, a3 := ?_,
            ra0 := ?_, in_mem := ?_, in_lt := ?_, bytes_lt := hwf.bytes_ok,
+           in_fits := hwf.in_fits, out_lt := hwf.out_fits,
            idx := ?_, suffix := ?_, outidx := ?_, emitted_le := Nat.zero_le _,
            out_mem := ?_, spec_link := ?_ }
   · intro i hi; rw [hs2d]; simp only [setPc_mem, rset_mem]; rw [hs1d]
