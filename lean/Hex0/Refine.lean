@@ -2151,6 +2151,33 @@ theorem error_result (s : State) (inp : List Nat) (cap : Nat) (emitted : List Na
   · rw [ha1, hcs]
   · intro j hj; rw [hcs] at hj ⊢; exact hmem j hj
 
+/-- Given the machine has reached an error epilogue (`sE` at offset `off` with
+    `t1 = |emitted|`, `ra = 0`, memory = the entry memory `s.mem`), run the
+    3-step `li/mv/ret` tail and conclude `Result`. Shared by all error cases. -/
+theorem reach_error (s sE : State) (inp : List Nat) (cap : Nat) (emitted : List Nat)
+    (off code k : Nat) (st : Hex0.Status)
+    (hrun : runFuel 0 k s = sE)
+    (hpcE : sE.pc = BitVec.ofNat 64 (Image.coreAddr + off)) (hcodeE : CodeLoaded sE)
+    (hmemE : sE.mem = s.mem) (h6E : sE.rget 6 = BitVec.ofNat 64 emitted.length)
+    (h1E : sE.rget 1 = 0)
+    (hli : Rv64i.decode (wordAt off) = Rv64i.Instr.addi 10 0 (BitVec.ofNat 12 code))
+    (hmv : Rv64i.decode (wordAt (off + 4)) = Rv64i.Instr.addi 11 6 0#12)
+    (hret : Rv64i.decode (wordAt (off + 8)) = Rv64i.Instr.jalr 0 1 0#12)
+    (hoff : off + 8 + 3 < Image.coreBytes.length)
+    (hcodesx : (BitVec.ofNat 12 code).signExtend 64 = BitVec.ofNat 64 code)
+    (hcodeval : code = Hex0.statusCode st)
+    (hdec : Hex0.decode inp = (emitted, st)) (hle : emitted.length ≤ cap)
+    (hout : ∀ j, j < emitted.length →
+      s.mem (BitVec.ofNat 64 (Image.outAddr + j)) = BitVec.ofNat 8 (emitted.getD j 0)) :
+    ∃ m, Result (runFuel 0 m s) inp cap := by
+  obtain ⟨hp, ha0, ha1, hm⟩ :=
+    halt_epilogue sE off code emitted.length hcodeE hpcE hli hmv hret hoff hcodesx h6E h1E
+  refine ⟨k + 3, ?_⟩
+  rw [runFuel_add, hrun]
+  refine error_result (runFuel 0 3 sE) inp cap emitted st hp ?_ ha1 ?_ hdec hle
+  · rw [ha0, hcodeval]
+  · intro j hj; rw [hm, hmemE]; exact hout j hj
+
 set_option maxRecDepth 4000 in
 /-- A COMPLETE main-loop iteration for a byte token: high nibble `c`, low nibble
     `l` (`hi`/`lo`), with output capacity to spare. Chains `loop_prefix` (read
