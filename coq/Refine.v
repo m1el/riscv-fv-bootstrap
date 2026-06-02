@@ -2200,7 +2200,10 @@ Lemma reach124 inp cap c hi l rest'' emitted s :
     CodeLoaded (runUntil 0 k s) /\ (runUntil 0 k s).(mem) = s.(mem) /\
     rget (runUntil 0 k s) 6 = Z.of_nat (length emitted) /\ rget (runUntil 0 k s) 1 = 0 /\
     rget (runUntil 0 k s) 13 = cap /\ rget (runUntil 0 k s) 12 = outAddr /\
-    rget (runUntil 0 k s) 29 = Z.of_nat hi /\ 0 <= l < 256.
+    rget (runUntil 0 k s) 29 = Z.of_nat hi /\
+    rget (runUntil 0 k s) 5 = Z.of_nat (length inp) - Z.of_nat (length rest'') /\
+    rget (runUntil 0 k s) 10 = inputAddr /\ rget (runUntil 0 k s) 11 = Z.of_nat (length inp) /\
+    0 <= l < 256.
 Proof.
   intros hsc hss hnh inv. pose proof inv as inv0.
   destruct (reach64 inp cap c (l :: rest'') emitted s hsc hss inv)
@@ -2253,6 +2256,12 @@ Proof.
   - rewrite (Hoth8 12 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)),
             (HothC 12 ltac:(lia) ltac:(lia)). exact H12_64.
   - rewrite (Hoth8 29 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)). exact H29C.
+  - rewrite H5_8, Ht0C. unfold idx, m. rewrite Nat2Z.inj_add, Nat2Z.inj_sub by lia.
+    rewrite hlc. lia.
+  - rewrite (Hoth8 10 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)),
+            (HothC 10 ltac:(lia) ltac:(lia)). exact H10_64.
+  - rewrite (Hoth8 11 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)),
+            (HothC 11 ltac:(lia) ltac:(lia)). exact H11_64.
   - lia.
   - lia.
 Qed.
@@ -2425,7 +2434,7 @@ Lemma loop_split inp cap c hi l rest'' emitted s :
 Proof.
   intros hsc hss hnh hls inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ Hl256]]]]]]]]]].
+    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]].
   destruct (low_split (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 hls)
     as [k1 [HpcS [HmemS HothS]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
@@ -2459,7 +2468,7 @@ Lemma loop_unknown_low inp cap c hi l rest'' emitted s :
 Proof.
   intros hsc hss hnh hls hnl inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ Hl256]]]]]]]]]].
+    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]].
   destruct (isLowStop_false_ne l ltac:(lia) hls) as [Hl10 [Hl32 [Hl95 [Hl35 Hl59]]]].
   destruct (low_beq_ft (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 Hl35 Hl59 Hl10 Hl32 Hl95)
     as [HpcE [HmemE HothE]].
@@ -2520,7 +2529,7 @@ Proof.
     (destruct inv as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle _ _]; lia).
   pose proof (nibble_not_lowstop (Z.to_nat l) lo hnl) as hlls.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [H13_124 [_ [_ Hl256]]]]]]]]]].
+    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [H13_124 [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]].
   destruct (isLowStop_false_ne l ltac:(lia) hlls) as [Hl10 [Hl32 [Hl95 [Hl35 Hl59]]]].
   destruct (low_beq_ft (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 Hl35 Hl59 Hl10 Hl32 Hl95)
     as [HpcE [HmemE HothE]].
