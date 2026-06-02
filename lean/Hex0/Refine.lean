@@ -166,6 +166,25 @@ theorem step_jal (s : State) (off rd : Nat) (imm : BitVec 21) (hcode : CodeLoade
     step s = (s.rset rd (s.pc + 4)).setPc (s.pc + imm.signExtend 64) := by
   unfold step; rw [fetch_code s hcode off hoff hpc, hd]
 
+/-! ## Machine-side arithmetic toolkit (branch decisions + input reads). -/
+
+/-- Unsigned `<` on `ofNat` values (used to resolve `bgeu`). -/
+theorem ult_ofNat (a b : Nat) (hb : b < 2 ^ 64) (hab : a < b) :
+    (BitVec.ofNat 64 a).ult (BitVec.ofNat 64 b) = true := by
+  have ha : a < 2 ^ 64 := Nat.lt_trans hab hb
+  simp [BitVec.ult, BitVec.toNat_ofNat, Nat.mod_eq_of_lt ha, Nat.mod_eq_of_lt hb, hab]
+
+/-- `ofNat` is injective on values below `2^64` (used to resolve `beq`). -/
+theorem ofNat_ne (a b : Nat) (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) (h : a ≠ b) :
+    BitVec.ofNat 64 a ≠ BitVec.ofNat 64 b := by
+  intro he; apply h
+  have := congrArg BitVec.toNat he
+  simpa [BitVec.toNat_ofNat, Nat.mod_eq_of_lt ha, Nat.mod_eq_of_lt hb] using this
+
+/-- The byte at the current index is the head of the remaining suffix. -/
+theorem getD_drop (l : List Nat) (n d : Nat) : (l.drop n).getD 0 d = l.getD n d := by
+  simp [List.getD, List.getElem?_drop]
+
 /-- Preconditions for the calling convention to be sound: the input region fits
     before the output region, and the output region fits in the address space.
     (The fixed addresses come from the linker; see Image.lean / TCB.md.) -/
@@ -201,6 +220,11 @@ structure LoopInv (inp : List Nat) (cap : Nat) (s : State)
   emitted_le : emitted.length ≤ cap
   out_mem   : ∀ j, j < emitted.length →
                 s.mem (BitVec.ofNat 64 (Image.outAddr + j)) = BitVec.ofNat 8 (emitted.getD j 0)
+  -- the bytes emitted so far are a value-correct prefix: decoding the whole
+  -- input = emitted ++ decoding the remaining suffix (this telescopes the
+  -- induction down to `coreSpec inp cap`).
+  spec_link : Hex0.decodeS .High inp =
+                (emitted ++ (Hex0.decodeS .High rest).1, (Hex0.decodeS .High rest).2)
 
 /-! ## Running multiple steps -/
 
