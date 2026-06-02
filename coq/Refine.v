@@ -2162,7 +2162,7 @@ Lemma reach64 inp cap c rest' emitted s :
   rget (runUntil 0 14 s) 5 = rget s 5 + 1 /\ rget (runUntil 0 14 s) 6 = Z.of_nat (length emitted) /\
   rget (runUntil 0 14 s) 1 = 0 /\ rget (runUntil 0 14 s) 10 = inputAddr /\
   rget (runUntil 0 14 s) 11 = Z.of_nat (length inp) /\ rget (runUntil 0 14 s) 13 = cap /\
-  0 <= c < 256.
+  rget (runUntil 0 14 s) 12 = outAddr /\ 0 <= c < 256.
 Proof.
   intros hsc hss inv.
   destruct (loopinv_head inp cap c rest' emitted s inv) as [Hin Hc].
@@ -2171,7 +2171,7 @@ Proof.
   destruct (loop_prefix inp cap c rest' emitted s inv) as [hpc4 [ht2 [ht0 [hmem4 [hcode4 hoth4]]]]].
   destruct (high_beq_ft (runUntil 0 4 s) c hcode4 hpc4 ht2 Hc hc35 hc59 hc10 hc32 hc95)
     as [hpcB [hmemB hothB]].
-  destruct inv as [_ _ Ha0 Ha1 _ Ha3 Hra _ _ _ _ _ _ _ Houtidx _ _ _].
+  destruct inv as [_ _ Ha0 Ha1 Ha2 Ha3 Hra _ _ _ _ _ _ _ Houtidx _ _ _].
   assert (hrun : runUntil 0 14 s = runUntil 0 10 (runUntil 0 4 s))
     by (rewrite <- (runUntil_add 4 10); reflexivity).
   rewrite hrun. repeat apply conj.
@@ -2185,6 +2185,7 @@ Proof.
   - rewrite (hothB 10 ltac:(lia)), (hoth4 10 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact Ha0.
   - rewrite (hothB 11 ltac:(lia)), (hoth4 11 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact Ha1.
   - rewrite (hothB 13 ltac:(lia)), (hoth4 13 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact Ha3.
+  - rewrite (hothB 12 ltac:(lia)), (hoth4 12 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact Ha2.
   - lia.
   - lia.
 Qed.
@@ -2198,11 +2199,12 @@ Lemma reach124 inp cap c hi l rest'' emitted s :
   exists k, (runUntil 0 k s).(pc) = coreAddr + 124 /\ rget (runUntil 0 k s) 7 = l /\
     CodeLoaded (runUntil 0 k s) /\ (runUntil 0 k s).(mem) = s.(mem) /\
     rget (runUntil 0 k s) 6 = Z.of_nat (length emitted) /\ rget (runUntil 0 k s) 1 = 0 /\
-    rget (runUntil 0 k s) 13 = cap /\ 0 <= l < 256.
+    rget (runUntil 0 k s) 13 = cap /\ rget (runUntil 0 k s) 12 = outAddr /\
+    rget (runUntil 0 k s) 29 = Z.of_nat hi /\ 0 <= l < 256.
 Proof.
   intros hsc hss hnh inv. pose proof inv as inv0.
   destruct (reach64 inp cap c (l :: rest'') emitted s hsc hss inv)
-    as [Hpc64 [H7_64 [Hcode64 [Hmem64 [H5_64 [H6_64 [H1_64 [H10_64 [H11_64 [H13_64 Hc256]]]]]]]]]].
+    as [Hpc64 [H7_64 [Hcode64 [Hmem64 [H5_64 [H6_64 [H1_64 [H10_64 [H11_64 [H13_64 [H12_64 Hc256]]]]]]]]]]].
   set (s64 := runUntil 0 14 s) in *.
   destruct (high_parse s64 c hi Hcode64 Hpc64 H7_64 Hc256 hnh)
     as [k1 [HpcC [HmemC [H29C HothC]]]].
@@ -2248,6 +2250,9 @@ Proof.
             (HothC 1 ltac:(lia) ltac:(lia)). exact H1_64.
   - rewrite (Hoth8 13 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)),
             (HothC 13 ltac:(lia) ltac:(lia)). exact H13_64.
+  - rewrite (Hoth8 12 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)),
+            (HothC 12 ltac:(lia) ltac:(lia)). exact H12_64.
+  - rewrite (Hoth8 29 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)). exact H29C.
   - lia.
   - lia.
 Qed.
@@ -2342,7 +2347,7 @@ Lemma loop_trailing inp cap c hi emitted s :
 Proof.
   intros hsc hss hnh inv. pose proof inv as inv0.
   destruct (reach64 inp cap c nil emitted s hsc hss inv)
-    as [Hpc64 [H7_64 [Hcode64 [Hmem64 [H5_64 [H6_64 [H1_64 [H10_64 [H11_64 [_ Hc256]]]]]]]]]].
+    as [Hpc64 [H7_64 [Hcode64 [Hmem64 [H5_64 [H6_64 [H1_64 [H10_64 [H11_64 [_ [_ Hc256]]]]]]]]]]].
   set (s64 := runUntil 0 14 s) in *.
   destruct (high_parse s64 c hi Hcode64 Hpc64 H7_64 Hc256 hnh) as [k1 [HpcC [HmemC [_ HothC]]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ Hidx Hsuf _ Hemitle Houtmem Hspec].
@@ -2386,7 +2391,7 @@ Lemma loop_unknown_high inp cap c rest' emitted s :
 Proof.
   intros hsc hss hn inv. pose proof inv as inv0.
   destruct (reach64 inp cap c rest' emitted s hsc hss inv)
-    as [Hpc64 [H7_64 [Hcode64 [Hmem64 [_ [H6_64 [H1_64 [_ [_ [_ Hc256]]]]]]]]]].
+    as [Hpc64 [H7_64 [Hcode64 [Hmem64 [_ [H6_64 [H1_64 [_ [_ [_ [_ Hc256]]]]]]]]]]].
   set (s64 := runUntil 0 14 s) in *.
   destruct (high_parse_unknown s64 c Hcode64 Hpc64 H7_64 Hc256 hn) as [k1 [HpcU [HmemU HothU]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
@@ -2420,7 +2425,7 @@ Lemma loop_split inp cap c hi l rest'' emitted s :
 Proof.
   intros hsc hss hnh hls inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ Hl256]]]]]]]].
+    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ Hl256]]]]]]]]]].
   destruct (low_split (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 hls)
     as [k1 [HpcS [HmemS HothS]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
@@ -2454,7 +2459,7 @@ Lemma loop_unknown_low inp cap c hi l rest'' emitted s :
 Proof.
   intros hsc hss hnh hls hnl inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ Hl256]]]]]]]].
+    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ Hl256]]]]]]]]]].
   destruct (isLowStop_false_ne l ltac:(lia) hls) as [Hl10 [Hl32 [Hl95 [Hl35 Hl59]]]].
   destruct (low_beq_ft (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 Hl35 Hl59 Hl10 Hl32 Hl95)
     as [HpcE [HmemE HothE]].
@@ -2515,7 +2520,7 @@ Proof.
     (destruct inv as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle _ _]; lia).
   pose proof (nibble_not_lowstop (Z.to_nat l) lo hnl) as hlls.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
-    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [H13_124 Hl256]]]]]]]].
+    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [H13_124 [_ [_ Hl256]]]]]]]]]].
   destruct (isLowStop_false_ne l ltac:(lia) hlls) as [Hl10 [Hl32 [Hl95 [Hl35 Hl59]]]].
   destruct (low_beq_ft (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 Hl35 Hl59 Hl10 Hl32 Hl95)
     as [HpcE [HmemE HothE]].
