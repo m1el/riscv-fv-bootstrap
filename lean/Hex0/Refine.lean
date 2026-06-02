@@ -979,6 +979,34 @@ theorem nibble_addi (c sub : Nat) (imm : BitVec 12)
   rw [hsx, addr_ofNat_succ]
   apply BitVec.eq_of_toNat_eq; simp only [BitVec.toNat_ofNat]; omega
 
+/-- `nibble` always yields a value `< 16` (a single hex digit). -/
+theorem nibble_lt (c v : Nat) (h : Hex0.nibble c = some v) : v < 16 := by
+  unfold Hex0.nibble at h; split at h <;> simp_all <;> omega
+
+set_option maxRecDepth 8000 in
+/-- Closed enumeration (256 cases): combining two 4-bit nibbles. -/
+theorem comb4 : ∀ (x y : BitVec 4),
+    (((x.setWidth 64) <<< 4 ||| (y.setWidth 64)).setWidth 8 : BitVec 8)
+      = BitVec.ofNat 8 (x.toNat * 16 + y.toNat) := by decide
+
+set_option maxRecDepth 8000 in
+/-- The byte assembled by `slli t4,t4,4; or t4,t4,t5` (with `t4 = hi`, `t5 = lo`,
+    both `< 16`): `(hi <<< 4) ||| lo`, truncated to a byte by `sb`, equals
+    `hi*16 + lo` — exactly the value `decodeS_byte` emits. -/
+theorem combine_nibbles (hi lo : Nat) (hhi : hi < 16) (hlo : lo < 16) :
+    (((BitVec.ofNat 64 hi) <<< 4 ||| (BitVec.ofNat 64 lo)).setWidth 8 : BitVec 8)
+      = BitVec.ofNat 8 (hi * 16 + lo) := by
+  have ex : BitVec.ofNat 64 hi = (BitVec.ofNat 4 hi).setWidth 64 := by
+    apply BitVec.eq_of_toNat_eq
+    simp [BitVec.toNat_setWidth, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hhi,
+          Nat.mod_eq_of_lt (by omega : hi < 2 ^ 64)]
+  have ey : BitVec.ofNat 64 lo = (BitVec.ofNat 4 lo).setWidth 64 := by
+    apply BitVec.eq_of_toNat_eq
+    simp [BitVec.toNat_setWidth, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hlo,
+          Nat.mod_eq_of_lt (by omega : lo < 2 ^ 64)]
+  rw [ex, ey, comb4 (BitVec.ofNat 4 hi) (BitVec.ofNat 4 lo),
+      BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hhi, Nat.mod_eq_of_lt hlo]
+
 set_option maxRecDepth 4000 in
 /-- `li t3,K; blt t2,t3` with `t2 = c ≥ K`: the `blt` is NOT taken; 2 steps
     advance `pc` by 8, clobbering only `t3`. -/
@@ -1732,9 +1760,6 @@ theorem init_loopinv (inp : List Nat) (cap : Nat) (hwf : WellFormed inp cap) :
   · simp
 
 /-! ## Pure spec lemmas for the `observe`/`coreSpec` conversion. -/
-
-theorem nibble_lt (c v : Nat) (h : Hex0.nibble c = some v) : v < 16 := by
-  unfold Hex0.nibble at h; split at h <;> simp_all <;> omega
 
 theorem decodeS_bytes_lt : ∀ (st : Hex0.St) (l : List Nat),
     (∀ hi, st = Hex0.St.Low hi → hi < 16) → ∀ b, b ∈ (Hex0.decodeS st l).1 → b < 256
