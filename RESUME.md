@@ -193,8 +193,15 @@ uv run tools/gen_image.py                      # regen Image.{lean,v} from the E
 
 ## Things NOT yet done (beyond the one sorry)
 
-- **Coq `core_refines`** is still `Admitted` (`coq/Refine.v` has the step
-  primitive proved; the rest mirrors the Lean development — port after Lean closes).
+- **Coq `core_refines`** is still `Admitted`. The Coq **foundation tier IS proved**
+  (`coq/Refine.v`, kernel-checked): `fetch_code` + all 12 `step_*` + projections,
+  the arithmetic toolkit (`wadd_id`/`sltb_small`), `runUntil` composition, the
+  `decodeS_*` decomposition, and `core_eof`. Remaining: `LoopInv` + the per-token
+  dispatch (`loop_iteration`) + `loop_correct` + the `runOn↔coreSpec` conversion.
+  Two Coq-specific snags (see PROOF.md §8 / `coq/Refine.v` header): `runOn` uses a
+  fixed fuel (100000) so the final assembly needs a step bound (Lean used ∃fuel),
+  and the model's `Z` bytes vs the spec's `nat` need `zin`/`Z.to_nat` conversions
+  threaded through `LoopInv`/dispatch.
 - **Task #7 (ISA cross-check)**: prove our `decode`+`step` agree with
   `sail-riscv-lean` (opencompl) / `riscv-coq`, to remove "model = hardware" from
   the TCB (currently testing-backed). `sail-riscv-lean` is 171k LoC, WIP,

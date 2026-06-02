@@ -3,13 +3,22 @@
     Proof-grade theorem: for ALL inputs, the real `core` computes `coreSpec`.
     No vm_compute on the general statement -- it is genuine induction.
 
-    STATUS: the full step ENGINE is ported and proved (kernel-checked):
-    `fetch_code` + all 12 `step_*` lemmas + the state-projection lemmas, mirroring
-    `lean/Hex0/Refine.lean`. `decode (wordAt off)` reduces under `vm_compute` at
-    concrete offsets, so the step lemmas apply exactly as in Lean. Remaining
-    frontier (`Admitted`, the large tail): the arithmetic toolkit, `runUntil`
-    composition, `core_eof`, `LoopInv`, the per-token dispatch, induction, and the
-    `observe↔coreSpec` conversion. Methodology + port map: PROOF.md §5,§8. *)
+    STATUS: the FOUNDATION TIER is ported and proved (kernel-checked), mirroring
+    `lean/Hex0/Refine.lean` §5 up to (and including) the EOF base case:
+      - `fetch_code` + all 12 `step_*` lemmas + state/storeByte projections
+        (`decode (wordAt off)` reduces under `vm_compute` at concrete offsets, so
+        the step lemmas apply exactly as in Lean);
+      - arithmetic toolkit: `wrap_small`, `wadd_id`, `toS_small`, `sltb_small`;
+      - `runUntil` composition: `runUntil_halt`, `runUntil_one`, `runUntil_S`,
+        `runUntil_add`;
+      - spec-side token decomposition: `decodeS_spacing`/`byte`/`comment`;
+      - `core_eof` -- the EOF base case (4-step run to a correct halt).
+    Remaining frontier (the large tail, `Admitted`): `LoopInv` + the per-token
+    dispatch (`loop_iteration`) + induction (`loop_correct`) + prologue + the
+    `runOn↔coreSpec` conversion. Two Coq-specific notes vs Lean (see PROOF.md §8):
+    (1) `runOn` uses a *fixed* fuel (100000), so the assembly needs a step-count
+    bound (Lean used ∃fuel); (2) the model's bytes are `Z` but the spec is on
+    `nat`, so `LoopInv`/dispatch carry `Z.of_nat`/`Z.to_nat` (`zin`) conversions. *)
 
 From Coq Require Import ZArith List Lia Bool.
 From Equations Require Import Equations.
