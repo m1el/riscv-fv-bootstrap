@@ -2486,6 +2486,95 @@ Proof.
   - exact Houtmem.
 Qed.
 
+(* [bgeu rs1,rs2] taken when rs1 >= rs2 (generalises bgeu_eq_taken). *)
+Lemma bgeu_ge_taken s off rs1 rs2 A1 A2 immB target :
+  CodeLoaded s -> 0 <= off -> off + 3 < Z.of_nat (length coreBytes) ->
+  s.(pc) = coreAddr + off -> rget s rs1 = A1 -> rget s rs2 = A2 -> A2 <= A1 ->
+  decode (wordAt off) = Ibgeu rs1 rs2 immB -> wadd (coreAddr + off) immB = target ->
+  runUntil 0 1 s = setPc s target.
+Proof.
+  intros hcode ho hoff hpc h1 h2 hle hbgeu htgt.
+  assert (hult : ultb (rget s rs1) (rget s rs2) = false).
+  { rewrite h1, h2. unfold ultb. destruct (A1 <? A2) eqn:E;
+      [apply Z.ltb_lt in E; lia| reflexivity]. }
+  assert (hu1 : step s = setPc s target).
+  { rewrite (step_bgeu s off rs1 rs2 immB hcode ho hoff hpc hbgeu), hult. cbn match.
+    rewrite hpc, htgt. reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; apply coreAddr_pos; lia).
+  rewrite (runUntil_one s hp0), hu1. reflexivity.
+Qed.
+
+(* valid byte but output full (|emitted| = cap) -> OutputShort (2). *)
+Lemma loop_short inp cap c hi l lo rest'' emitted s :
+  isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = Some hi ->
+  nibble (Z.to_nat l) = Some lo -> (Z.to_nat cap <= length emitted)%nat ->
+  LoopInv inp cap s (c :: l :: rest'') emitted -> exists k, Result (runUntil 0 k s) inp cap.
+Proof.
+  intros hsc hss hnh hnl hge inv. pose proof inv as inv0.
+  assert (heq : length emitted = Z.to_nat cap) by
+    (destruct inv as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle _ _]; lia).
+  pose proof (nibble_not_lowstop (Z.to_nat l) lo hnl) as hlls.
+  destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
+    as [k0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [H13_124 Hl256]]]]]]]].
+  destruct (isLowStop_false_ne l ltac:(lia) hlls) as [Hl10 [Hl32 [Hl95 [Hl35 Hl59]]]].
+  destruct (low_beq_ft (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 Hl35 Hl59 Hl10 Hl32 Hl95)
+    as [HpcE [HmemE HothE]].
+  set (sE0 := runUntil 0 10 (runUntil 0 k0 s)) in *.
+  assert (HcodeE0 : CodeLoaded sE0) by
+    (apply (CodeLoaded_eqmem (runUntil 0 k0 s)); [exact HmemE| exact Hcode124]).
+  assert (H7E0 : rget sE0 7 = l) by (rewrite (HothE 7 ltac:(lia)); exact H7_124).
+  destruct (low_parse sE0 l lo HcodeE0 HpcE H7E0 Hl256 hnl) as [k2 [HpcF [HmemF [_ HothF]]]].
+  set (sP := runUntil 0 k2 sE0) in *.
+  assert (HmemP : sP.(mem) = s.(mem)) by (rewrite HmemF, HmemE, Hmem124; reflexivity).
+  assert (HcodeP : CodeLoaded sP) by (apply (CodeLoaded_eqmem s); [exact HmemP| destruct inv0 as [_ Hc _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _]; exact Hc]).
+  assert (H6P : rget sP 6 = Z.of_nat (length emitted)) by
+    (rewrite (HothF 6 ltac:(lia) ltac:(lia)), (HothE 6 ltac:(lia)); exact H6_124).
+  assert (H13P : rget sP 13 = cap) by
+    (rewrite (HothF 13 ltac:(lia) ltac:(lia)), (HothE 13 ltac:(lia)); exact H13_124).
+  assert (H1P : rget sP 1 = 0) by
+    (rewrite (HothF 1 ltac:(lia) ltac:(lia)), (HothE 1 ltac:(lia)); exact H1_124).
+  pose proof (bgeu_ge_taken sP 208 6 13 (Z.of_nat (length emitted)) cap 68 (coreAddr + 276)
+    HcodeP ltac:(lia) ltac:(rewrite coreBytes_len; lia) HpcF H6P H13P ltac:(lia)
+    ltac:(vm_compute; reflexivity)
+    ltac:(rewrite (wadd_id (coreAddr + 208) 68 ltac:(unfold coreAddr; lia)); lia)) as hbt.
+  set (sS := setPc sP (coreAddr + 276)) in *.
+  assert (HcodeS : CodeLoaded sS) by
+    (apply (CodeLoaded_eqmem sP); [unfold sS; rewrite setPc_mem; reflexivity| exact HcodeP]).
+  destruct (halt_epilogue sS 276 2 (Z.of_nat (length emitted)) HcodeS
+    ltac:(lia) ltac:(rewrite coreBytes_len; lia) ltac:(unfold sS; apply setPc_pc)
+    ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity)
+    ltac:(lia) ltac:(split; [apply Nat2Z.is_nonneg| exact (emitted_lt inp cap s (c :: l :: rest'') emitted inv)])
+    ltac:(unfold sS; rewrite setPc_rget; exact H6P) ltac:(unfold sS; rewrite setPc_rget; exact H1P))
+    as [Hhp [Hha0 [Hha1 Hhm]]].
+  pose (bs := emitted ++ (hi * 16 + lo)%nat :: fst (decodeS High (zin rest''))).
+  pose (st := snd (decodeS High (zin rest''))).
+  destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Houtmem Hspec].
+  assert (hdec : Spec.decode (zin inp) = (bs, st)).
+  { unfold Spec.decode, bs, st. rewrite Hspec.
+    change (zin (c :: l :: rest'')) with (Z.to_nat c :: Z.to_nat l :: zin rest'').
+    rewrite (decodeS_byte (Z.to_nat c) (Z.to_nat l) (zin rest'') hi lo hsc hss hnh hlls hnl).
+    reflexivity. }
+  assert (hbslen : (Z.to_nat cap < length bs)%nat) by
+    (unfold bs; rewrite app_length; simpl; lia).
+  assert (htake : firstn (Z.to_nat cap) bs = emitted).
+  { rewrite <- heq. unfold bs. rewrite firstn_app, Nat.sub_diag, firstn_all. simpl firstn.
+    rewrite app_nil_r. reflexivity. }
+  exists (k0 + (10 + (k2 + (1 + 3))))%nat.
+  assert (hchain : runUntil 0 (k0 + (10 + (k2 + (1 + 3)))) s = runUntil 0 3 sS).
+  { rewrite (runUntil_add k0 (10 + (k2 + (1 + 3)))), (runUntil_add 10 (k2 + (1 + 3))),
+            (runUntil_add k2 (1 + 3)). fold sE0. fold sP.
+    rewrite (runUntil_add 1 3), hbt. reflexivity. }
+  rewrite hchain.
+  apply (short_result (runUntil 0 3 sS) inp cap emitted bs st).
+  - exact Hhp.
+  - rewrite Hha0. reflexivity.
+  - rewrite Hha1. rewrite heq. reflexivity.
+  - intros j hj. rewrite Hhm. unfold sS. rewrite setPc_mem, HmemP. apply Houtmem. lia.
+  - exact hdec.
+  - exact hbslen.
+  - exact htake.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
