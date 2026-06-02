@@ -246,6 +246,34 @@ structure WellFormed (inp : List Nat) (cap : Nat) : Prop where
   out_fits  : Image.outAddr + cap < 2 ^ 64
   bytes_ok  : ∀ b ∈ inp, b < 256
 
+set_option maxRecDepth 4000 in
+/-- `initOn` loads the code: the input `loadBytes` layer doesn't shadow the code
+    region (they are adjacent-disjoint: code is `[coreAddr, inputAddr)`). -/
+theorem code_initOn (inp : List Nat) (cap : Nat) (hwf : WellFormed inp cap) :
+    CodeLoaded (Harness.initOn inp cap) := by
+  intro i hi
+  have hlen : Image.coreBytes.length = 324 := by decide
+  show (Harness.loadBytes Image.inputAddr inp
+        (Harness.loadBytes Image.coreAddr Image.coreBytes (fun _ => 0)))
+        (BitVec.ofNat 64 (Image.coreAddr + i)) = BitVec.ofNat 8 (Image.coreBytes.getD i 0)
+  rw [loadBytes_frame (BitVec.ofNat 64 (Image.coreAddr + i)) Image.inputAddr inp _ (by
+    intro j hj
+    refine ofNat_ne _ _ ?_ ?_ ?_
+    · rw [hlen] at hi; simp only [Image.coreAddr]; omega
+    · have := hwf.in_fits; have := hwf.out_fits; omega
+    · rw [hlen] at hi; simp only [Image.coreAddr, Image.inputAddr]; omega)]
+  exact loadBytes_get Image.coreAddr Image.coreBytes _ i hi (by decide)
+
+/-- `initOn` loads the input. -/
+theorem in_initOn (inp : List Nat) (cap : Nat) (hwf : WellFormed inp cap) :
+    ∀ j, j < inp.length →
+      (Harness.initOn inp cap).mem (BitVec.ofNat 64 (Image.inputAddr + j))
+        = BitVec.ofNat 8 (inp.getD j 0) := by
+  intro j hj
+  show (Harness.loadBytes Image.inputAddr inp _) (BitVec.ofNat 64 (Image.inputAddr + j))
+      = BitVec.ofNat 8 (inp.getD j 0)
+  exact loadBytes_get Image.inputAddr inp _ j hj (by have := hwf.in_fits; have := hwf.out_fits; omega)
+
 /-! ## Loop invariant at the main-loop head (pc = 0x80000090)
 
     Relates the machine state mid-execution to a partial run of `decodeS`:
