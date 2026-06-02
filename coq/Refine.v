@@ -3,8 +3,12 @@
     Proof-grade theorem: for ALL inputs, the real `core` computes `coreSpec`.
     No vm_compute on the general statement -- it is genuine induction.
 
-    STATUS: `core_refines` is PROVED modulo the single per-token dispatch lemma
-    `loop_iteration` (the only `Admitted`).  Everything that assembles it is
+    STATUS: `core_refines` is FULLY PROVED, `Admitted`-free.  `loop_iteration`
+    (the per-token dispatch) is now discharged via the head-char case analysis
+    (spacing/byte/comment + the four halting error classes), each branch a
+    proved lemma.  `Print Assumptions core_refines` reports ONLY the standard
+    `functional_extensionality_dep` axiom (used for `mem : Z -> Z` state
+    equality) -- no `loop_iteration`, no `sorry`/`admit`.  Everything below is
     kernel-checked, mirroring `lean/Hex0/Refine.lean` §5:
       - `fetch_code` + all 12 `step_*` lemmas + state/storeByte projections
         (`decode (wordAt off)` reduces under `vm_compute` at concrete offsets, so
@@ -18,11 +22,10 @@
       - `loop_correct` -- the induction (fuel bound `50*|rest| + 4`);
       - `init_loopinv` -- the prologue (2-step run to the loop head);
       - `core_refines` -- prologue + induction + `runOn<->coreSpec` conversion.
-    Remaining frontier (`Admitted`, line ~425): `loop_iteration` -- the per-token
-    dispatch (spacing/byte/comment + the four halting error classes), the large
-    mechanical tail (~2500 Lean lines).  `Print Assumptions core_refines` =>
-    `loop_iteration` + `functional_extensionality_dep` (a standard, consistent
-    axiom, used for `mem : Z -> Z` state equality -- cf. Lean's propext/choice).
+    The per-token tail (spacing/byte/comment + the four halting error classes,
+    the ~2500 Lean lines) is now fully ported and assembled by `loop_iteration`.
+    Each branch lemma carries an explicit fuel bound (`k <= 50*(chars consumed)`)
+    so the fixed-fuel `runOn` (100000) absorbs the run via `runUntil_stab`.
     Two Coq-specific notes vs Lean (see PROOF.md §8): (1) `runOn` uses a *fixed*
     fuel (100000), so the assembly bounds the step count (Lean used ∃fuel) and
     absorbs the slack via `runUntil_stab` -- note `lia` cannot reason about the

@@ -194,24 +194,29 @@ uv run tools/gen_image.py                      # regen Image.{lean,v} from the E
 
 ## Things NOT yet done (beyond the one sorry)
 
-- **Coq `core_refines` is PROVED modulo the single `Admitted` `loop_iteration`.**
-  `Print Assumptions core_refines` ⇒ `loop_iteration` + `functional_extensionality_dep`
-  (standard consistent axiom, for `mem : Z → Z` state equality). Kernel-checked and
-  assembling the theorem: `fetch_code` + all 12 `step_*` + projections, the
-  arithmetic toolkit, `runUntil` composition (incl. new `runUntil_stab`), the
-  `decodeS_*` decomposition, `core_eof`, `LoopInv` (18 fields), `eof_result`,
-  `loop_correct` (fuel-bounded induction `50*|rest|+4`), `init_loopinv` (prologue),
-  and the `runOn↔coreSpec` conversion. **The only remaining Coq hole is
-  `loop_iteration`** — the per-token dispatch (spacing/byte/comment + 4 error
-  classes), the ~2500-line Lean tail to port (mirror `lean/Hex0/Refine.lean`'s
-  `loop_*` blocks). Coq gotchas already resolved (see `coq/Refine.v` header):
-  `set (..) in *` (not goal-only) so `step` eqns fold; **avoid `simpl andb` over
-  `nth .. coreBytes`** (full simpl traversal + huge `coreAddr` literal ⇒ coqc
-  hangs — use `replace (guard) with true/false` + `cbv iota`); **`lia` cannot
-  reason about the nat literal `100000`** (`Nat.of_num_uint`) so bound it through
-  `Z` (`Nat2Z.inj_le` + `vm_compute (Z.of_nat 100000)`) and absorb fuel slack via
-  `runUntil_stab`; the `Z`-bytes/`nat`-spec gap needs `zin`/`Z.to_nat` threaded
-  through `LoopInv`/dispatch.
+- **Coq `core_refines` is now FULLY PROVED, `Admitted`-free.**
+  `Print Assumptions Hex0Coq.Refine.core_refines` ⇒ `functional_extensionality_dep`
+  ONLY (standard consistent axiom, for `mem : Z → Z` state equality) — no
+  `loop_iteration`, no `admit`/`sorry`. The full per-token tail was ported
+  (mirroring `lean/Hex0/Refine.lean`): `loop_prefix`, the spacing branch
+  (`spacing_tail`/`loop_spacing`), the error infra (`error_result`/
+  `halt_epilogue`/`bgeu_eq_taken`/`bgeu_ge_taken`/`reach_error`), the signed
+  branch blocks (`li_blt/bge_nt/t`), the beq fall-through chains
+  (`high/low_beq_ft`), `read_prefix`, the nibble parses (`high/low_parse`,
+  `high/low_parse_unknown`, `low_split`, `combine_nibbles`/`land_hilo`),
+  `store_epilogue`, the composites `reach64`/`reach124`, `loop_byte`, the five
+  error cases (`loop_trailing/split/unknown_high/unknown_low/short`), the comment
+  branch (`comment_read`/`comment_loop` induction/`loop_comment`), and the
+  `loop_iteration` head-char dispatch. Each branch lemma carries an explicit fuel
+  bound (`k ≤ 50·(chars consumed)`) so `loop_correct`'s `50·|rest|+4` total holds
+  and the fixed-fuel `runOn` (100000) absorbs the run via `runUntil_stab`.
+  Coq gotchas resolved (see `coq/Refine.v` header): `set (..) in *` so `step`
+  eqns fold; **avoid `simpl andb` over `nth .. coreBytes`** (coqc hangs — use
+  `replace (guard) with true/false`); **`lia` can't reason about `100000`
+  (`Nat.of_num_uint`)** so bound through `Z`; the `Z`-bytes/`nat`-spec gap needs
+  `zin`/`Z.to_nat` threaded through `LoopInv`/dispatch; `repeat split` auto-closes
+  definitional eqs (mis-aligns bullets — use `repeat apply conj`); a `%nat`-scoped
+  `(... =? ...)%nat` parses an inner `nth l 0` default as `0%nat` not `0%Z`.
 - **Task #7 (ISA cross-check)**: prove our `decode`+`step` agree with
   `sail-riscv-lean` (opencompl) / `riscv-coq`, to remove "model = hardware" from
   the TCB (currently testing-backed). `sail-riscv-lean` is 171k LoC, WIP,

@@ -12,7 +12,7 @@ Goal: run hex0 on bare-metal `qemu-system-riscv` **and** have a formal proof
 | 3 | Hand-rolled **executable RV64I** model in **Lean + Coq** (the 12 instr forms `core` uses) | model |
 | 4 | Both models execute the **real binary** and match `coreSpec` (13-input differential battery, all error classes) | testing-grade, cross-validated vs QEMU |
 | 5 | **Certification** theorems: deployed bytes = `coreSpec` on embedded input + battery. Lean via `native_decide`; **Coq via `vm_compute` (kernel-checked)** | **finite / testing-grade** (proved, but covers finitely many inputs) |
-| 6 | **General refinement** (Lean): `core_refines : ∀ inp cap, WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`, **fully proved, `sorry`-free**. `#print axioms` reports only `[propext, Classical.choice, Quot.sound]` (no `sorryAx`). | **proof-grade, COMPLETE** |
+| 6 | **General refinement** (Lean **and Coq**): `core_refines : ∀ inp cap, WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`, **fully proved**. Lean: `sorry`-free, `#print axioms` = `[propext, Classical.choice, Quot.sound]`. Coq: `Admitted`-free, `Print Assumptions` = `[functional_extensionality_dep]` only. | **proof-grade, COMPLETE (both)** |
 
 ### The honest epistemics (see also the conversation)
 
@@ -83,12 +83,11 @@ spec ........ coq/Spec.v  · lean/Hex0/Spec.lean        (the decode meaning)
 model ....... coq/Rv64i.v · lean/Hex0/Rv64i.lean       (RV64I semantics)
 validate .... coq/Validate.v · lean/Hex0/Validate.lean (model vs spec on real bytes)
 certify ..... coq/Certify.v · lean/Hex0/Certify.lean   (finite, proved)
-refine ...... coq/Refine.v · lean/Hex0/Refine.lean     (Lean: PROVED sorry-free;
-              Coq: core_refines PROVED modulo the single Admitted loop_iteration
-              [engine+toolkit+runUntil+decodeS-decomp+core_eof+LoopInv+eof_result
-              +loop_correct+init_loopinv+conversion all kernel-checked]; the
-              per-token dispatch loop_iteration is the only remaining hole. See
-              PROOF.md.)
+refine ...... coq/Refine.v · lean/Hex0/Refine.lean     (BOTH PROVED: Lean
+              sorry-free; Coq Admitted-free — loop_iteration's per-token dispatch
+              (spacing/byte/comment + 4 error classes) is fully ported, each
+              branch a proved lemma with an explicit fuel bound. core_refines
+              axioms: Coq [functional_extensionality_dep] only. See PROOF.md.)
 grammar ..... lean/Hex0/Grammar.lean                   (HEX0.md BNF ⟺ decodeS: total + disjoint)
 tools/ ...... gen_image.py (ELF bytes -> Image.{v,lean})
 TCB.md ...... the trusted base
