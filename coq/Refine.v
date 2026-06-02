@@ -317,6 +317,22 @@ Proof.
   - rewrite setPc_mem. unfold s3, s2, s1. rewrite !setPc_mem, !rset_mem. reflexivity.
 Qed.
 
+(** ** Helpers for the EOF base case. *)
+
+Lemma decodeS_nil : decodeS High [] = ([], Ok). Proof. now simp decodeS. Qed.
+
+Lemma readMem_eq : forall l m base,
+  (forall j, (j < length l)%nat -> m (base + Z.of_nat j) = Z.of_nat (nth j l 0%nat)) ->
+  readMem m base (length l) = l.
+Proof.
+  induction l as [|a l' IH]; intros m base H; simpl; [reflexivity|].
+  f_equal.
+  - specialize (H 0%nat ltac:(simpl; lia)).
+    replace (base + Z.of_nat 0) with base in H by lia. simpl in H. rewrite H. apply Nat2Z.id.
+  - apply IH. intros j Hj. specialize (H (S j) ltac:(simpl; lia)). simpl in H.
+    rewrite <- H. f_equal. lia.
+Qed.
+
 (** ** Loop invariant + the induction backbone (mirror of LoopInv/loop_correct).
 
     Per the fuel-bound approach: each iteration runs <= 50 instructions per input
@@ -360,7 +376,29 @@ Proof. unfold Result. destruct (coreSpec (zin inp) (Z.to_nat cap)) as [[st bs] l
    the readMem/coreSpec packaging is the remaining detail -- Admitted for now.) *)
 Theorem eof_result : forall inp cap emitted s,
   LoopInv inp cap s [] emitted -> Result (runUntil 0 4 s) inp cap.
-Admitted.
+Proof.
+  intros inp cap emitted s HI.
+  destruct HI as [Hpc Hcode Ha0 Ha1 Ha2 Ha3 Hra Hinmem Hinlt Hbytes Hinfits Houtlt
+                  Hidx Hsuf Houtidx Hemitle Houtmem Hspec].
+  assert (h5 : rget s 5 = Z.of_nat (length inp)) by (rewrite Hidx; simpl length; lia).
+  assert (hE : 0 <= Z.of_nat (length emitted) < 2 ^ 64) by (unfold outAddr in Houtlt; lia).
+  destruct (core_eof s (Z.of_nat (length inp)) (Z.of_nat (length emitted))
+              Hcode Hpc h5 Ha1 Houtidx Hra hE) as [Hp [H10 [H11 Hmem]]].
+  (* coreSpec computes to (0, emitted, length emitted) *)
+  assert (Hdec : Spec.decode (zin inp) = (emitted, Ok)).
+  { unfold Spec.decode. rewrite Hspec. change (zin []) with (@nil nat).
+    rewrite decodeS_nil. simpl. rewrite app_nil_r. reflexivity. }
+  assert (Hcs : coreSpec (zin inp) (Z.to_nat cap) = (0%nat, emitted, length emitted)).
+  { unfold coreSpec. rewrite Hdec.
+    destruct (Z.to_nat cap <? length emitted)%nat eqn:Ecap.
+    - apply Nat.ltb_lt in Ecap. lia.
+    - reflexivity. }
+  unfold Result. rewrite Hcs. repeat split.
+  - exact Hp.
+  - rewrite H10. reflexivity.
+  - rewrite H11. reflexivity.
+  - rewrite Hmem. apply readMem_eq. intros j Hj. exact (Houtmem j Hj).
+Qed.
 
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
