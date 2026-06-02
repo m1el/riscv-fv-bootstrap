@@ -2656,6 +2656,99 @@ theorem loop_short (inp : List Nat) (cap : Nat) (c hi l lo : Nat) (rest'' emitte
   · rw [List.length_append, List.length_cons]; omega
   · rw [← heq]; exact List.take_left _ _
 
+set_option maxRecDepth 4000 in
+/-- The 4-instruction head of the comment inner loop (offsets 236..248):
+    `bgeu`(not taken) → `add` → `lbu` (read `inp[idx]`) → `li t3,10`. Reaches
+    offset 252 with `t2 = inp[idx]`, `t3 = 10`, `t0` unchanged. -/
+theorem comment_read (s : State) (inp : List Nat) (idx ch : Nat) (hcode : CodeLoaded s)
+    (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + 236)) (h5 : s.rget 5 = BitVec.ofNat 64 idx)
+    (h10 : s.rget 10 = BitVec.ofNat 64 Image.inputAddr) (h11 : s.rget 11 = BitVec.ofNat 64 inp.length)
+    (hlt : idx < inp.length)
+    (hmem : ∀ j, j < inp.length →
+      s.mem (BitVec.ofNat 64 (Image.inputAddr + j)) = BitVec.ofNat 8 (inp.getD j 0))
+    (hinlt : inp.length < 2 ^ 64) (hch : inp.getD idx 0 = ch) (hch256 : ch < 256) :
+    ∃ s4, runFuel 0 4 s = s4 ∧ s4.pc = BitVec.ofNat 64 (Image.coreAddr + 252) ∧
+      s4.rget 7 = BitVec.ofNat 64 ch ∧ s4.rget 28 = BitVec.ofNat 64 10 ∧
+      s4.rget 5 = BitVec.ofNat 64 idx ∧ s4.mem = s.mem ∧ CodeLoaded s4 ∧
+      (∀ i, i ≠ 7 → i ≠ 28 → s4.rget i = s.rget i) := by
+  -- step 1: bgeu (not taken)
+  have hult : (s.rget 5).ult (s.rget 11) = true := by rw [h5, h11]; exact ult_ofNat _ _ hinlt hlt
+  have hs1 : step s = s.setPc (BitVec.ofNat 64 (Image.coreAddr + 240)) := by
+    have e : s.pc + BitVec.signExtend 64 (0x001c#13) = _ := rfl
+    rw [step_bgeu s 236 5 11 0x001c#13 hcode (by decide) hpc (by decide), if_pos hult,
+        show s.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 240) from by rw [hpc]; decide]
+  let s1 := s.setPc (BitVec.ofNat 64 (Image.coreAddr + 240))
+  have hs1d : s1 = _ := rfl
+  rw [← hs1d] at hs1
+  have hc1 : CodeLoaded s1 := by intro i hi; rw [hs1d]; simp [hcode i hi]
+  have hpc1 : s1.pc = BitVec.ofNat 64 (Image.coreAddr + 240) := rfl
+  -- step 2: add t3,a0,t0
+  have haddr : s1.rget 10 + s1.rget 5 = BitVec.ofNat 64 (Image.inputAddr + idx) := by
+    show s.rget 10 + s.rget 5 = _; rw [h10, h5]; exact addr_ofNat_succ _ _
+  have hs2 : step s1 = (s1.rset 28 (BitVec.ofNat 64 (Image.inputAddr + idx))).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 244)) := by
+    rw [step_add s1 240 28 10 5 hc1 (by decide) hpc1 (by decide), haddr,
+        show s1.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 244) from by rw [hpc1]; decide]
+  let s2 := (s1.rset 28 (BitVec.ofNat 64 (Image.inputAddr + idx))).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 244))
+  have hs2d : s2 = _ := rfl
+  rw [← hs2d] at hs2
+  have hc2 : CodeLoaded s2 := by intro i hi; rw [hs2d]; simp [hc1 i hi]
+  have hpc2 : s2.pc = BitVec.ofNat 64 (Image.coreAddr + 244) := rfl
+  have hr28 : s2.rget 28 = BitVec.ofNat 64 (Image.inputAddr + idx) := by
+    rw [hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  have hbyte : (s2.loadByte (s2.rget 28 + (0#12).signExtend 64)).setWidth 64 = BitVec.ofNat 64 ch := by
+    rw [hr28, show (0#12).signExtend 64 = (0#64) from by decide, BitVec.add_zero]
+    show (s2.mem _).setWidth 64 = _
+    rw [hs2d]; simp only [setPc_mem, rset_mem, hs1d]
+    rw [hmem _ hlt, hch, setWidth8_64 ch hch256]
+  -- step 3: lbu t2,0(t3)
+  have hs3 : step s2 = (s2.rset 7 (BitVec.ofNat 64 ch)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 248)) := by
+    rw [step_lbu s2 244 7 28 0#12 hc2 (by decide) hpc2 (by decide)]
+    show (s2.rset 7 ((s2.loadByte (s2.rget 28 + (0#12).signExtend 64)).setWidth 64)).setPc _ = _
+    rw [hbyte, show s2.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 248) from by rw [hpc2]; decide]
+  let s3 := (s2.rset 7 (BitVec.ofNat 64 ch)).setPc (BitVec.ofNat 64 (Image.coreAddr + 248))
+  have hs3d : s3 = _ := rfl
+  rw [← hs3d] at hs3
+  have hc3 : CodeLoaded s3 := by intro i hi; rw [hs3d]; simp [hc2 i hi]
+  have hpc3 : s3.pc = BitVec.ofNat 64 (Image.coreAddr + 248) := rfl
+  -- step 4: li t3,10
+  have hs4 : step s3 = (s3.rset 28 (BitVec.ofNat 64 10)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 252)) := by
+    rw [step_addi s3 248 28 0 0x00a#12 hc3 (by decide) hpc3 (by decide),
+        show s3.rget 0 + (0x00a#12).signExtend 64 = BitVec.ofNat 64 10 from by rw [rget_zero]; decide,
+        show s3.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 252) from by rw [hpc3]; decide]
+  let s4 := (s3.rset 28 (BitVec.ofNat 64 10)).setPc (BitVec.ofNat 64 (Image.coreAddr + 252))
+  have hs4d : s4 = _ := rfl
+  rw [← hs4d] at hs4
+  have hp0 : s.pc ≠ 0 := by rw [hpc]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega)
+    (by decide) (by simp only [Image.coreAddr]; omega)
+  have hp1 : s1.pc ≠ 0 := by rw [hpc1]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega)
+    (by decide) (by simp only [Image.coreAddr]; omega)
+  have hp2 : s2.pc ≠ 0 := by rw [hpc2]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega)
+    (by decide) (by simp only [Image.coreAddr]; omega)
+  have hp3 : s3.pc ≠ 0 := by rw [hpc3]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega)
+    (by decide) (by simp only [Image.coreAddr]; omega)
+  refine ⟨s4, ?_, rfl, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [runFuel]; rw [hs1, hs2, hs3, hs4, if_neg hp0, if_neg hp1, if_neg hp2, if_neg hp3]
+  · rw [hs4d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (7:Nat)≠28),
+        hs3d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  · rw [hs4d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  · rw [hs4d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (5:Nat)≠28),
+        hs3d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (5:Nat)≠7),
+        hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (5:Nat)≠28),
+        hs1d, setPc_rget]; exact h5
+  · rw [hs4d]; simp only [setPc_mem, rset_mem, hs3d, hs2d, hs1d]
+  · intro i hi; have := hc3 i hi; rw [hs4d]; simp only [setPc_mem, rset_mem]; exact this
+  · intro i h7 h28
+    rw [hs4d, setPc_rget, rset_rget _ _ _ _ (by decide) (fun h => by exact absurd h (by simp_all)),
+        if_neg h28, hs3d, setPc_rget]
+    by_cases h0 : i = 0
+    · simp [h0]
+    rw [rset_rget _ _ _ _ (by decide) h0, if_neg h7, hs2d, setPc_rget,
+        rset_rget _ _ _ _ (by decide) h0, if_neg h28, hs1d, setPc_rget]
+
 /-- One main-loop iteration (the machine side of step 3). From a non-empty
     remaining input, the machine either halts correctly (error / output-short)
     or returns to the loop head with strictly less remaining input and the
