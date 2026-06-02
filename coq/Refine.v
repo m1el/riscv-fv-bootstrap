@@ -1816,7 +1816,7 @@ Qed.
 Lemma high_parse_unknown s c :
   CodeLoaded s -> s.(pc) = coreAddr + 64 -> rget s 7 = c -> 0 <= c < 256 ->
   nibble (Z.to_nat c) = None ->
-  exists k, (runUntil 0 k s).(pc) = coreAddr + 312 /\ (runUntil 0 k s).(mem) = s.(mem) /\
+   exists k, (k <= 8)%nat /\ (runUntil 0 k s).(pc) = coreAddr + 312 /\ (runUntil 0 k s).(mem) = s.(mem) /\
     (forall i, i <> 28 -> rget (runUntil 0 k s) i = rget s i).
 Proof.
   intros hcode hpc h7 hc hn.
@@ -1826,6 +1826,7 @@ Proof.
       ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia) ltac:(lia)
       ltac:(rewrite (wadd_id (coreAddr + (64 + 4)) 244 ltac:(unfold coreAddr; lia)); lia)) as b.
     exists 2%nat. rewrite b. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. reflexivity.
     + intros i hi. rewrite (li_block_frame s 48 (coreAddr + 312) i hi). reflexivity.
@@ -1852,6 +1853,7 @@ Proof.
     assert (hfin : runUntil 0 (2 + (2 + 2)) s = setPc (rset sb 28 65) (coreAddr + 312))
       by (rewrite (runUntil_add 2 (2 + 2)), bA, (runUntil_add 2 2), bB, bC; reflexivity).
     exists (2 + (2 + 2))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold sb. rewrite setPc_mem, rset_mem. unfold sa.
       rewrite setPc_mem, rset_mem. reflexivity.
@@ -1890,6 +1892,7 @@ Proof.
       by (rewrite (runUntil_add 2 (2 + (2 + 2))), bA, (runUntil_add 2 (2 + 2)), bB,
           (runUntil_add 2 2), bC, bD; reflexivity).
     exists (2 + (2 + (2 + 2)))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold sc. rewrite setPc_mem, rset_mem. unfold sb.
       rewrite setPc_mem, rset_mem. unfold sa. rewrite setPc_mem, rset_mem. reflexivity.
@@ -1903,7 +1906,7 @@ Qed.
 Lemma low_parse_unknown s c :
   CodeLoaded s -> s.(pc) = coreAddr + 164 -> rget s 7 = c -> 0 <= c < 256 ->
   nibble (Z.to_nat c) = None ->
-  exists k, (runUntil 0 k s).(pc) = coreAddr + 312 /\ (runUntil 0 k s).(mem) = s.(mem) /\
+   exists k, (k <= 8)%nat /\ (runUntil 0 k s).(pc) = coreAddr + 312 /\ (runUntil 0 k s).(mem) = s.(mem) /\
     (forall i, i <> 28 -> rget (runUntil 0 k s) i = rget s i).
 Proof.
   intros hcode hpc h7 hc hn.
@@ -1913,6 +1916,7 @@ Proof.
       ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia) ltac:(lia)
       ltac:(rewrite (wadd_id (coreAddr + (164 + 4)) 144 ltac:(unfold coreAddr; lia)); lia)) as b.
     exists 2%nat. rewrite b. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. reflexivity.
     + intros i hi. rewrite (li_block_frame s 48 (coreAddr + 312) i hi). reflexivity.
@@ -1939,6 +1943,7 @@ Proof.
     assert (hfin : runUntil 0 (2 + (2 + 2)) s = setPc (rset sb 28 65) (coreAddr + 312))
       by (rewrite (runUntil_add 2 (2 + 2)), bA, (runUntil_add 2 2), bB, bC; reflexivity).
     exists (2 + (2 + 2))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold sb. rewrite setPc_mem, rset_mem. unfold sa.
       rewrite setPc_mem, rset_mem. reflexivity.
@@ -1977,6 +1982,7 @@ Proof.
       by (rewrite (runUntil_add 2 (2 + (2 + 2))), bA, (runUntil_add 2 (2 + 2)), bB,
           (runUntil_add 2 2), bC, bD; reflexivity).
     exists (2 + (2 + (2 + 2)))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold sc. rewrite setPc_mem, rset_mem. unfold sb.
       rewrite setPc_mem, rset_mem. unfold sa. rewrite setPc_mem, rset_mem. reflexivity.
@@ -1990,7 +1996,7 @@ Qed.
 Lemma low_split s l :
   CodeLoaded s -> s.(pc) = coreAddr + 124 -> rget s 7 = l -> 0 <= l < 256 ->
   isLowStop (Z.to_nat l) = true ->
-  exists k, (runUntil 0 k s).(pc) = coreAddr + 288 /\ (runUntil 0 k s).(mem) = s.(mem) /\
+   exists k, (k <= 10)%nat /\ (runUntil 0 k s).(pc) = coreAddr + 288 /\ (runUntil 0 k s).(mem) = s.(mem) /\
     (forall i, i <> 28 -> rget (runUntil 0 k s) i = rget s i).
 Proof.
   intros hcode hpc h7 hc hstop.
@@ -2001,6 +2007,7 @@ Proof.
       ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(reflexivity)
       ltac:(rewrite (wadd_id (coreAddr + (124 + 4)) 160 ltac:(unfold coreAddr; lia)); lia)) as b.
     exists 2%nat. rewrite b. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. reflexivity.
     + intros i hi. rewrite (li_block_frame s 10 (coreAddr + 288) i hi). reflexivity.
@@ -2019,6 +2026,7 @@ Proof.
     assert (hfin : runUntil 0 (2 + 2) s = setPc (rset sa 28 32) (coreAddr + 288))
       by (rewrite (runUntil_add 2 2), bA, bB; reflexivity).
     exists (2 + 2)%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold sa. rewrite setPc_mem, rset_mem. reflexivity.
     + intros i hi. rewrite (li_block_frame sa 32 (coreAddr + 288) i hi).
@@ -2046,6 +2054,7 @@ Proof.
     assert (hfin : runUntil 0 (2 + (2 + 2)) s = setPc (rset sb 28 95) (coreAddr + 288))
       by (rewrite (runUntil_add 2 (2 + 2)), bA, (runUntil_add 2 2), bB, bC; reflexivity).
     exists (2 + (2 + 2))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold sb. rewrite setPc_mem, rset_mem. unfold sa.
       rewrite setPc_mem, rset_mem. reflexivity.
@@ -2084,6 +2093,7 @@ Proof.
       by (rewrite (runUntil_add 2 (2 + (2 + 2))), bA, (runUntil_add 2 (2 + 2)), bB,
           (runUntil_add 2 2), bC, bE; reflexivity).
     exists (2 + (2 + (2 + 2)))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold sd. rewrite setPc_mem, rset_mem. unfold sb.
       rewrite setPc_mem, rset_mem. unfold sa. rewrite setPc_mem, rset_mem. reflexivity.
@@ -2131,6 +2141,7 @@ Proof.
       by (rewrite (runUntil_add 2 (2 + (2 + (2 + 2)))), bA, (runUntil_add 2 (2 + (2 + 2))), bB,
           (runUntil_add 2 (2 + 2)), bC, (runUntil_add 2 2), bE, bF; reflexivity).
     exists (2 + (2 + (2 + (2 + 2))))%nat. rewrite hfin. repeat apply conj.
+    + lia.
     + apply setPc_pc.
     + rewrite setPc_mem, rset_mem. unfold se. rewrite setPc_mem, rset_mem. unfold sd.
       rewrite setPc_mem, rset_mem. unfold sb. rewrite setPc_mem, rset_mem. unfold sa.
@@ -2411,7 +2422,7 @@ Proof.
   destruct (reach64 inp cap c rest' emitted s hsc hss inv)
     as [Hpc64 [H7_64 [Hcode64 [Hmem64 [_ [H6_64 [H1_64 [_ [_ [_ [_ Hc256]]]]]]]]]]].
   set (s64 := runUntil 0 14 s) in *.
-  destruct (high_parse_unknown s64 c Hcode64 Hpc64 H7_64 Hc256 hn) as [k1 [HpcU [HmemU HothU]]].
+  destruct (high_parse_unknown s64 c Hcode64 Hpc64 H7_64 Hc256 hn) as [k1 [Hk1 [HpcU [HmemU HothU]]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
   set (sE := runUntil 0 k1 s64) in *.
   apply (reach_error s sE inp cap emitted 312 5 (14 + k1) Unknown).
@@ -2445,7 +2456,7 @@ Proof.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
     as [k0 [Hk0 [Hpc124 [H7_124 [Hcode124 [Hmem124 [H6_124 [H1_124 [_ [_ [_ [_ [_ [_ Hl256]]]]]]]]]]]]]].
   destruct (low_split (runUntil 0 k0 s) l Hcode124 Hpc124 H7_124 Hl256 hls)
-    as [k1 [HpcS [HmemS HothS]]].
+    as [k1 [Hk1 [HpcS [HmemS HothS]]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
   set (sE := runUntil 0 k1 (runUntil 0 k0 s)) in *.
   apply (reach_error s sE inp cap emitted 288 3 (k0 + k1) Split).
@@ -2485,7 +2496,7 @@ Proof.
   assert (HcodeE0 : CodeLoaded sE0) by
     (apply (CodeLoaded_eqmem (runUntil 0 k0 s)); [exact HmemE| exact Hcode124]).
   assert (H7E0 : rget sE0 7 = l) by (rewrite (HothE 7 ltac:(lia)); exact H7_124).
-  destruct (low_parse_unknown sE0 l HcodeE0 HpcE H7E0 Hl256 hnl) as [k1 [HpcU [HmemU HothU]]].
+  destruct (low_parse_unknown sE0 l HcodeE0 HpcE H7E0 Hl256 hnl) as [k1 [Hk1 [HpcU [HmemU HothU]]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
   set (sE := runUntil 0 k1 sE0) in *.
   apply (reach_error s sE inp cap emitted 312 5 (k0 + (10 + k1)) Unknown).
