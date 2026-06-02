@@ -193,6 +193,51 @@ theorem setWidth8_64 (c : Nat) (h : c < 256) :
   simp [BitVec.toNat_setWidth, BitVec.toNat_ofNat, Nat.mod_eq_of_lt h,
         Nat.mod_eq_of_lt (by omega : c < 2 ^ 64)]
 
+/-! ## `loadBytes` correctness (for the `core_refines` prologue). -/
+
+/-- Reading outside the written region returns the original memory. -/
+theorem loadBytes_frame (addr : Word) :
+    ∀ (base : Nat) (bytes : List Nat) (m : Word → Byte),
+      (∀ i, i < bytes.length → addr ≠ BitVec.ofNat 64 (base + i)) →
+      Harness.loadBytes base bytes m addr = m addr := by
+  intro base bytes
+  induction bytes generalizing base with
+  | nil => intro m _; rfl
+  | cons b rest ih =>
+    intro m h
+    unfold Harness.loadBytes
+    rw [ih (base + 1) _ (by
+      intro i hi
+      have := h (i + 1) (by simp only [List.length_cons]; omega)
+      rwa [show base + (i + 1) = (base + 1) + i from by omega] at this)]
+    rw [if_neg (by have := h 0 (by simp); simpa using this)]
+
+/-- Reading the `j`-th written address returns the `j`-th byte. -/
+theorem loadBytes_get :
+    ∀ (base : Nat) (bytes : List Nat) (m : Word → Byte) (j : Nat),
+      j < bytes.length → base + bytes.length ≤ 2 ^ 64 →
+      Harness.loadBytes base bytes m (BitVec.ofNat 64 (base + j)) = BitVec.ofNat 8 (bytes.getD j 0) := by
+  intro base bytes
+  induction bytes generalizing base with
+  | nil => intro m j hj _; simp at hj
+  | cons b rest ih =>
+    intro m j hj hlen
+    unfold Harness.loadBytes
+    cases j with
+    | zero =>
+      rw [loadBytes_frame (BitVec.ofNat 64 (base + 0)) (base + 1) rest _ (by
+        intro i hi
+        refine ofNat_ne _ _ ?_ ?_ ?_
+        · simp only [List.length_cons] at hlen; omega
+        · simp only [List.length_cons] at hlen; omega
+        · omega)]
+      simp [Nat.add_zero, List.getD_cons_zero]
+    | succ j' =>
+      rw [show base + (j' + 1) = (base + 1) + j' from by omega,
+          ih (base + 1) _ j' (by simp only [List.length_cons] at hj; omega)
+             (by simp only [List.length_cons] at hlen; omega),
+          List.getD_cons_succ]
+
 /-- Preconditions for the calling convention to be sound: the input region fits
     before the output region, and the output region fits in the address space.
     (The fixed addresses come from the linker; see Image.lean / TCB.md.) -/

@@ -10,14 +10,14 @@ open Rv64i
 
 namespace Rv64i.Harness
 
-/-- Write `bytes` starting at address `base` into memory function `m`. -/
+/-- Write `bytes` starting at address `base` into memory function `m`.
+    Recursive form (writes `b` at `base`, recurses on the tail at `base+1`) -- the
+    semantics match a sequential store loop and this form is provable by induction. -/
 def loadBytes (base : Nat) (bytes : List Nat) (m : Word → Byte) : Word → Byte :=
-  bytes.foldl (init := (m, 0))
-    (fun (acc : (Word → Byte) × Nat) b =>
-      let (mm, i) := acc
-      let a : Word := BitVec.ofNat 64 (base + i)
-      (fun x => if x = a then BitVec.ofNat 8 b else mm x, i + 1))
-    |>.1
+  match bytes with
+  | [] => m
+  | b :: rest =>
+      loadBytes (base + 1) rest (fun x => if x = BitVec.ofNat 64 base then BitVec.ofNat 8 b else m x)
 
 def readMem (m : Word → Byte) (base len : Nat) : List Nat :=
   (List.range len).map (fun i => (m (BitVec.ofNat 64 (base + i))).toNat)
