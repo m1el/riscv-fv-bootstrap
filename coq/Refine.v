@@ -970,13 +970,13 @@ Lemma reach_error s sE inp cap emitted off code k st :
   Spec.decode (zin inp) = (emitted, st) -> (length emitted <= Z.to_nat cap)%nat ->
   (forall j, (j < length emitted)%nat ->
      s.(mem) (outAddr + Z.of_nat j) = Z.of_nat (nth j emitted 0%nat)) ->
-  exists m, Result (runUntil 0 m s) inp cap.
+  exists m, (m <= k + 3)%nat /\ Result (runUntil 0 m s) inp cap.
 Proof.
   intros hrun hpcE hcodeE hmemE h6E h1E hli hmv hret ho hoff hcodeR hemit_lt
          hcodeval hdec hle hout.
   destruct (halt_epilogue sE off code (Z.of_nat (length emitted)) hcodeE ho hoff hpcE
               hli hmv hret hcodeR ltac:(lia) h6E h1E) as [hp [ha0 [ha1 hm]]].
-  exists (k + 3)%nat. rewrite runUntil_add, hrun.
+  exists (k + 3)%nat. split; [lia|]. rewrite runUntil_add, hrun.
   apply (error_result (runUntil 0 3 sE) inp cap emitted st).
   - exact hp.
   - rewrite ha0; exact hcodeval.
@@ -2372,7 +2372,8 @@ Qed.
 (* high nibble at EOF -> Trailing (4). *)
 Lemma loop_trailing inp cap c hi emitted s :
   isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = Some hi ->
-  LoopInv inp cap s (c :: nil) emitted -> exists k, Result (runUntil 0 k s) inp cap.
+  LoopInv inp cap s (c :: nil) emitted ->
+  exists k, (k <= 50 * length (c :: nil))%nat /\ Result (runUntil 0 k s) inp cap.
 Proof.
   intros hsc hss hnh inv. pose proof inv as inv0.
   destruct (reach64 inp cap c nil emitted s hsc hss inv)
@@ -2392,6 +2393,8 @@ Proof.
     ltac:(vm_compute; reflexivity)
     ltac:(rewrite (wadd_id (coreAddr + 108) 192 ltac:(unfold coreAddr; lia)); lia)) as hbt.
   set (sE := setPc (runUntil 0 k1 s64) (coreAddr + 300)) in *.
+  cut (exists m, (m <= (14 + (k1 + 1)) + 3)%nat /\ Result (runUntil 0 m s) inp cap).
+  { intros [m [Hmb Hm]]. exists m. split; [simpl length; lia| exact Hm]. }
   apply (reach_error s sE inp cap emitted 300 4 (14 + (k1 + 1)) Trailing).
   - rewrite (runUntil_add 14 (k1 + 1)). fold s64. rewrite (runUntil_add k1 1), hbt. reflexivity.
   - unfold sE; apply setPc_pc.
@@ -2416,7 +2419,8 @@ Qed.
 (* head char not space/comment/hex -> Unknown (5). *)
 Lemma loop_unknown_high inp cap c rest' emitted s :
   isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = None ->
-  LoopInv inp cap s (c :: rest') emitted -> exists k, Result (runUntil 0 k s) inp cap.
+  LoopInv inp cap s (c :: rest') emitted ->
+  exists k, (k <= 50 * length (c :: rest'))%nat /\ Result (runUntil 0 k s) inp cap.
 Proof.
   intros hsc hss hn inv. pose proof inv as inv0.
   destruct (reach64 inp cap c rest' emitted s hsc hss inv)
@@ -2425,6 +2429,8 @@ Proof.
   destruct (high_parse_unknown s64 c Hcode64 Hpc64 H7_64 Hc256 hn) as [k1 [Hk1 [HpcU [HmemU HothU]]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
   set (sE := runUntil 0 k1 s64) in *.
+  cut (exists m, (m <= (14 + k1) + 3)%nat /\ Result (runUntil 0 m s) inp cap).
+  { intros [m [Hmb Hm]]. exists m. split; [simpl length; lia| exact Hm]. }
   apply (reach_error s sE inp cap emitted 312 5 (14 + k1) Unknown).
   - rewrite (runUntil_add 14 k1). fold s64. reflexivity.
   - exact HpcU.
@@ -2450,7 +2456,8 @@ Qed.
 Lemma loop_split inp cap c hi l rest'' emitted s :
   isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = Some hi ->
   isLowStop (Z.to_nat l) = true ->
-  LoopInv inp cap s (c :: l :: rest'') emitted -> exists k, Result (runUntil 0 k s) inp cap.
+  LoopInv inp cap s (c :: l :: rest'') emitted ->
+  exists k, (k <= 50 * length (c :: l :: rest''))%nat /\ Result (runUntil 0 k s) inp cap.
 Proof.
   intros hsc hss hnh hls inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
@@ -2459,6 +2466,8 @@ Proof.
     as [k1 [Hk1 [HpcS [HmemS HothS]]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
   set (sE := runUntil 0 k1 (runUntil 0 k0 s)) in *.
+  cut (exists m, (m <= (k0 + k1) + 3)%nat /\ Result (runUntil 0 m s) inp cap).
+  { intros [m [Hmb Hm]]. exists m. split; [simpl length; lia| exact Hm]. }
   apply (reach_error s sE inp cap emitted 288 3 (k0 + k1) Split).
   - rewrite (runUntil_add k0 k1). reflexivity.
   - exact HpcS.
@@ -2484,7 +2493,8 @@ Qed.
 Lemma loop_unknown_low inp cap c hi l rest'' emitted s :
   isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = Some hi ->
   isLowStop (Z.to_nat l) = false -> nibble (Z.to_nat l) = None ->
-  LoopInv inp cap s (c :: l :: rest'') emitted -> exists k, Result (runUntil 0 k s) inp cap.
+  LoopInv inp cap s (c :: l :: rest'') emitted ->
+  exists k, (k <= 50 * length (c :: l :: rest''))%nat /\ Result (runUntil 0 k s) inp cap.
 Proof.
   intros hsc hss hnh hls hnl inv. pose proof inv as inv0.
   destruct (reach124 inp cap c hi l rest'' emitted s hsc hss hnh inv)
@@ -2499,6 +2509,8 @@ Proof.
   destruct (low_parse_unknown sE0 l HcodeE0 HpcE H7E0 Hl256 hnl) as [k1 [Hk1 [HpcU [HmemU HothU]]]].
   destruct inv0 as [_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ Hemitle Houtmem Hspec].
   set (sE := runUntil 0 k1 sE0) in *.
+  cut (exists m, (m <= (k0 + (10 + k1)) + 3)%nat /\ Result (runUntil 0 m s) inp cap).
+  { intros [m [Hmb Hm]]. exists m. split; [simpl length; lia| exact Hm]. }
   apply (reach_error s sE inp cap emitted 312 5 (k0 + (10 + k1)) Unknown).
   - rewrite (runUntil_add k0 (10 + k1)), (runUntil_add 10 k1). reflexivity.
   - exact HpcU.
@@ -2542,7 +2554,8 @@ Qed.
 Lemma loop_short inp cap c hi l lo rest'' emitted s :
   isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = false -> nibble (Z.to_nat c) = Some hi ->
   nibble (Z.to_nat l) = Some lo -> (Z.to_nat cap <= length emitted)%nat ->
-  LoopInv inp cap s (c :: l :: rest'') emitted -> exists k, Result (runUntil 0 k s) inp cap.
+  LoopInv inp cap s (c :: l :: rest'') emitted ->
+  exists k, (k <= 50 * length (c :: l :: rest''))%nat /\ Result (runUntil 0 k s) inp cap.
 Proof.
   intros hsc hss hnh hnl hge inv. pose proof inv as inv0.
   assert (heq : length emitted = Z.to_nat cap) by
@@ -2593,7 +2606,7 @@ Proof.
   assert (htake : firstn (Z.to_nat cap) bs = emitted).
   { rewrite <- heq. unfold bs. rewrite firstn_app, Nat.sub_diag, firstn_all. simpl firstn.
     rewrite app_nil_r. reflexivity. }
-  exists (k0 + (10 + (k2 + (1 + 3))))%nat.
+  exists (k0 + (10 + (k2 + (1 + 3))))%nat. split; [simpl length; lia|].
   assert (hchain : runUntil 0 (k0 + (10 + (k2 + (1 + 3)))) s = runUntil 0 3 sS).
   { rewrite (runUntil_add k0 (10 + (k2 + (1 + 3)))), (runUntil_add 10 (k2 + (1 + 3))),
             (runUntil_add k2 (1 + 3)). fold sE0. fold sP.
@@ -2817,12 +2830,12 @@ Lemma comment_loop inp : forall n s idx,
   inputAddr + Z.of_nat (length inp) < 2 ^ 64 -> (forall b, In b inp -> 0 <= b < 256) ->
   (idx <= length inp)%nat -> (length inp - idx <= n)%nat ->
   exists k,
-    (exists q, (idx <= q < length inp)%nat /\ nth q inp 0 = 10 /\
+    (exists q, (idx <= q < length inp)%nat /\ (k <= 7 * (q - idx) + 5)%nat /\ nth q inp 0 = 10 /\
         skipComment (zin (skipn idx inp)) = zin (skipn (S q) inp) /\
         (runUntil 0 k s).(pc) = coreAddr + 8 /\ rget (runUntil 0 k s) 5 = Z.of_nat q /\
         (runUntil 0 k s).(mem) = s.(mem) /\
         (forall i, i <> 5 -> i <> 7 -> i <> 28 -> rget (runUntil 0 k s) i = rget s i))
-    \/ (skipComment (zin (skipn idx inp)) = nil /\
+    \/ ((k <= 7 * (length inp - idx) + 1)%nat /\ skipComment (zin (skipn idx inp)) = nil /\
         (runUntil 0 k s).(pc) = coreAddr + 264 /\ rget (runUntil 0 k s) 5 = Z.of_nat (length inp) /\
         (runUntil 0 k s).(mem) = s.(mem) /\
         (forall i, i <> 5 -> i <> 7 -> i <> 28 -> rget (runUntil 0 k s) i = rget s i)).
@@ -2835,6 +2848,7 @@ Proof.
       ltac:(vm_compute; reflexivity)
       ltac:(rewrite (wadd_id (coreAddr + 236) 28 ltac:(unfold coreAddr; lia)); lia)) as hbt.
     exists 1%nat. right. rewrite hbt. repeat apply conj.
+    + lia.
     + rewrite skipn_all. reflexivity.
     + apply setPc_pc.
     + rewrite setPc_rget. exact Hidx.
@@ -2859,6 +2873,7 @@ Proof.
         exists (4 + 1)%nat. left. exists idx.
         rewrite (runUntil_add 4 1). fold s4. rewrite (runUntil_one s4 hp4), hbeq.
         repeat apply conj.
+        -- lia.
         -- lia.
         -- lia.
         -- exact Hnl.
@@ -2926,11 +2941,12 @@ Proof.
           (rewrite (hother' 11 ltac:(lia) ltac:(lia) ltac:(lia)); exact Ha1).
         destruct (IHn s' (S idx) hcs' hpcs' h5s' h10s' h11s'
           ltac:(intros j hj; rewrite hmems'; exact (Hinmem j hj)) hin_fit Hbytes
-          ltac:(lia) ltac:(lia)) as [k [[q [Hq1 [Hq2 [Hqskip [Hppc [H5q [Hmemq Hothq]]]]]]]|
-                                          [Hskip0 [Hppc [H5q [Hmemq Hothq]]]]]].
+          ltac:(lia) ltac:(lia)) as [k [[q [Hq1 [Hkb [Hq2 [Hqskip [Hppc [H5q [Hmemq Hothq]]]]]]]]|
+                                          [Hkb [Hskip0 [Hppc [H5q [Hmemq Hothq]]]]]]].
         -- exists (4 + (3 + k))%nat. left. exists q.
            rewrite (runUntil_add 4 (3 + k)). fold s4. rewrite (runUntil_add 3 k), hrun3.
            repeat apply conj.
+           ++ lia.
            ++ lia.
            ++ lia.
            ++ exact Hq2.
@@ -2942,6 +2958,7 @@ Proof.
         -- exists (4 + (3 + k))%nat. right.
            rewrite (runUntil_add 4 (3 + k)). fold s4. rewrite (runUntil_add 3 k), hrun3.
            repeat apply conj.
+           ++ lia.
            ++ rewrite hcons. cbn [zin map]. rewrite (skipComment_cons_ne _ _ Hnl_ne). exact Hskip0.
            ++ exact Hppc.
            ++ exact H5q.
@@ -2954,6 +2971,7 @@ Proof.
         ltac:(vm_compute; reflexivity)
         ltac:(rewrite (wadd_id (coreAddr + 236) 28 ltac:(unfold coreAddr; lia)); lia)) as hbt.
       exists 1%nat. right. rewrite hbt. repeat apply conj.
+      * lia.
       * rewrite skipn_all. reflexivity.
       * apply setPc_pc.
       * rewrite setPc_rget. exact Hidx.
@@ -2976,18 +2994,19 @@ Lemma loop_comment inp cap c rest' emitted s :
   isComment (Z.to_nat c) = true ->
   LoopInv inp cap s (c :: rest') emitted ->
   exists k, (exists rest'' emitted', (length rest'' < length (c :: rest'))%nat /\
+              (k <= 50 * (length (c :: rest') - length rest''))%nat /\
               LoopInv inp cap (runUntil 0 k s) rest'' emitted')
-         \/ Result (runUntil 0 k s) inp cap.
+         \/ ((k <= 50 * length (c :: rest'))%nat /\ Result (runUntil 0 k s) inp cap).
 Proof.
   intros hcm inv. pose proof inv as inv0.
   destruct (loopinv_head inp cap c rest' emitted s inv) as [Hin Hc].
   destruct (loop_prefix inp cap c rest' emitted s inv) as [hpc4 [ht2 [ht0 [hmem4 [hcode4 hoth4]]]]].
   set (s4 := runUntil 0 4 s) in *.
-  assert (Hreach236 : exists kb, (runUntil 0 kb s4).(pc) = coreAddr + 236 /\
+  assert (Hreach236 : exists kb, (kb <= 4)%nat /\ (runUntil 0 kb s4).(pc) = coreAddr + 236 /\
       (runUntil 0 kb s4).(mem) = s4.(mem) /\ rget (runUntil 0 kb s4) 5 = rget s4 5 /\
       (forall i, i <> 28 -> rget (runUntil 0 kb s4) i = rget s4 i)).
   { destruct (isComment_cases c ltac:(lia) hcm) as [Hc35|Hc59].
-    - exists 2%nat. rewrite (li_beq_eq s4 24 35 c 208 (coreAddr + 236) hcode4 ltac:(lia)
+    - exists 2%nat. split; [lia|]. rewrite (li_beq_eq s4 24 35 c 208 (coreAddr + 236) hcode4 ltac:(lia)
         ltac:(rewrite coreBytes_len; lia) hpc4 ht2 ltac:(vm_compute; reflexivity)
         ltac:(vm_compute; reflexivity) ltac:(lia) Hc35
         ltac:(rewrite (wadd_id (coreAddr + (24 + 4)) 208 ltac:(unfold coreAddr; lia)); lia)).
@@ -2996,7 +3015,7 @@ Proof.
       + rewrite setPc_mem, rset_mem; reflexivity.
       + apply (li_block_frame s4 35 (coreAddr + 236) 5 ltac:(lia)).
       + intros i hi. apply (li_block_frame s4 35 (coreAddr + 236) i hi).
-    - exists (2 + 2)%nat.
+    - exists (2 + 2)%nat. split; [lia|].
       rewrite (runUntil_add 2 2),
         (li_beq_ne s4 24 35 c 208 hcode4 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc4 ht2
           ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia)).
@@ -3016,7 +3035,7 @@ Proof.
         unfold sb. apply (li_block_frame s4 35 (coreAddr + (24 + 8)) 5 ltac:(lia)).
       + intros i hi. rewrite (li_block_frame sb 59 (coreAddr + 236) i hi).
         unfold sb. apply (li_block_frame s4 35 (coreAddr + (24 + 8)) i hi). }
-  destruct Hreach236 as [kb [Hpc236 [Hmem236 [H5_236 Hother236]]]].
+  destruct Hreach236 as [kb [Hkbb [Hpc236 [Hmem236 [H5_236 Hother236]]]]].
   set (s236 := runUntil 0 kb s4) in *.
   destruct inv0 as [_ _ Ha0 Ha1 _ _ Hra Hinmem Hinlt Hbytes Hinfits Houtlt Hidx Hsuf Houtidx
                     Hemitle Houtmem Hspec].
@@ -3041,8 +3060,8 @@ Proof.
        destruct inv as [_ Hcs _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _]; exact Hcs]).
   destruct (comment_loop inp (length inp - idx0) s236 idx0 Hcode236 Hpc236 H5idx0 H10_236 H11_236
     ltac:(intros j hj; rewrite Hmem236s; exact (Hinmem j hj)) Hinlt Hbytes ltac:(lia) ltac:(lia))
-    as [kc [[q [Hq1 [Hq2 [Hqskip [Hppc [H5q [Hmemq Hothq]]]]]]]|
-            [Hskip0 [Hppc [H5q [Hmemq Hothq]]]]]].
+    as [kc [[q [Hq1 [Hkbc [Hq2 [Hqskip [Hppc [H5q [Hmemq Hothq]]]]]]]]|
+            [Hkbc [Hskip0 [Hppc [H5q [Hmemq Hothq]]]]]]].
   - (* newline at q -> LOOP on the newline *)
     exists (4 + (kb + kc))%nat. left. exists (skipn q inp). exists emitted.
     assert (hbig : runUntil 0 (4 + (kb + kc)) s = runUntil 0 kc s236)
@@ -3064,8 +3083,9 @@ Proof.
       destruct (i =? 0) eqn:E0; [apply Z.eqb_eq in E0; subst i; reflexivity|].
       apply Z.eqb_neq in E0.
       rewrite (Hothq i h5 h7 h28), (Hother236 i h28), (hoth4 i E0 h5 h7 h28). reflexivity. }
-    split.
+    split; [|split].
     + rewrite length_skipn. unfold idx0 in Hq1. simpl length in hge1 |- *. lia.
+    + rewrite length_skipn. simpl length. unfold idx0 in Hq1, Hkbc. simpl length in hge1. lia.
     + refine {| li_at_loop := Hppc; li_code := _; li_a0 := _; li_a1 := _; li_a2 := _;
                 li_a3 := _; li_ra := _; li_in_mem := _; li_in_lt := Hinlt;
                 li_bytes := Hbytes; li_in_fits := Hinfits; li_out_lt := Houtlt;
@@ -3094,8 +3114,8 @@ Proof.
       change (zin (c :: rest')) with (Z.to_nat c :: zin rest').
       rewrite (decodeS_comment (Z.to_nat c) (zin rest') hcm), <- Hskipidx0, Hskip0, decodeS_nil.
       simpl. rewrite app_nil_r. reflexivity. }
-    cut (exists m, Result (runUntil 0 m s) inp cap).
-    { intros [m Hm]. exists m. right. exact Hm. }
+    cut (exists m, (m <= 4 + (kb + kc) + 3)%nat /\ Result (runUntil 0 m s) inp cap).
+    { intros [m [Hmb Hm]]. exists m. right. split; [unfold idx0 in Hkbc; simpl length; lia| exact Hm]. }
     apply (reach_error s (runUntil 0 kc s236) inp cap emitted 264 0 (4 + (kb + kc)) Ok).
     + exact hbig.
     + exact Hppc.
