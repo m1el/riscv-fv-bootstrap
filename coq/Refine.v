@@ -317,6 +317,92 @@ Proof.
   - rewrite setPc_mem. unfold s3, s2, s1. rewrite !setPc_mem, !rset_mem. reflexivity.
 Qed.
 
+(** ** Loop invariant + the induction backbone (mirror of LoopInv/loop_correct).
+
+    Per the fuel-bound approach: each iteration runs <= 50 instructions per input
+    char consumed, so the whole loop halts within [50 * |rest| + 4] steps -- a
+    closed (non-existential) bound, so it composes with the fixed-fuel `runOn`. *)
+
+Record LoopInv (inp : list Z) (cap : Z) (s : State) (rest : list Z) (emitted : list nat) : Prop := {
+  li_at_loop : s.(pc) = coreAddr + 8;
+  li_code    : CodeLoaded s;
+  li_a0      : rget s 10 = inputAddr;
+  li_a1      : rget s 11 = Z.of_nat (length inp);
+  li_a2      : rget s 12 = outAddr;
+  li_a3      : rget s 13 = cap;
+  li_ra      : rget s 1 = 0;
+  li_in_mem  : forall j, 0 <= j < Z.of_nat (length inp) ->
+                 s.(mem) (inputAddr + j) = nth (Z.to_nat j) inp 0;
+  li_in_lt   : inputAddr + Z.of_nat (length inp) < 2 ^ 64;
+  li_bytes   : forall b, In b inp -> 0 <= b < 256;
+  li_in_fits : inputAddr + Z.of_nat (length inp) <= outAddr;
+  li_out_lt  : outAddr + cap < 2 ^ 64;
+  li_idx     : rget s 5 = Z.of_nat (length inp) - Z.of_nat (length rest);
+  li_suffix  : skipn (length inp - length rest) inp = rest;
+  li_outidx  : rget s 6 = Z.of_nat (length emitted);
+  li_emit_le : (length emitted <= Z.to_nat cap)%nat;
+  li_out_mem : forall j, (j < length emitted)%nat ->
+                 s.(mem) (outAddr + Z.of_nat j) = Z.of_nat (nth j emitted 0%nat);
+  li_spec    : decodeS High (zin inp) =
+                 (emitted ++ fst (decodeS High (zin rest)), snd (decodeS High (zin rest)))
+}.
+
+(* The halted observation matches coreSpec. *)
+Definition Result (f : State) (inp : list Z) (cap : Z) : Prop :=
+  let '(st, bs, ln) := coreSpec (zin inp) (Z.to_nat cap) in
+  f.(pc) = 0 /\ rget f 10 = Z.of_nat st /\ rget f 11 = Z.of_nat ln /\
+  readMem f.(mem) outAddr ln = bs.
+
+Lemma Result_pc f inp cap : Result f inp cap -> f.(pc) = 0.
+Proof. unfold Result. destruct (coreSpec (zin inp) (Z.to_nat cap)) as [[st bs] ln]. tauto. Qed.
+
+(* Base case: input exhausted -> halts Ok with output preserved. (Uses core_eof;
+   the readMem/coreSpec packaging is the remaining detail -- Admitted for now.) *)
+Theorem eof_result : forall inp cap emitted s,
+  LoopInv inp cap s [] emitted -> Result (runUntil 0 4 s) inp cap.
+Admitted.
+
+(* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
+   halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
+Theorem loop_iteration : forall inp cap rest emitted s,
+  rest <> [] -> LoopInv inp cap s rest emitted ->
+  exists k,
+    (exists rest' emitted', (length rest' < length rest)%nat /\
+        (k <= 50 * (length rest - length rest'))%nat /\
+        LoopInv inp cap (runUntil 0 k s) rest' emitted')
+    \/ ((k <= 50 * length rest)%nat /\ Result (runUntil 0 k s) inp cap).
+Admitted.
+
+(* The induction (PROVED): from any LoopInv state the machine halts correctly
+   within [50 * |rest| + 4] steps. The fuel-bound (point 1) made fully explicit. *)
+Theorem loop_correct : forall inp cap n rest emitted s,
+  (length rest <= n)%nat -> LoopInv inp cap s rest emitted ->
+  Result (runUntil 0 (50 * length rest + 4) s) inp cap.
+Proof.
+  intros inp cap n. induction n as [|n IH]; intros rest emitted s hn hinv.
+  - assert (rest = []) by (destruct rest; [reflexivity| simpl in hn; lia]).
+    subst rest. exact (eof_result inp cap emitted s hinv).
+  - destruct rest as [|c rest''] eqn:Er.
+    + exact (eof_result inp cap emitted s hinv).
+    + destruct (loop_iteration inp cap (c :: rest'') emitted s ltac:(discriminate) hinv)
+        as [k [ [rest' [emitted' [Hlt [Hkb Hinv']]]] | [Hkb Hres] ]].
+      * (* continue: k <= 50*(|rest|-|rest'|) chars consumed *)
+        set (A := (50 * length (c :: rest'') + 4)%nat).
+        assert (HkA : (k <= A)%nat) by (unfold A; lia).
+        replace A with (k + (A - k))%nat by lia. rewrite runUntil_add.
+        assert (HBle : (50 * length rest' + 4 <= A - k)%nat) by (unfold A; simpl length in *; lia).
+        replace (A - k)%nat with ((50 * length rest' + 4) + ((A - k) - (50 * length rest' + 4)))%nat by lia.
+        rewrite runUntil_add.
+        assert (HIH : Result (runUntil 0 (50 * length rest' + 4) (runUntil 0 k s)) inp cap)
+          by (apply (IH rest' emitted'); [simpl length in *; lia | exact Hinv']).
+        rewrite (runUntil_halt _ _ (Result_pc _ _ _ HIH)). exact HIH.
+      * (* halt *)
+        set (A := (50 * length (c :: rest'') + 4)%nat).
+        assert (HkA : (k <= A)%nat) by (unfold A; lia).
+        replace A with (k + (A - k))%nat by lia. rewrite runUntil_add.
+        rewrite (runUntil_halt _ _ (Result_pc _ _ _ Hres)). exact Hres.
+Qed.
+
 (** ** Well-formedness: input region fits before the output region, etc. *)
 Record WellFormed (inp : list Z) (cap : Z) : Prop := {
   in_fits  : inputAddr + Z.of_nat (length inp) <= outAddr;
