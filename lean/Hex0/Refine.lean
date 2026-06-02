@@ -112,6 +112,60 @@ theorem step_jalr (s : State) (off rd rs1 : Nat) (imm : BitVec 12) (hcode : Code
     step s = (s.rset rd (s.pc + 4)).setPc ((s.rget rs1 + imm.signExtend 64) &&& ~~~1) := by
   unfold step; rw [fetch_code s hcode off hoff hpc, hd]
 
+theorem step_add (s : State) (off rd rs1 rs2 : Nat) (hcode : CodeLoaded s)
+    (hoff : off + 3 < Image.coreBytes.length) (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hd : Rv64i.decode (wordAt off) = Rv64i.Instr.add rd rs1 rs2) :
+    step s = (s.rset rd (s.rget rs1 + s.rget rs2)).setPc (s.pc + 4) := by
+  unfold step; rw [fetch_code s hcode off hoff hpc, hd]
+
+theorem step_or (s : State) (off rd rs1 rs2 : Nat) (hcode : CodeLoaded s)
+    (hoff : off + 3 < Image.coreBytes.length) (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hd : Rv64i.decode (wordAt off) = Rv64i.Instr.or rd rs1 rs2) :
+    step s = (s.rset rd (s.rget rs1 ||| s.rget rs2)).setPc (s.pc + 4) := by
+  unfold step; rw [fetch_code s hcode off hoff hpc, hd]
+
+theorem step_slli (s : State) (off rd rs1 sh : Nat) (hcode : CodeLoaded s)
+    (hoff : off + 3 < Image.coreBytes.length) (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hd : Rv64i.decode (wordAt off) = Rv64i.Instr.slli rd rs1 sh) :
+    step s = (s.rset rd (s.rget rs1 <<< sh)).setPc (s.pc + 4) := by
+  unfold step; rw [fetch_code s hcode off hoff hpc, hd]
+
+theorem step_lbu (s : State) (off rd rs1 : Nat) (imm : BitVec 12) (hcode : CodeLoaded s)
+    (hoff : off + 3 < Image.coreBytes.length) (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hd : Rv64i.decode (wordAt off) = Rv64i.Instr.lbu rd rs1 imm) :
+    step s = (s.rset rd ((s.loadByte (s.rget rs1 + imm.signExtend 64)).setWidth 64)).setPc (s.pc + 4) := by
+  unfold step; rw [fetch_code s hcode off hoff hpc, hd]
+
+theorem step_sb (s : State) (off rs1 rs2 : Nat) (imm : BitVec 12) (hcode : CodeLoaded s)
+    (hoff : off + 3 < Image.coreBytes.length) (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hd : Rv64i.decode (wordAt off) = Rv64i.Instr.sb rs1 rs2 imm) :
+    step s = (s.storeByte (s.rget rs1 + imm.signExtend 64) ((s.rget rs2).setWidth 8)).setPc (s.pc + 4) := by
+  unfold step; rw [fetch_code s hcode off hoff hpc, hd]
+
+theorem step_beq (s : State) (off rs1 rs2 : Nat) (imm : BitVec 13) (hcode : CodeLoaded s)
+    (hoff : off + 3 < Image.coreBytes.length) (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hd : Rv64i.decode (wordAt off) = Rv64i.Instr.beq rs1 rs2 imm) :
+    step s = s.setPc (if s.rget rs1 = s.rget rs2 then s.pc + imm.signExtend 64 else s.pc + 4) := by
+  unfold step; rw [fetch_code s hcode off hoff hpc, hd]
+
+theorem step_blt (s : State) (off rs1 rs2 : Nat) (imm : BitVec 13) (hcode : CodeLoaded s)
+    (hoff : off + 3 < Image.coreBytes.length) (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hd : Rv64i.decode (wordAt off) = Rv64i.Instr.blt rs1 rs2 imm) :
+    step s = s.setPc (if (s.rget rs1).slt (s.rget rs2) then s.pc + imm.signExtend 64 else s.pc + 4) := by
+  unfold step; rw [fetch_code s hcode off hoff hpc, hd]
+
+theorem step_bge (s : State) (off rs1 rs2 : Nat) (imm : BitVec 13) (hcode : CodeLoaded s)
+    (hoff : off + 3 < Image.coreBytes.length) (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hd : Rv64i.decode (wordAt off) = Rv64i.Instr.bge rs1 rs2 imm) :
+    step s = s.setPc (if (s.rget rs1).slt (s.rget rs2) then s.pc + 4 else s.pc + imm.signExtend 64) := by
+  unfold step; rw [fetch_code s hcode off hoff hpc, hd]
+
+theorem step_jal (s : State) (off rd : Nat) (imm : BitVec 21) (hcode : CodeLoaded s)
+    (hoff : off + 3 < Image.coreBytes.length) (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hd : Rv64i.decode (wordAt off) = Rv64i.Instr.jal rd imm) :
+    step s = (s.rset rd (s.pc + 4)).setPc (s.pc + imm.signExtend 64) := by
+  unfold step; rw [fetch_code s hcode off hoff hpc, hd]
+
 /-- Preconditions for the calling convention to be sound: the input region fits
     before the output region, and the output region fits in the address space.
     (The fixed addresses come from the linker; see Image.lean / TCB.md.) -/
