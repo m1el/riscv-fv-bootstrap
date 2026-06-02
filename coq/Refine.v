@@ -169,6 +169,47 @@ Lemma step_jalr : forall s off rd rs1 imm,
 Proof. intros s off rd rs1 imm hc ho1 ho2 hpc hd.
   unfold step. rewrite (fetch_code s off hc ho1 ho2 hpc), hd. reflexivity. Qed.
 
+(* storeByte touches only memory *)
+Lemma storeByte_pc s a b : (storeByte s a b).(pc) = s.(pc). Proof. reflexivity. Qed.
+Lemma storeByte_reg s a b : (storeByte s a b).(reg) = s.(reg). Proof. reflexivity. Qed.
+Lemma storeByte_rget s a b i : rget (storeByte s a b) i = rget s i. Proof. reflexivity. Qed.
+Lemma storeByte_mem s a b : (storeByte s a b).(mem) = (fun x => if x =? a then b mod 256 else s.(mem) x).
+Proof. reflexivity. Qed.
+
+(** ** Arithmetic toolkit (mirror of ult_ofNat/slt_ofNat/ofNat_ne/setWidth8). *)
+
+Lemma wrap_small z : 0 <= z < 2 ^ 64 -> wrap z = z.
+Proof. unfold wrap, w64. apply Z.mod_small. Qed.
+
+(* address arithmetic with no 64-bit wraparound *)
+Lemma wadd_id a b : 0 <= a + b < 2 ^ 64 -> wadd a b = a + b.
+Proof. unfold wadd. apply wrap_small. Qed.
+
+Lemma toS_small x : 0 <= x < 2 ^ 63 -> toS x = x.
+Proof. unfold toS. intros h. destruct (x >=? 2 ^ 63) eqn:E; [lia | reflexivity]. Qed.
+
+(* signed compare = unsigned compare on small (< 2^63) values *)
+Lemma sltb_small a b : 0 <= a < 2 ^ 63 -> 0 <= b < 2 ^ 63 -> sltb a b = (a <? b).
+Proof. intros ha hb. unfold sltb. rewrite (toS_small a ha), (toS_small b hb). reflexivity. Qed.
+
+(** ** runUntil (= Lean runFuel) composition. *)
+
+Lemma runUntil_halt n s : s.(pc) = 0 -> runUntil 0 n s = s.
+Proof. intros h. destruct n; [reflexivity|]. simpl. rewrite h, Z.eqb_refl. reflexivity. Qed.
+
+Lemma runUntil_one s : s.(pc) <> 0 -> runUntil 0 1 s = step s.
+Proof.
+  intros h. simpl. destruct (s.(pc) =? 0) eqn:E; [apply Z.eqb_eq in E; lia | reflexivity].
+Qed.
+
+Lemma runUntil_add a b s : runUntil 0 (a + b) s = runUntil 0 b (runUntil 0 a s).
+Proof.
+  revert b s. induction a as [|k ih]; intros b s; simpl; [reflexivity|].
+  destruct (s.(pc) =? 0) eqn:E.
+  - apply Z.eqb_eq in E. now rewrite (runUntil_halt b s E).
+  - apply ih.
+Qed.
+
 (** ** Well-formedness: input region fits before the output region, etc. *)
 Record WellFormed (inp : list Z) (cap : Z) : Prop := {
   in_fits  : inputAddr + Z.of_nat (length inp) <= outAddr;
