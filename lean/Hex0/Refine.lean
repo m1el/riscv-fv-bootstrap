@@ -77,6 +77,7 @@ theorem fetch_code (s : State) (hcode : CodeLoaded s) (off : Nat)
 
 /-! ## State-projection simp lemmas -/
 
+@[simp] theorem rget_zero (s : State) : s.rget 0 = 0 := rfl
 @[simp] theorem setPc_pc (s : State) (p : Word) : (s.setPc p).pc = p := rfl
 @[simp] theorem setPc_mem (s : State) (p : Word) : (s.setPc p).mem = s.mem := rfl
 @[simp] theorem setPc_rget (s : State) (p : Word) (i : Nat) : (s.setPc p).rget i = s.rget i := rfl
@@ -495,6 +496,111 @@ theorem loop_prefix (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : List
         hs3d, setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg h7,
         hs2d, setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg h28,
         hs1d, setPc_rget]
+
+set_option maxRecDepth 4000 in
+/-- The `beq`-chain stepping for the newline spacing char: from `s4` (offset 24,
+    `t2 = '\n'`), 6 steps (`li;beq` ×3, last taken) reach LOOP, touching only `t3`
+    and `pc`. Demonstrates the per-char dispatch + loop-back pattern. -/
+theorem spacing_tail_nl (s4 : State) (hcode : CodeLoaded s4)
+    (hpc : s4.pc = BitVec.ofNat 64 (Image.coreAddr + 24))
+    (ht2 : s4.rget 7 = BitVec.ofNat 64 10) :
+    (runFuel 0 6 s4).pc = LOOP ∧ (runFuel 0 6 s4).mem = s4.mem ∧
+    (∀ i, i ≠ 28 → (runFuel 0 6 s4).rget i = s4.rget i) := by
+  -- step 1: li t3,35
+  have hu1 : step s4 = (s4.rset 28 (BitVec.ofNat 64 35)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 28)) := by
+    have e : s4.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 28) := by rw [hpc]; decide
+    rw [step_addi s4 24 28 0 0x23#12 hcode (by decide) hpc (by decide),
+        show s4.rget 0 + (0x23#12).signExtend 64 = BitVec.ofNat 64 35 from by rw [rget_zero]; decide, e]
+  let v1 := (s4.rset 28 (BitVec.ofNat 64 35)).setPc (BitVec.ofNat 64 (Image.coreAddr + 28))
+  have hv1 : v1 = (s4.rset 28 (BitVec.ofNat 64 35)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 28)) := rfl
+  rw [← hv1] at hu1
+  have hc1 : CodeLoaded v1 := by intro i hi; rw [hv1]; simp [hcode i hi]
+  have h7v1 : v1.rget 7 = BitVec.ofNat 64 10 := by
+    rw [hv1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+        if_neg (by decide : (7:Nat) ≠ 28)]; exact ht2
+  have h28v1 : v1.rget 28 = BitVec.ofNat 64 35 := by
+    rw [hv1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  -- step 2: beq t2,t3 -- not taken (10 ≠ 35)
+  have hu2 : step v1 = v1.setPc (BitVec.ofNat 64 (Image.coreAddr + 32)) := by
+    have e : v1.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 32) := by simp only [hv1, setPc_pc]; decide
+    rw [step_beq v1 28 7 28 0x0d0#13 hc1 (by decide) rfl (by decide),
+        h7v1, h28v1, if_neg (by decide : (BitVec.ofNat 64 10 : Word) ≠ BitVec.ofNat 64 35), e]
+  let v2 := v1.setPc (BitVec.ofNat 64 (Image.coreAddr + 32))
+  have hv2 : v2 = v1.setPc (BitVec.ofNat 64 (Image.coreAddr + 32)) := rfl
+  rw [← hv2] at hu2
+  have hc2 : CodeLoaded v2 := by intro i hi; rw [hv2]; simp [hc1 i hi]
+  have h7v2 : v2.rget 7 = BitVec.ofNat 64 10 := by rw [hv2, setPc_rget]; exact h7v1
+  -- step 3: li t3,59
+  have hu3 : step v2 = (v2.rset 28 (BitVec.ofNat 64 59)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 36)) := by
+    have e : v2.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 36) := by simp only [hv2, setPc_pc]; decide
+    rw [step_addi v2 32 28 0 0x3b#12 hc2 (by decide) rfl (by decide),
+        show v2.rget 0 + (0x3b#12).signExtend 64 = BitVec.ofNat 64 59 from by rw [rget_zero]; decide, e]
+  let v3 := (v2.rset 28 (BitVec.ofNat 64 59)).setPc (BitVec.ofNat 64 (Image.coreAddr + 36))
+  have hv3 : v3 = (v2.rset 28 (BitVec.ofNat 64 59)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 36)) := rfl
+  rw [← hv3] at hu3
+  have hc3 : CodeLoaded v3 := by intro i hi; rw [hv3]; simp [hc2 i hi]
+  have h7v3 : v3.rget 7 = BitVec.ofNat 64 10 := by
+    rw [hv3, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+        if_neg (by decide : (7:Nat) ≠ 28)]; exact h7v2
+  have h28v3 : v3.rget 28 = BitVec.ofNat 64 59 := by
+    rw [hv3, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  -- step 4: beq -- not taken (10 ≠ 59)
+  have hu4 : step v3 = v3.setPc (BitVec.ofNat 64 (Image.coreAddr + 40)) := by
+    have e : v3.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 40) := by simp only [hv3, setPc_pc]; decide
+    rw [step_beq v3 36 7 28 0x0c8#13 hc3 (by decide) rfl (by decide),
+        h7v3, h28v3, if_neg (by decide : (BitVec.ofNat 64 10 : Word) ≠ BitVec.ofNat 64 59), e]
+  let v4 := v3.setPc (BitVec.ofNat 64 (Image.coreAddr + 40))
+  have hv4 : v4 = v3.setPc (BitVec.ofNat 64 (Image.coreAddr + 40)) := rfl
+  rw [← hv4] at hu4
+  have hc4 : CodeLoaded v4 := by intro i hi; rw [hv4]; simp [hc3 i hi]
+  have h7v4 : v4.rget 7 = BitVec.ofNat 64 10 := by rw [hv4, setPc_rget]; exact h7v3
+  -- step 5: li t3,10
+  have hu5 : step v4 = (v4.rset 28 (BitVec.ofNat 64 10)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 44)) := by
+    have e : v4.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + 44) := by simp only [hv4, setPc_pc]; decide
+    rw [step_addi v4 40 28 0 0x00a#12 hc4 (by decide) rfl (by decide),
+        show v4.rget 0 + (0x00a#12).signExtend 64 = BitVec.ofNat 64 10 from by rw [rget_zero]; decide, e]
+  let v5 := (v4.rset 28 (BitVec.ofNat 64 10)).setPc (BitVec.ofNat 64 (Image.coreAddr + 44))
+  have hv5 : v5 = (v4.rset 28 (BitVec.ofNat 64 10)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + 44)) := rfl
+  rw [← hv5] at hu5
+  have hc5 : CodeLoaded v5 := by intro i hi; rw [hv5]; simp [hc4 i hi]
+  have h7v5 : v5.rget 7 = BitVec.ofNat 64 10 := by
+    rw [hv5, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+        if_neg (by decide : (7:Nat) ≠ 28)]; exact h7v4
+  have h28v5 : v5.rget 28 = BitVec.ofNat 64 10 := by
+    rw [hv5, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  -- step 6: beq -- TAKEN (10 = 10) -> LOOP
+  have hu6 : step v5 = v5.setPc LOOP := by
+    have e : v5.pc + (0x1fdc#13).signExtend 64 = LOOP := by simp only [hv5, setPc_pc]; decide
+    rw [step_beq v5 44 7 28 0x1fdc#13 hc5 (by decide) rfl (by decide),
+        h7v5, h28v5, if_pos rfl, e]
+  -- assemble
+  have hp0 : s4.pc ≠ 0 := by rw [hpc]; decide
+  have hp1 : v1.pc ≠ 0 := by simp only [hv1, setPc_pc]; decide
+  have hp2 : v2.pc ≠ 0 := by simp only [hv2, setPc_pc]; decide
+  have hp3 : v3.pc ≠ 0 := by simp only [hv3, setPc_pc]; decide
+  have hp4 : v4.pc ≠ 0 := by simp only [hv4, setPc_pc]; decide
+  have hp5 : v5.pc ≠ 0 := by simp only [hv5, setPc_pc]; decide
+  have hfinal : runFuel 0 6 s4 = v5.setPc LOOP := by
+    simp only [runFuel]
+    rw [hu1, hu2, hu3, hu4, hu5, hu6, if_neg hp0, if_neg hp1, if_neg hp2, if_neg hp3,
+        if_neg hp4, if_neg hp5]
+  refine ⟨?_, ?_, ?_⟩
+  · simp only [hfinal, setPc_pc]
+  · rw [hfinal]; simp only [setPc_mem, hv5, hv4, hv3, hv2, hv1, rset_mem]
+  · intro i hi
+    rw [hfinal]
+    by_cases h0 : i = 0
+    · simp only [h0, rget_zero]
+    rw [setPc_rget, hv5, setPc_rget, rset_rget _ _ _ _ (by decide) h0,
+        if_neg hi, hv4, setPc_rget, hv3, setPc_rget,
+        rset_rget _ _ _ _ (by decide) h0, if_neg hi, hv2, setPc_rget,
+        hv1, setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg hi]
 
 /-- Rebuild the loop invariant after a spacing token: same `emitted`, suffix
     shortened by one, index bumped. Used by the spacing case of `loop_iteration`. -/
