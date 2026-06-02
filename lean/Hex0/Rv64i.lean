@@ -152,4 +152,15 @@ def step (s : State) : State :=
 partial def runUntil (halt : Word) (s : State) : State :=
   if s.pc = halt then s else runUntil halt (step s)
 
+/-- Structural fuel-based runner: usable in proofs (`decide`/`native_decide`)
+    because it is total. Stops early when `pc = halt`. -/
+def runFuel (halt : Word) : Nat → State → State
+  | 0,     s => s
+  | n + 1, s => if s.pc = halt then s else runFuel halt n (step s)
+
+/-- Steps actually taken before halting (or `fuel` if it never halts). -/
+def stepsToHalt (halt : Word) : Nat → State → Nat
+  | 0,     _ => 0
+  | n + 1, s => if s.pc = halt then 0 else 1 + stepsToHalt halt n (step s)
+
 end Rv64i
