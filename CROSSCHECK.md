@@ -66,7 +66,27 @@ decoder.** Proof structure actually used (≈300 lines):
   contradicts the hypothesis). The SLLI `shamt≥32` gap (§5) does **not** affect T1 —
   it only concerns the reverse direction.
 
-Remaining: **T2** (execute/step simulation) + the transport corollary.
+### ◐ T2 foundation landed (`coq/RvCrossStep.v`, 2026-06-02)
+
+The two instruction-independent foundations of the execute/step simulation are
+**proved, `Admitted`-free**, and in the `make` build:
+
+- **Word/Z arithmetic bridge** — `br_add`/`br_or`/`br_ltu`/`br_lts` (+ `toS_signed`,
+  `wrap64`): every riscv-coq `word 64` op that `ExecuteI` uses computes our
+  corresponding `Z`-mod-2⁶⁴ op (`wadd`/`wor`/`ultb`/`sltb`) under `word.unsigned`.
+- **Fetch bridge** `fetch_combine` — one `run1` instruction fetch (the `combine`
+  of the 4 little-endian bytes `load_bytes 4` reads) equals the 32-bit word our
+  `fetch32` reads, given the riscv memory map agrees with our byte memory on the 4
+  fetch addresses (address arithmetic via bedrock2 `ZnWords`, byte disjointness via
+  `land_lo_hi`/`or_to_plus`).
+- **State-bridge relation** `Rrel` = `RegAgree ∧ MemAgree D ∧ PcAgree` and the
+  fetch well-formedness `WFfetch` (CROSSCHECK.md §3) are defined and type-check
+  against the concrete Minimal `RiscvMachine` record.
+
+Remaining for **T2**: the `run1` `OState` monad reduction (`Bind`/`get`/`put`),
+the 12 per-instruction `exec_*` lemmas (register/memory map bridges, the `sb`
+store via `putmany`, branch targets), `step_agrees` assembling them, and the
+transport corollary `core_refines_riscv`.
 
 ### Lean side (sail-riscv-lean) — deferred, deliberately
 
