@@ -12,7 +12,7 @@ Goal: run hex0 on bare-metal `qemu-system-riscv` **and** have a formal proof
 | 3 | Hand-rolled **executable RV64I** model in **Lean + Coq** (the 12 instr forms `core` uses) | model |
 | 4 | Both models execute the **real binary** and match `coreSpec` (13-input differential battery, all error classes) | testing-grade, cross-validated vs QEMU |
 | 5 | **Certification** theorems: deployed bytes = `coreSpec` on embedded input + battery. Lean via `native_decide`; **Coq via `vm_compute` (kernel-checked)** | **finite / testing-grade** (proved, but covers finitely many inputs) |
-| 6 | **General refinement** scaffold: per-step reduction primitive **proved** in both; loop invariant + `WellFormed` + top-level statement pinned down | **proof-grade, in progress** |
+| 6 | **General refinement** (Lean): reusable engine **proved** — `fetch_code` (generic decode-from-memory), the `step_addi/bgeu/jalr` transition lemmas, state-projection lemmas, and the full **EOF base case** `core_eof` (loop-head → `bgeu`→`li`→`mv`→`ret`, halts Ok with output preserved), all `sorry`-free on the kernel. Only the inductive loop body + `core_refines` remain | **proof-grade, in progress** |
 
 ### The honest epistemics (see also the conversation)
 
