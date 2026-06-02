@@ -1796,6 +1796,94 @@ theorem store_epilogue (s : State) (hcode : CodeLoaded s) (hi lo n cap : Nat)
     simp only [setPc_mem, hv6, rset_mem, hv5, storeByte_mem, hmemv4]
 
 set_option maxRecDepth 4000 in
+/-- The error epilogue (offsets 264/276/288/300/312): `li a0,code; mv a1,t1; ret`
+    halts with `a0 = code`, `a1 = t1`, memory untouched. Generic over the offset
+    and the error code. -/
+theorem halt_epilogue (s : State) (off code n : Nat) (hcode : CodeLoaded s)
+    (hpc : s.pc = BitVec.ofNat 64 (Image.coreAddr + off))
+    (hli : Rv64i.decode (wordAt off) = Rv64i.Instr.addi 10 0 (BitVec.ofNat 12 code))
+    (hmv : Rv64i.decode (wordAt (off + 4)) = Rv64i.Instr.addi 11 6 0#12)
+    (hret : Rv64i.decode (wordAt (off + 8)) = Rv64i.Instr.jalr 0 1 0#12)
+    (hoff : off + 8 + 3 < Image.coreBytes.length)
+    (hcodesx : (BitVec.ofNat 12 code).signExtend 64 = BitVec.ofNat 64 code)
+    (h6 : s.rget 6 = BitVec.ofNat 64 n) (hra : s.rget 1 = 0) :
+    (runFuel 0 3 s).pc = 0 ∧ (runFuel 0 3 s).rget 10 = BitVec.ofNat 64 code ∧
+    (runFuel 0 3 s).rget 11 = BitVec.ofNat 64 n ∧ (runFuel 0 3 s).mem = s.mem := by
+  have hcl : Image.coreBytes.length = 324 := by decide
+  have hb : off + 8 + 3 < 324 := hcl ▸ hoff
+  -- step 1: li a0,code
+  have hu1 : step s = (s.rset 10 (BitVec.ofNat 64 code)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := by
+    have e : s.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := by
+      rw [hpc, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ, Nat.add_assoc]
+    rw [step_addi s off 10 0 (BitVec.ofNat 12 code) hcode (by omega) hpc hli,
+        show s.rget 0 + (BitVec.ofNat 12 code).signExtend 64 = BitVec.ofNat 64 code from by
+          rw [rget_zero, hcodesx]; simp, e]
+  let s1 := (s.rset 10 (BitVec.ofNat 64 code)).setPc (BitVec.ofNat 64 (Image.coreAddr + (off + 4)))
+  have hs1 : s1 = (s.rset 10 (BitVec.ofNat 64 code)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 4))) := rfl
+  rw [← hs1] at hu1
+  have hc1 : CodeLoaded s1 := by intro i hi; rw [hs1]; simp [hcode i hi]
+  have hpc1 : s1.pc = BitVec.ofNat 64 (Image.coreAddr + (off + 4)) := rfl
+  have h6s1 : s1.rget 6 = BitVec.ofNat 64 n := by
+    rw [hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (6:Nat)≠10)]
+    exact h6
+  -- step 2: mv a1,t1
+  have hu2 : step s1 = (s1.rset 11 (BitVec.ofNat 64 n)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 8))) := by
+    have e : s1.pc + 4 = BitVec.ofNat 64 (Image.coreAddr + (off + 8)) := by
+      rw [hpc1, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ]; congr 1
+    rw [step_addi s1 (off+4) 11 6 0#12 hc1 (by omega) hpc1 hmv, h6s1,
+        show ((0#12).signExtend 64 : Word) = 0 from by decide, BitVec.add_zero, e]
+  let s2 := (s1.rset 11 (BitVec.ofNat 64 n)).setPc (BitVec.ofNat 64 (Image.coreAddr + (off + 8)))
+  have hs2 : s2 = (s1.rset 11 (BitVec.ofNat 64 n)).setPc
+      (BitVec.ofNat 64 (Image.coreAddr + (off + 8))) := rfl
+  rw [← hs2] at hu2
+  have hc2 : CodeLoaded s2 := by intro i hi; rw [hs2]; simp [hc1 i hi]
+  have hpc2 : s2.pc = BitVec.ofNat 64 (Image.coreAddr + (off + 8)) := rfl
+  have hra2 : s2.rget 1 = 0 := by
+    rw [hs2, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (1:Nat)≠11),
+        hs1, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (1:Nat)≠10)]
+    exact hra
+  -- step 3: ret
+  have hu3 : step s2 = s2.setPc 0 := by
+    rw [step_jalr s2 (off+8) 0 1 0#12 hc2 (by omega) hpc2 hret, rset_zero]
+    congr 1; rw [hra2]; decide
+  have hp0 : s.pc ≠ 0 := by rw [hpc]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega)
+    (by decide) (by simp only [Image.coreAddr]; omega)
+  have hp1 : s1.pc ≠ 0 := by rw [hpc1]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega)
+    (by decide) (by simp only [Image.coreAddr]; omega)
+  have hp2 : s2.pc ≠ 0 := by rw [hpc2]; exact ofNat_ne _ 0 (by simp only [Image.coreAddr]; omega)
+    (by decide) (by simp only [Image.coreAddr]; omega)
+  have hfinal : runFuel 0 3 s = s2.setPc 0 := by
+    simp only [runFuel]; rw [hu1, hu2, hu3, if_neg hp0, if_neg hp1, if_neg hp2]
+  refine ⟨by rw [hfinal]; rfl, ?_, ?_, ?_⟩
+  · rw [hfinal, setPc_rget, hs2, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+        if_neg (by decide : (10:Nat)≠11), hs1, setPc_rget,
+        rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  · rw [hfinal, setPc_rget, hs2, setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]; simp
+  · rw [hfinal]; simp only [setPc_mem, hs2, hs1, rset_mem]
+
+/-- Build a `Result` for the non-truncating terminal statuses (Ok/Split/Trailing/
+    Unknown): the machine halted with `a0 = statusCode st`, `a1 = |emitted|`, and
+    the output region holds `emitted`, while `decode inp = (emitted, st)` and
+    `|emitted| ≤ cap` (so `coreSpec` does not truncate). -/
+theorem error_result (s : State) (inp : List Nat) (cap : Nat) (emitted : List Nat)
+    (st : Hex0.Status) (hp : s.pc = 0)
+    (ha0 : s.rget 10 = BitVec.ofNat 64 (Hex0.statusCode st))
+    (ha1 : s.rget 11 = BitVec.ofNat 64 emitted.length)
+    (hmem : ∀ j, j < emitted.length →
+      s.mem (BitVec.ofNat 64 (Image.outAddr + j)) = BitVec.ofNat 8 (emitted.getD j 0))
+    (hdec : Hex0.decode inp = (emitted, st)) (hle : emitted.length ≤ cap) :
+    Result s inp cap := by
+  have hcs : Hex0.coreSpec inp cap = (Hex0.statusCode st, emitted, emitted.length) := by
+    simp only [Hex0.coreSpec, hdec]; rw [if_neg (Nat.not_lt.mpr hle)]
+  refine ⟨hp, ?_, ?_, ?_⟩
+  · rw [ha0, hcs]
+  · rw [ha1, hcs]
+  · intro j hj; rw [hcs] at hj ⊢; exact hmem j hj
+
+set_option maxRecDepth 4000 in
 /-- A COMPLETE main-loop iteration for a byte token: high nibble `c`, low nibble
     `l` (`hi`/`lo`), with output capacity to spare. Chains `loop_prefix` (read
     `c`) → `high_beq_ft` → `high_parse` → `read_prefix` (read `l`) → `low_beq_ft`
