@@ -983,6 +983,140 @@ Proof.
   - exact hle.
 Qed.
 
+(** ** Signed-branch [li;blt]/[li;bge] blocks for the nibble-parse chains
+    (mirror of Lean li_blt_nt/li_bge_nt/li_bge_t/li_blt_t).  Operands are
+    bytes (< 256 < 2^63) so signed/unsigned compare agree ([sltb_small]). *)
+
+(* [li t3,K; blt t2,t3] with c >= K: blt NOT taken, 2 steps to off+8. *)
+Lemma li_blt_nt s off K c imm :
+  CodeLoaded s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length coreBytes) ->
+  s.(pc) = coreAddr + off -> rget s 7 = c ->
+  decode (wordAt off) = Iaddi 28 0 K -> decode (wordAt (off + 4)) = Iblt 7 28 imm ->
+  0 <= K < 2 ^ 63 -> 0 <= c < 2 ^ 63 -> K <= c ->
+  runUntil 0 2 s = setPc (rset s 28 K) (coreAddr + (off + 8)).
+Proof.
+  intros hc ho hb hpc h7 hli hblt hK hcc hge. rewrite coreBytes_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length coreBytes)) by (rewrite coreBytes_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (coreAddr + (off + 4))).
+  { rewrite (step_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero, (wadd_id 0 K ltac:(lia)),
+      Z.add_0_l, hpc, (wadd_id (coreAddr + off) 4 ltac:(unfold coreAddr; lia)). f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded s1) by
+    (apply (CodeLoaded_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by
+    (unfold s1; rewrite (li_block_frame s K (coreAddr + (off + 4)) 7 ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by
+    (unfold s1; rewrite setPc_rget, (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)), Z.eqb_refl; reflexivity).
+  assert (hslt : sltb (rget s1 7) (rget s1 28) = false).
+  { rewrite h7s1, h28s1, (sltb_small c K ltac:(lia) ltac:(lia)).
+    destruct (c <? K) eqn:E; [apply Z.ltb_lt in E; lia | reflexivity]. }
+  assert (hu2 : step s1 = setPc s1 (coreAddr + (off + 8))).
+  { rewrite (step_blt s1 (off + 4) 7 28 imm hc1 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc1 hblt),
+      hslt. cbn match. rewrite hpc1, (wadd_id (coreAddr + (off + 4)) 4 ltac:(unfold coreAddr; lia)).
+    f_equal. lia. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; apply coreAddr_pos; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; apply coreAddr_pos; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2. unfold s1. reflexivity.
+Qed.
+
+(* [li t3,K; bge t2,t3] with c < K: bge NOT taken, 2 steps to off+8. *)
+Lemma li_bge_nt s off K c imm :
+  CodeLoaded s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length coreBytes) ->
+  s.(pc) = coreAddr + off -> rget s 7 = c ->
+  decode (wordAt off) = Iaddi 28 0 K -> decode (wordAt (off + 4)) = Ibge 7 28 imm ->
+  0 <= K < 2 ^ 63 -> 0 <= c < 2 ^ 63 -> c < K ->
+  runUntil 0 2 s = setPc (rset s 28 K) (coreAddr + (off + 8)).
+Proof.
+  intros hc ho hb hpc h7 hli hbge hK hcc hlt. rewrite coreBytes_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length coreBytes)) by (rewrite coreBytes_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (coreAddr + (off + 4))).
+  { rewrite (step_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero, (wadd_id 0 K ltac:(lia)),
+      Z.add_0_l, hpc, (wadd_id (coreAddr + off) 4 ltac:(unfold coreAddr; lia)). f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded s1) by
+    (apply (CodeLoaded_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by
+    (unfold s1; rewrite (li_block_frame s K (coreAddr + (off + 4)) 7 ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by
+    (unfold s1; rewrite setPc_rget, (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)), Z.eqb_refl; reflexivity).
+  assert (hslt : sltb (rget s1 7) (rget s1 28) = true).
+  { rewrite h7s1, h28s1, (sltb_small c K ltac:(lia) ltac:(lia)). apply Z.ltb_lt. lia. }
+  assert (hu2 : step s1 = setPc s1 (coreAddr + (off + 8))).
+  { rewrite (step_bge s1 (off + 4) 7 28 imm hc1 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc1 hbge),
+      hslt. cbn match. rewrite hpc1, (wadd_id (coreAddr + (off + 4)) 4 ltac:(unfold coreAddr; lia)).
+    f_equal. lia. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; apply coreAddr_pos; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; apply coreAddr_pos; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2. unfold s1. reflexivity.
+Qed.
+
+(* [li t3,K; bge t2,t3] with c >= K: bge IS taken to [target]. *)
+Lemma li_bge_t s off K c imm target :
+  CodeLoaded s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length coreBytes) ->
+  s.(pc) = coreAddr + off -> rget s 7 = c ->
+  decode (wordAt off) = Iaddi 28 0 K -> decode (wordAt (off + 4)) = Ibge 7 28 imm ->
+  0 <= K < 2 ^ 63 -> 0 <= c < 2 ^ 63 -> K <= c ->
+  wadd (coreAddr + (off + 4)) imm = target ->
+  runUntil 0 2 s = setPc (rset s 28 K) target.
+Proof.
+  intros hc ho hb hpc h7 hli hbge hK hcc hge htgt. rewrite coreBytes_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length coreBytes)) by (rewrite coreBytes_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (coreAddr + (off + 4))).
+  { rewrite (step_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero, (wadd_id 0 K ltac:(lia)),
+      Z.add_0_l, hpc, (wadd_id (coreAddr + off) 4 ltac:(unfold coreAddr; lia)). f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded s1) by
+    (apply (CodeLoaded_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by
+    (unfold s1; rewrite (li_block_frame s K (coreAddr + (off + 4)) 7 ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by
+    (unfold s1; rewrite setPc_rget, (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)), Z.eqb_refl; reflexivity).
+  assert (hslt : sltb (rget s1 7) (rget s1 28) = false).
+  { rewrite h7s1, h28s1, (sltb_small c K ltac:(lia) ltac:(lia)).
+    destruct (c <? K) eqn:E; [apply Z.ltb_lt in E; lia | reflexivity]. }
+  assert (hu2 : step s1 = setPc s1 target).
+  { rewrite (step_bge s1 (off + 4) 7 28 imm hc1 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc1 hbge),
+      hslt. cbn match. rewrite hpc1, htgt. reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; apply coreAddr_pos; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; apply coreAddr_pos; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2. unfold s1. reflexivity.
+Qed.
+
+(* [li t3,K; blt t2,t3] with c < K: blt IS taken to [target]. *)
+Lemma li_blt_t s off K c imm target :
+  CodeLoaded s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length coreBytes) ->
+  s.(pc) = coreAddr + off -> rget s 7 = c ->
+  decode (wordAt off) = Iaddi 28 0 K -> decode (wordAt (off + 4)) = Iblt 7 28 imm ->
+  0 <= K < 2 ^ 63 -> 0 <= c < 2 ^ 63 -> c < K ->
+  wadd (coreAddr + (off + 4)) imm = target ->
+  runUntil 0 2 s = setPc (rset s 28 K) target.
+Proof.
+  intros hc ho hb hpc h7 hli hblt hK hcc hlt htgt. rewrite coreBytes_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length coreBytes)) by (rewrite coreBytes_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (coreAddr + (off + 4))).
+  { rewrite (step_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero, (wadd_id 0 K ltac:(lia)),
+      Z.add_0_l, hpc, (wadd_id (coreAddr + off) 4 ltac:(unfold coreAddr; lia)). f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded s1) by
+    (apply (CodeLoaded_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by
+    (unfold s1; rewrite (li_block_frame s K (coreAddr + (off + 4)) 7 ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by
+    (unfold s1; rewrite setPc_rget, (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)), Z.eqb_refl; reflexivity).
+  assert (hslt : sltb (rget s1 7) (rget s1 28) = true).
+  { rewrite h7s1, h28s1, (sltb_small c K ltac:(lia) ltac:(lia)). apply Z.ltb_lt. lia. }
+  assert (hu2 : step s1 = setPc s1 target).
+  { rewrite (step_blt s1 (off + 4) 7 28 imm hc1 ltac:(lia) ltac:(rewrite coreBytes_len; lia) hpc1 hblt),
+      hslt. cbn match. rewrite hpc1, htgt. reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; apply coreAddr_pos; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; apply coreAddr_pos; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2. unfold s1. reflexivity.
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
