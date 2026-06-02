@@ -3149,7 +3149,37 @@ Theorem loop_iteration : forall inp cap rest emitted s,
         (k <= 50 * (length rest - length rest'))%nat /\
         LoopInv inp cap (runUntil 0 k s) rest' emitted')
     \/ ((k <= 50 * length rest)%nat /\ Result (runUntil 0 k s) inp cap).
-Admitted.
+Proof.
+  intros inp cap rest emitted s hne inv.
+  destruct rest as [|c rest'']; [exfalso; apply hne; reflexivity|].
+  destruct (isComment (Z.to_nat c)) eqn:Hcm.
+  - exact (loop_comment inp cap c rest'' emitted s Hcm inv).
+  - destruct (isSpace (Z.to_nat c)) eqn:Hsp.
+    + destruct (loop_spacing inp cap c rest'' emitted s Hsp inv) as [k [Hk inv']].
+      exists k. left. exists rest''. exists emitted.
+      split; [simpl length; lia| split; [simpl length; lia| exact inv']].
+    + destruct (nibble (Z.to_nat c)) as [hi|] eqn:Hn.
+      * destruct rest'' as [|l rest3].
+        -- destruct (loop_trailing inp cap c hi emitted s Hcm Hsp Hn inv) as [k [Hk Hres]].
+           exists k. right. split; [exact Hk| exact Hres].
+        -- destruct (isLowStop (Z.to_nat l)) eqn:Hls.
+           ++ destruct (loop_split inp cap c hi l rest3 emitted s Hcm Hsp Hn Hls inv) as [k [Hk Hres]].
+              exists k. right. split; [exact Hk| exact Hres].
+           ++ destruct (nibble (Z.to_nat l)) as [lo|] eqn:Hnl.
+              ** destruct (Z_lt_dec (Z.of_nat (length emitted)) cap) as [Hcap|Hcap].
+                 --- destruct (loop_byte inp cap c hi l lo rest3 emitted s Hcm Hsp Hn Hls Hnl Hcap inv)
+                       as [k [Hk inv']].
+                     exists k. left. exists rest3. exists (emitted ++ (hi * 16 + lo)%nat :: nil).
+                     split; [simpl length; lia| split; [exact Hk| exact inv']].
+                 --- destruct (loop_short inp cap c hi l lo rest3 emitted s Hcm Hsp Hn Hnl
+                                 ltac:(lia) inv) as [k [Hk Hres]].
+                     exists k. right. split; [exact Hk| exact Hres].
+              ** destruct (loop_unknown_low inp cap c hi l rest3 emitted s Hcm Hsp Hn Hls Hnl inv)
+                   as [k [Hk Hres]].
+                 exists k. right. split; [exact Hk| exact Hres].
+      * destruct (loop_unknown_high inp cap c rest'' emitted s Hcm Hsp Hn inv) as [k [Hk Hres]].
+        exists k. right. split; [exact Hk| exact Hres].
+Qed.
 
 (* The induction (PROVED): from any LoopInv state the machine halts correctly
    within [50 * |rest| + 4] steps. The fuel-bound (point 1) made fully explicit. *)
