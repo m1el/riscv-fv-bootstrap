@@ -636,6 +636,28 @@ theorem spacing_loopinv (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : 
   · intro j hj; rw [hmem']; exact inv.out_mem j hj
   · rw [inv.spec_link, decodeS_spacing c rest' hsc hss]
 
+/-- A COMPLETE main-loop iteration for the newline spacing token: combines
+    `loop_prefix` (read the char) + `spacing_tail_nl` (dispatch to loop) +
+    `spacing_loopinv` (rebuild the invariant). From `LoopInv .. (10 :: rest')`,
+    the machine reaches a `LoopInv .. rest'` state -- one full step proved. -/
+theorem loop_spacing_nl (inp : List Nat) (cap : Nat) (rest' emitted : List Nat) (s : State)
+    (inv : LoopInv inp cap s (10 :: rest') emitted) :
+    ∃ k, LoopInv inp cap (runFuel 0 k s) rest' emitted := by
+  obtain ⟨s4, hrun4, hpc4, ht2, ht0, hmem4, hcode4, hother4⟩ :=
+    loop_prefix inp cap 10 rest' emitted s inv
+  obtain ⟨htpc, htmem, htother⟩ := spacing_tail_nl s4 hcode4 hpc4 ht2
+  refine ⟨4 + 6, ?_⟩
+  rw [runFuel_add, hrun4]
+  exact spacing_loopinv inp cap 10 rest' emitted s (runFuel 0 6 s4) inv (by decide) (by decide)
+    htpc (by rw [htmem, hmem4])
+    (by rw [htother 5 (by decide), ht0])
+    (by rw [htother 1 (by decide), hother4 1 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 6 (by decide), hother4 6 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 10 (by decide), hother4 10 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 11 (by decide), hother4 11 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 12 (by decide), hother4 12 (by decide) (by decide) (by decide) (by decide)])
+    (by rw [htother 13 (by decide), hother4 13 (by decide) (by decide) (by decide) (by decide)])
+
 /-- One main-loop iteration (the machine side of step 3). From a non-empty
     remaining input, the machine either halts correctly (error / output-short)
     or returns to the loop head with strictly less remaining input and the
