@@ -637,6 +637,215 @@ Proof.
     unfold s1. rewrite setPc_rget. reflexivity.
 Qed.
 
+(* The three spacing characters, as Z (mirror of the [isSpace] disjunction). *)
+Lemma isSpace_cases c : 0 <= c -> isSpace (Z.to_nat c) = true ->
+  c = 10 \/ c = 32 \/ c = 95.
+Proof.
+  intros h0 hs. unfold isSpace, c_nl, c_sp, c_us in hs.
+  rewrite !orb_true_iff, !Nat.eqb_eq in hs.
+  assert (Hid : c = Z.of_nat (Z.to_nat c)) by (rewrite Z2Nat.id; [reflexivity| exact h0]).
+  destruct hs as [[H|H]|H]; [left|right; left|right; right]; rewrite Hid, H; reflexivity.
+Qed.
+
+(* The head char of a non-empty suffix is an input byte. *)
+Lemma loopinv_head inp cap c rest' emitted s :
+  LoopInv inp cap s (c :: rest') emitted -> In c inp /\ 0 <= c < 256.
+Proof.
+  intros HI. destruct HI as [_ _ _ _ _ _ _ _ _ Hbytes _ _ _ Hsuf _ _ _ _].
+  assert (Hin : In c inp).
+  { rewrite <- (firstn_skipn (length inp - length (c :: rest')) inp).
+    apply in_or_app. right. rewrite Hsuf. left; reflexivity. }
+  split; [exact Hin| apply Hbytes; exact Hin].
+Qed.
+
+(* The spacing beq-chain (offsets 24..): from [s4] at off 24 with [t2 = c] a
+   spacing char, some number of steps reach LOOP, touching only [t3].  Mirror of
+   Lean [spacing_tail]. *)
+Lemma spacing_tail s4 c :
+  CodeLoaded s4 -> s4.(pc) = coreAddr + 24 -> rget s4 7 = c ->
+  0 <= c -> isSpace (Z.to_nat c) = true ->
+  exists k, (runUntil 0 k s4).(pc) = coreAddr + 8 /\
+            (runUntil 0 k s4).(mem) = s4.(mem) /\
+            (forall i, i <> 28 -> rget (runUntil 0 k s4) i = rget s4 i).
+Proof.
+  intros hcode hpc ht2 h0 hss.
+  destruct (isSpace_cases c h0 hss) as [hc|[hc|hc]].
+  all: assert (hne35 : c <> 35) by lia.
+  all: assert (hne59 : c <> 59) by lia.
+  (* block at off 24 (K=35), not taken *)
+  all: pose proof (li_beq_ne s4 24 35 c 208 hcode ltac:(lia)
+         ltac:(rewrite coreBytes_len; lia) hpc ht2 ltac:(vm_compute; reflexivity)
+         ltac:(vm_compute; reflexivity) ltac:(lia) hne35) as hb1.
+  all: set (s_b := setPc (rset s4 28 35) (coreAddr + (24 + 8))) in *.
+  all: assert (hcb : CodeLoaded s_b) by
+         (apply (CodeLoaded_eqmem s4); [unfold s_b; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  all: assert (hpcb : s_b.(pc) = coreAddr + 32) by (unfold s_b; reflexivity).
+  all: assert (h7b : rget s_b 7 = c) by
+         (unfold s_b; rewrite (li_block_frame s4 35 (coreAddr + (24 + 8)) 7 ltac:(lia)); exact ht2).
+  (* block at off 32 (K=59), not taken *)
+  all: pose proof (li_beq_ne s_b 32 59 c 200 hcb ltac:(lia)
+         ltac:(rewrite coreBytes_len; lia) hpcb h7b ltac:(vm_compute; reflexivity)
+         ltac:(vm_compute; reflexivity) ltac:(lia) hne59) as hb2.
+  all: set (s_c := setPc (rset s_b 28 59) (coreAddr + (32 + 8))) in *.
+  all: assert (hcc : CodeLoaded s_c) by
+         (apply (CodeLoaded_eqmem s4); [unfold s_c; rewrite setPc_mem, rset_mem;
+            unfold s_b; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  all: assert (hpcc : s_c.(pc) = coreAddr + 40) by (unfold s_c; reflexivity).
+  all: assert (h7c : rget s_c 7 = c) by
+         (unfold s_c; rewrite (li_block_frame s_b 59 (coreAddr + (32 + 8)) 7 ltac:(lia)); exact h7b).
+  - (* c = 10: taken at off 40 *)
+    pose proof (li_beq_eq s_c 40 10 c (-36) (coreAddr + 8) hcc ltac:(lia)
+      ltac:(rewrite coreBytes_len; lia) hpcc h7c ltac:(vm_compute; reflexivity)
+      ltac:(vm_compute; reflexivity) ltac:(lia) hc
+      ltac:(rewrite (wadd_id (coreAddr + (40 + 4)) (-36) ltac:(unfold coreAddr; lia)); lia)) as hb3.
+    assert (hfin : runUntil 0 (2 + (2 + 2)) s4 = setPc (rset s_c 28 10) (coreAddr + 8))
+      by (rewrite runUntil_add, hb1, runUntil_add, hb2, hb3; reflexivity).
+    exists (2 + (2 + 2))%nat. rewrite hfin. repeat apply conj.
+    + apply setPc_pc.
+    + rewrite setPc_mem, rset_mem. unfold s_c. rewrite setPc_mem, rset_mem.
+      unfold s_b. rewrite setPc_mem, rset_mem. reflexivity.
+    + intros i hi. rewrite (li_block_frame s_c 10 (coreAddr + 8) i hi).
+      unfold s_c. rewrite (li_block_frame s_b 59 (coreAddr + (32 + 8)) i hi).
+      unfold s_b. rewrite (li_block_frame s4 35 (coreAddr + (24 + 8)) i hi). reflexivity.
+  - (* c = 32: not taken at 40, taken at 48 *)
+    pose proof (li_beq_ne s_c 40 10 c (-36) hcc ltac:(lia)
+      ltac:(rewrite coreBytes_len; lia) hpcc h7c ltac:(vm_compute; reflexivity)
+      ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia)) as hb3.
+    set (s_d := setPc (rset s_c 28 10) (coreAddr + (40 + 8))) in *.
+    assert (hcd : CodeLoaded s_d) by
+      (apply (CodeLoaded_eqmem s4); [unfold s_d; rewrite setPc_mem, rset_mem;
+         unfold s_c; rewrite setPc_mem, rset_mem; unfold s_b; rewrite setPc_mem, rset_mem;
+         reflexivity| exact hcode]).
+    assert (hpcd : s_d.(pc) = coreAddr + 48) by (unfold s_d; reflexivity).
+    assert (h7d : rget s_d 7 = c) by
+      (unfold s_d; rewrite (li_block_frame s_c 10 (coreAddr + (40 + 8)) 7 ltac:(lia)); exact h7c).
+    pose proof (li_beq_eq s_d 48 32 c (-44) (coreAddr + 8) hcd ltac:(lia)
+      ltac:(rewrite coreBytes_len; lia) hpcd h7d ltac:(vm_compute; reflexivity)
+      ltac:(vm_compute; reflexivity) ltac:(lia) hc
+      ltac:(rewrite (wadd_id (coreAddr + (48 + 4)) (-44) ltac:(unfold coreAddr; lia)); lia)) as hb4.
+    assert (hfin : runUntil 0 (2 + (2 + (2 + 2))) s4 = setPc (rset s_d 28 32) (coreAddr + 8))
+      by (rewrite runUntil_add, hb1, runUntil_add, hb2, runUntil_add, hb3, hb4; reflexivity).
+    exists (2 + (2 + (2 + 2)))%nat. rewrite hfin. repeat apply conj.
+    + apply setPc_pc.
+    + rewrite setPc_mem, rset_mem. unfold s_d. rewrite setPc_mem, rset_mem.
+      unfold s_c. rewrite setPc_mem, rset_mem. unfold s_b. rewrite setPc_mem, rset_mem. reflexivity.
+    + intros i hi. rewrite (li_block_frame s_d 32 (coreAddr + 8) i hi).
+      unfold s_d. rewrite (li_block_frame s_c 10 (coreAddr + (40 + 8)) i hi).
+      unfold s_c. rewrite (li_block_frame s_b 59 (coreAddr + (32 + 8)) i hi).
+      unfold s_b. rewrite (li_block_frame s4 35 (coreAddr + (24 + 8)) i hi). reflexivity.
+  - (* c = 95: not taken at 40 and 48, taken at 56 *)
+    pose proof (li_beq_ne s_c 40 10 c (-36) hcc ltac:(lia)
+      ltac:(rewrite coreBytes_len; lia) hpcc h7c ltac:(vm_compute; reflexivity)
+      ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia)) as hb3.
+    set (s_d := setPc (rset s_c 28 10) (coreAddr + (40 + 8))) in *.
+    assert (hcd : CodeLoaded s_d) by
+      (apply (CodeLoaded_eqmem s4); [unfold s_d; rewrite setPc_mem, rset_mem;
+         unfold s_c; rewrite setPc_mem, rset_mem; unfold s_b; rewrite setPc_mem, rset_mem;
+         reflexivity| exact hcode]).
+    assert (hpcd : s_d.(pc) = coreAddr + 48) by (unfold s_d; reflexivity).
+    assert (h7d : rget s_d 7 = c) by
+      (unfold s_d; rewrite (li_block_frame s_c 10 (coreAddr + (40 + 8)) 7 ltac:(lia)); exact h7c).
+    pose proof (li_beq_ne s_d 48 32 c (-44) hcd ltac:(lia)
+      ltac:(rewrite coreBytes_len; lia) hpcd h7d ltac:(vm_compute; reflexivity)
+      ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia)) as hb4.
+    set (s_e := setPc (rset s_d 28 32) (coreAddr + (48 + 8))) in *.
+    assert (hce : CodeLoaded s_e) by
+      (apply (CodeLoaded_eqmem s4); [unfold s_e; rewrite setPc_mem, rset_mem;
+         unfold s_d; rewrite setPc_mem, rset_mem; unfold s_c; rewrite setPc_mem, rset_mem;
+         unfold s_b; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+    assert (hpce : s_e.(pc) = coreAddr + 56) by (unfold s_e; reflexivity).
+    assert (h7e : rget s_e 7 = c) by
+      (unfold s_e; rewrite (li_block_frame s_d 32 (coreAddr + (48 + 8)) 7 ltac:(lia)); exact h7d).
+    pose proof (li_beq_eq s_e 56 95 c (-52) (coreAddr + 8) hce ltac:(lia)
+      ltac:(rewrite coreBytes_len; lia) hpce h7e ltac:(vm_compute; reflexivity)
+      ltac:(vm_compute; reflexivity) ltac:(lia) hc
+      ltac:(rewrite (wadd_id (coreAddr + (56 + 4)) (-52) ltac:(unfold coreAddr; lia)); lia)) as hb5.
+    assert (hfin : runUntil 0 (2 + (2 + (2 + (2 + 2)))) s4 = setPc (rset s_e 28 95) (coreAddr + 8))
+      by (rewrite runUntil_add, hb1, runUntil_add, hb2, runUntil_add, hb3, runUntil_add, hb4, hb5;
+          reflexivity).
+    exists (2 + (2 + (2 + (2 + 2))))%nat. rewrite hfin. repeat apply conj.
+    + apply setPc_pc.
+    + rewrite setPc_mem, rset_mem. unfold s_e. rewrite setPc_mem, rset_mem.
+      unfold s_d. rewrite setPc_mem, rset_mem. unfold s_c. rewrite setPc_mem, rset_mem.
+      unfold s_b. rewrite setPc_mem, rset_mem. reflexivity.
+    + intros i hi. rewrite (li_block_frame s_e 95 (coreAddr + 8) i hi).
+      unfold s_e. rewrite (li_block_frame s_d 32 (coreAddr + (48 + 8)) i hi).
+      unfold s_d. rewrite (li_block_frame s_c 10 (coreAddr + (40 + 8)) i hi).
+      unfold s_c. rewrite (li_block_frame s_b 59 (coreAddr + (32 + 8)) i hi).
+      unfold s_b. rewrite (li_block_frame s4 35 (coreAddr + (24 + 8)) i hi). reflexivity.
+Qed.
+
+(* Rebuild the loop invariant after a spacing token: same [emitted], suffix
+   shortened by one, index bumped.  Mirror of Lean [spacing_loopinv]. *)
+Lemma spacing_loopinv inp cap c rest' emitted s s' :
+  LoopInv inp cap s (c :: rest') emitted ->
+  isComment (Z.to_nat c) = false -> isSpace (Z.to_nat c) = true ->
+  s'.(pc) = coreAddr + 8 -> s'.(mem) = s.(mem) ->
+  rget s' 5 = rget s 5 + 1 ->
+  rget s' 1 = rget s 1 -> rget s' 6 = rget s 6 ->
+  rget s' 10 = rget s 10 -> rget s' 11 = rget s 11 ->
+  rget s' 12 = rget s 12 -> rget s' 13 = rget s 13 ->
+  LoopInv inp cap s' rest' emitted.
+Proof.
+  intros HI hsc hss hpc' hmem' h5 hp1 hp6 hp10 hp11 hp12 hp13.
+  destruct HI as [Hpc Hcode Ha0 Ha1 Ha2 Ha3 Hra Hinmem Hinlt Hbytes Hinfits Houtlt
+                  Hidx Hsuf Houtidx Hemitle Houtmem Hspec].
+  assert (hlen1 : Z.of_nat (length (c :: rest')) = Z.of_nat (length rest') + 1)
+    by (simpl length; lia).
+  assert (hge : (length (c :: rest') <= length inp)%nat).
+  { pose proof (f_equal (@length Z) Hsuf) as Hl. rewrite length_skipn in Hl. lia. }
+  refine {| li_at_loop := hpc'; li_code := _; li_a0 := _; li_a1 := _; li_a2 := _;
+            li_a3 := _; li_ra := _; li_in_mem := _; li_in_lt := Hinlt;
+            li_bytes := Hbytes; li_in_fits := Hinfits; li_out_lt := Houtlt;
+            li_idx := _; li_suffix := _; li_outidx := _; li_emit_le := Hemitle;
+            li_out_mem := _; li_spec := _ |}.
+  - apply (CodeLoaded_eqmem s); [exact hmem'| exact Hcode].
+  - rewrite hp10; exact Ha0.
+  - rewrite hp11; exact Ha1.
+  - rewrite hp12; exact Ha2.
+  - rewrite hp13; exact Ha3.
+  - rewrite hp1; exact Hra.
+  - intros j hj. rewrite hmem'. exact (Hinmem j hj).
+  - rewrite h5, Hidx. lia.
+  - assert (Hk1 : (length inp - length rest')%nat = S (length inp - length (c :: rest')))
+      by (simpl length; lia).
+    rewrite Hk1, <- Nat.add_1_l, <- (skipn_skipn 1 (length inp - length (c :: rest')) inp),
+            Hsuf. reflexivity.
+  - rewrite hp6; exact Houtidx.
+  - intros j hj. rewrite hmem'. exact (Houtmem j hj).
+  - rewrite Hspec. change (zin (c :: rest')) with (Z.to_nat c :: zin rest').
+    rewrite (decodeS_spacing (Z.to_nat c) (zin rest') hsc hss). reflexivity.
+Qed.
+
+(* A COMPLETE main-loop iteration for any spacing token: loop_prefix (read the
+   char) + spacing_tail (dispatch to LOOP) + spacing_loopinv (rebuild).  Mirror
+   of Lean [loop_spacing]. *)
+Lemma loop_spacing inp cap c rest' emitted s :
+  isSpace (Z.to_nat c) = true ->
+  LoopInv inp cap s (c :: rest') emitted ->
+  exists k, LoopInv inp cap (runUntil 0 k s) rest' emitted.
+Proof.
+  intros hss inv.
+  destruct (loopinv_head inp cap c rest' emitted s inv) as [Hin [Hc0 _]].
+  assert (hsc : isComment (Z.to_nat c) = false)
+    by (destruct (isSpace_cases c Hc0 hss) as [H|[H|H]]; subst c; reflexivity).
+  destruct (loop_prefix inp cap c rest' emitted s inv)
+    as [hpc4 [ht2 [ht0 [hmem4 [hcode4 hother4]]]]].
+  destruct (spacing_tail (runUntil 0 4 s) c hcode4 hpc4 ht2 Hc0 hss)
+    as [k [htpc [htmem htother]]].
+  exists (4 + k)%nat. rewrite runUntil_add.
+  apply (spacing_loopinv inp cap c rest' emitted s (runUntil 0 k (runUntil 0 4 s)) inv hsc hss).
+  - exact htpc.
+  - rewrite htmem; exact hmem4.
+  - rewrite (htother 5 ltac:(lia)); exact ht0.
+  - rewrite (htother 1 ltac:(lia)); exact (hother4 1 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)).
+  - rewrite (htother 6 ltac:(lia)); exact (hother4 6 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)).
+  - rewrite (htother 10 ltac:(lia)); exact (hother4 10 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)).
+  - rewrite (htother 11 ltac:(lia)); exact (hother4 11 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)).
+  - rewrite (htother 12 ltac:(lia)); exact (hother4 12 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)).
+  - rewrite (htother 13 ltac:(lia)); exact (hother4 13 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)).
+Qed.
+
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
    halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
