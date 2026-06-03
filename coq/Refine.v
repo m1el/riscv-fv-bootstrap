@@ -2605,7 +2605,7 @@ Proof.
     rewrite (decodeS_byte (Z.to_nat c) (Z.to_nat l) (zin rest'') hi lo hsc hss hnh hlls hnl).
     reflexivity. }
   assert (hbslen : (Z.to_nat cap < length bs)%nat) by
-    (unfold bs; rewrite app_length; simpl; lia).
+    (unfold bs; rewrite length_app; simpl; lia).
   assert (htake : firstn (Z.to_nat cap) bs = emitted).
   { rewrite <- heq. unfold bs. rewrite firstn_app, Nat.sub_diag, firstn_all. simpl firstn.
     rewrite app_nil_r. reflexivity. }
@@ -2703,9 +2703,9 @@ Proof.
   - replace (length inp - length rest'')%nat with (2 + (length inp - length (c :: l :: rest'')))%nat
       by (simpl length in hge2 |- *; lia).
     rewrite <- (skipn_skipn 2 (length inp - length (c :: l :: rest'')) inp), Hsuf. reflexivity.
-  - rewrite H6SF, app_length. simpl length. reflexivity.
-  - rewrite app_length. simpl length. lia.
-  - intros j hj. rewrite app_length in hj. simpl length in hj. rewrite HmemSF.
+  - rewrite H6SF, length_app. simpl length. reflexivity.
+  - rewrite length_app. simpl length. lia.
+  - intros j hj. rewrite length_app in hj. simpl length in hj. rewrite HmemSF.
     destruct (Nat.eq_dec j (length emitted)) as [Heq|Hne].
     + subst j. replace ((outAddr + Z.of_nat (length emitted)) =? (outAddr + Z.of_nat (length emitted)))
         with true by (symmetry; apply Z.eqb_eq; reflexivity).
