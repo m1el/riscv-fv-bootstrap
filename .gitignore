@@ -40,3 +40,4 @@ elan-init.sh
 *.output
 *.log
 lean-toolchain-install.log
+sessions/openrouter_models.json
