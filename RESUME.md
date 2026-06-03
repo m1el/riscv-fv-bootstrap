@@ -1,223 +1,192 @@
-# RESUME — session handoff for closing the last `sorry`
+# RESUME — handoff for task #7 (ISA cross-check vs `riscv-coq`)
 
-Read this together with `STATUS.md` (high-level state) and `TCB.md` (trusted base).
-This file is the **technical** handoff: environment gotchas, the proof
-architecture as built, the exact remaining work, and the recipes that work.
+Read with `STATUS.md` (state), `CROSSCHECK.md` (the full task-#7 design + per-instruction
+mapping), `TCB.md` (trust boundary). This file is the **technical** handoff: the
+environment, the gotchas that cost real time, what's proved, and the exact remaining work.
+
+The earlier frontier (closing the last `core_refines` `sorry`/`Admitted`) is **DONE** in
+both Lean and Coq — see the git log and `PROOF.md`. The live frontier is now task #7.
 
 ## TL;DR of where we are
 
-- **Everything builds green**: `cd lean && lake build`; `cd coq && make -jN`;
-  `cd bare && make run` → prints `Hello\n`.
-- The Lean general refinement **`core_refines` is FULLY PROVED, `sorry`-free**
-  (`lean/Hex0/Refine.lean`). `loop_iteration` is discharged via a head-char
-  dispatch (`loop_spacing`/`loop_byte`/`loop_comment` + the halting classes
-  `loop_trailing/split/unknown_high/unknown_low/short`).
-  `#print axioms Hex0.Refine.core_refines` → `[propext, Classical.choice, Quot.sound]`
-  (no `sorryAx`). `grep -c '  sorry' lean/Hex0/Refine.lean` → 0.
-- **BUILD GOTCHA (cost real time):** `lake build`'s default target only built
-  what `lean/Hex0.lean` imports. That root did NOT import `Refine`, so
-  `lake build` reported success *without ever type-checking `Refine.lean`* (and
-  served a stale `.olean`). Fixed: `Hex0.lean` now imports `Refine`/`Image`/
-  `Harness`/`Certify`. **To validate `Refine` directly without cache, use
-  `lake env lean Hex0/Refine.lean`** (errors print top-down; exit 0 = clean).
-  Also note `set`/`List.getD_eq_getElem` are Mathlib/Batteries-only — unavailable
-  here; use `let x := e; have h : x = e := rfl; rw [← h] at <hyp>` and
-  `(List.getElem_eq_getD 0)` instead.
-- The remaining frontier is now **task #7** (ISA cross-check) and the single
-  Coq `Refine.v` hole `loop_iteration` (the per-token dispatch; `core_refines`
-  itself is proved modulo it).
+- **Everything builds green**: `cd coq && make -jN`; `cd lean && lake build`; `cd bare && make run` → `Hello\n`.
+- **T1 (decode cross-check) is COMPLETE** — `coq/RvCross.v`, `decode_agrees`. Our
+  `Rv64i.decode` is proved equal to `riscv-coq`'s `Decode.decode RV64I` on all 12 forms,
+  for every 32-bit word. `Admitted`-free; `Print Assumptions decode_agrees` ⇒ **Closed
+  under the global context (ZERO axioms)**. The decoder is no longer in the TCB.
+- **T2 (execute/step cross-check) — all reusable infrastructure is proved**, in
+  `coq/RvCrossStep.v` (`Admitted`-free): word bridge, fetch bridge, `run1` reduction
+  toolkit, bridge relation `Rrel`, bridge corollaries. **Remaining: the 12 per-instruction
+  `exec_*` lemmas + `step_agrees` + the transport corollary `core_refines_riscv`.** The
+  per-instruction recipe was validated end-to-end in scratch; nothing unsolved remains.
+- Work is on branch **`isa-crosscheck-decode`** (4 commits). Not merged to master.
 
-## Environment gotchas (these cost real time — don't rediscover)
-
-- **Lean is 4.30.0 via elan; there is NO Mathlib.** Consequences:
-  - **Banned tactics/lemmas**: `norm_num`, `ring`/`ring_nf`, `set ... with`,
-    `omega` does NOT evaluate `2^64` reliably as a bound unless the other facts
-    pin it (it's usually fine, but for `a < 2^64` from `a < small` it works).
-    `le_refl` unqualified is absent → use `Nat.le_refl`.
-  - **Use instead**: `decide` (for closed nat/BitVec goals incl. `2 < 2^64`),
-    `omega` (linear nat), `simp`, `Nat.le_refl`, `List.ext_getElem`.
-  - `set x := e with h` → replace with `let x := e` + `have h : x = e := rfl` +
-    `rw [← h] at <hyps mentioning e>`.
-- **`set_option maxRecDepth 4000 in` MUST come BEFORE the doc comment**, not
-  between the doc comment and the `theorem`. `/-- … -/ set_option … in theorem`
-  is a parse error ("unexpected token set_option").
-- **`decide` chokes on free variables.** `(by decide)` proving e.g.
-  `BitVec.ofNat 64 (coreAddr + off) ≠ 0` fails when `off` is symbolic. Use
-  `ofNat_ne` (proved) with explicit bound proofs, or reduce to a closed term
-  first (`simp only [Image.coreAddr]; omega`).
-- `decide` needs `maxRecDepth ~4000` whenever it evaluates `Image.coreBytes.length`
-  (a 324-element list) or 64-bit BitVec arithmetic with ~2³¹ addresses.
-- **`by` inside an anonymous constructor `⟨…⟩` is greedy** — it swallows the
-  following tuple elements. Always parenthesize: `⟨(by decide), …⟩`.
-- `simp` will collapse `x = x` to `True`; then provide `trivial`, not `rfl`.
-- **`native_decide` works but adds the Lean compiler to the TCB** — used only in
-  `lean/Hex0/Certify.lean` (the finite cert). Coq's `Certify.v` is kernel-checked
-  via `vm_compute` (smaller TCB) — keep that contrast.
-- **`Harness.loadBytes` was rewritten recursively** (not `foldl`) so it's provable
-  by induction; semantics identical, certs still pass.
-- Namespace clash: inside `namespace Hex0.Refine` with `open Rv64i`, plain
-  `decode` = `Rv64i.decode`; the spec's is `Hex0.decode`. **Qualify `Hex0.…`**
-  for spec stuff (`Hex0.decodeS`, `Hex0.nibble`, `Hex0.coreSpec`, …).
-- qemu needs a `libcapstone.so.4` shim (`.libshim/`, baked into `bare/Makefile`);
-  capstone is disasm-only, inert at runtime. No qemu rebuild needed.
-- Python: always `uv run` (see `tools/gen_image.py`).
-
-## The proof architecture (what's proved, in dependency order)
-
-In `lean/Hex0/Refine.lean` (56 proved decls, 1 sorry):
-
-1. **ISA-step engine** (all proved): `fetch_code` (decode instr at a code offset
-   from memory, handles BitVec address arithmetic via `addr_ofNat_succ`), and
-   `step_addi/add/or/slli/lbu/sb/beq/blt/bge/jal/jalr` (one-step transition per
-   instruction form). Recipe to step one instr at concrete offset `off`:
-   ```
-   step_<op> s off … hcode (by decide /-off+3<len-/) hpc (by decide /-decode=…-/)
-   ```
-2. **State-projection simp lemmas**: `rget_zero`, `setPc_pc/mem/rget`,
-   `rset_pc/mem`, `rset_rget` (needs `rd≠0 ∧ i≠0`), `rset_zero`.
-3. **Arithmetic toolkit**: `ult_ofNat`, `ofNat_ne`, `getD_drop`, `setWidth8_64`.
-4. **runFuel**: `runFuel_halt`, `runFuel_add` (composition; the induction backbone).
-5. **Spec decomposition**: `decodeS_spacing/byte/comment_skip`.
-6. **Invariant** `LoopInv` (16 fields, incl. `spec_link`, `in_mem`, `in_lt`,
-   `bytes_lt`) and `Result`.
-7. **Base case** `core_eof`, **induction** `loop_correct` (fuel-bounded structural
-   induction on `rest.length`).
-8. **Prologue**: `loadBytes_frame/get`, `code_initOn`, `in_initOn`, `init_loopinv`.
-9. **Conversion**: `decode_bytes_lt`, `range_getD`, `coreSpec_props`.
-10. **`core_refines`** — assembled. PROVED.
-11. **`loop_iteration`** — the ONE `sorry`. Proven sub-pieces toward it:
-    `loop_prefix` (the shared `bgeu;add;lbu;addi` head incl. the input read),
-    `spacing_tail_nl` (the `beq` dispatch chain → LOOP, newline char),
-    `spacing_loopinv` (rebuild `LoopInv` after a spacing token),
-    `loop_spacing_nl` (= a COMPLETE iteration for `'\n'`),
-    `li_beq_ne` (reusable `li;beq`-not-taken 2-step block).
-
-## `loop_iteration` — the statement and the plan
-
-```lean
-theorem loop_iteration (inp cap rest emitted s) (hne : rest ≠ [])
-    (inv : LoopInv inp cap s rest emitted) :
-    ∃ k, (∃ rest' emitted', rest'.length < rest.length ∧
-            LoopInv inp cap (runFuel 0 k s) rest' emitted')   -- "continue"
-         ∨ Result (runFuel 0 k s) inp cap                     -- "halt"
-```
-Dispatch on `rest = c :: rest''`, by the char class of `c`:
-- **spacing** (`c ∈ {10,32,95}`) → left, `rest'=rest''`, `emitted'=emitted`.
-- **comment** (`c ∈ {35,59}`) → left, `rest'=skipComment rest''`, `emitted'=emitted`.
-- **nibble `c` (high)**: need `rest'' = l :: rest'''`:
-  - `rest''=[]` → trailing error (code 4) → right.
-  - `l` is low-stop (`{10,32,95,35,59}`) → split (3) → right.
-  - `l` not nibble → unknown (5) → right.
-  - `l` nibble: if `emitted.length < cap` → byte emit, left (`emitted'=emitted++[byte]`);
-    else output-short (2) → right.
-- **else** (`c` not special, not nibble) → unknown-high (5) → right.
-
-For the **right (halt)** cases, `Result` follows from `inv.spec_link`: e.g. an
-error means `decodeS High (c::rest'') = ([], ErrX)`, so `decode inp =
-(emitted, ErrX)`, and `coreSpec inp cap = (errcode, emitted, emitted.length)`
-(using `emitted.length ≤ cap`); the machine halts with exactly `a0=errcode`,
-`a1=emitted.length`, output region = `emitted` (via `inv.out_mem`, mem unchanged
-on error paths). Output-short: `emitted.length = cap`, `coreSpec = (2, emitted, cap)`.
-
-For the **left (continue)** cases, build the new `LoopInv` with `spec_link`
-advanced by the matching `decodeS_*` decomposition lemma (already proved).
-
-### `core` instruction offset map (offset = addr − 0x80000088)
-
-Verify any specific instr/imm with `#eval Rv64i.decode (wordAt <off>)`.
-```
-  0 li t0,0      4 li t1,0
-  8 LOOP: bgeu t0,a1  -> .Lok(264) if t0>=a1
- 12 add t3,a0,t0   16 lbu t2,0(t3)   20 addi t0,t0,1     -- loop_prefix (off 8..24)
- 24..60  beq-chain: (li K; beq t2,t3) for K = 35,59,10,32,95
-         35,59 -> .Lcomment(236);  10,32,95 -> LOOP(8);  fall-through -> 64
- 64..104 high-nibble parse (li/blt/li/bge/addi ...); bad -> .Lunknown(312)
-108 have_high: bgeu t0,a1 -> .Ltrailing(300) if t0>=a1     (EXPECT_LOW EOF check)
-112 add 116 lbu 120 addi                                   -- low prefix, reads l
-124..160 low-stop beq-chain K = 10,32,95,35,59 -> .Lsplit(288)
-164..204 low-nibble parse; bad -> .Lunknown(312)
-208 have_low: bgeu t1,a3 -> .Lshort(276) if t1>=a3         (capacity check)
-212 slli t4,4  216 or t4,t5  220 add t3,a2,t1  224 sb t4,0(t3)  228 addi t1  232 j LOOP
-236 .Lcomment: bgeu t0,a1 -> .Lok(264); 240 add 244 lbu 248 li10 252 beq ->LOOP; 256 addi 260 j 236
-264 .Lok(a0=0) 276 .Lshort(2) 288 .Lsplit(3) 300 .Ltrailing(4) 312 .Lunknown(5)
-    each: li a0,code; mv a1,t1; ret
-```
-
-### Remaining lemmas to build (mechanical; reuse the proven recipes)
-
-1. **`li_beq_eq`** — `li K; beq`-TAKEN block (mirror of `li_beq_ne`, `if_pos`,
-   pc → `off+4 + signExtend imm`). Then **`spacing_tail_sp`/`_us`** (or one
-   `spacing_tail` casing `c ∈ {10,32,95}`) using `li_beq_ne` × (1..3) + `li_beq_eq`,
-   chained with `runFuel_add`. Then **`loop_spacing`** (all 3) → the spacing case.
-2. **`li_blt_*` / `li_bge_*` blocks** — for the nibble-parse chains (analogous to
-   `li_beq_ne` but `step_blt`/`step_bge`, signed compare via `BitVec.slt`; note
-   `c < 256` so `slt`/`ult` agree and `decide`/`ult_ofNat`-style facts close them).
-3. **`storeByte_frame`** (the one genuinely new piece) — storing at
-   `outAddr + j` (`j < cap`) leaves code & input memory unchanged (region
-   disjointness from `WellFormed.in_fits` + concrete addresses: code
-   `[0x88,0x1cc)`, input `[0x1cc, 0x1cc+len)`, output `[0x3b0, 0x3b0+cap)`), and
-   updates `out_mem` (earlier output bytes preserved since `j' < j` ⇒ different
-   address). Pattern: like `loadBytes_frame`, an `if x = addr` case split + `ofNat_ne`.
-4. **byte case** — `loop_prefix` → beq fall-through → high parse → `have_high`
-   (`rest''≠[]`) → low prefix → low-stop fall-through → low parse → capacity OK →
-   `slli;or;add;sb;addi;j` → LOOP. Rebuild `LoopInv` with `emitted++[hi*16+lo]`,
-   `out_idx+1`, `out_mem` via `storeByte_frame`, `spec_link` via `decodeS_byte`.
-   The byte value: `(t4<<4) ||| t5` with `t4=hi,t5=lo` — prove `= hi*16+lo` as
-   `BitVec.ofNat 64 (hi*16+lo)` (try `bv_decide`? not available — do it by
-   `BitVec.toNat` + the fact `hi,lo<16`; or keep as `<<<`/`|||` and match a
-   `decodeS_byte`-shaped output, adjusting `decodeS_byte` to emit the same form).
-5. **comment case** — inner loop `skipComment`; prove a small `comment_tail`
-   reaching LOOP at the char after `\n` (or EOF→`.Lok`), by induction on the
-   span to the newline. Rebuild via `decodeS_comment_skip`.
-6. **error cases** (trailing/split/unknown/short) — each: parse to the failing
-   branch → error epilogue (`li a0,code; mv a1,t1; ret` → pc=0, like `core_eof`),
-   then `Result` from `spec_link`+`coreSpec_props`.
-7. **dispatch** — `loop_iteration` cases on `c` (use `Hex0.isComment`,
-   `Hex0.isSpace`, `Hex0.nibble c`, `Hex0.isLowStop`) and dispatches to the above.
-
-Estimated ~400–600 lines. Suggested order: `li_beq_eq`+spacing (quick win,
-finishes that branch) → `storeByte_frame` (the new technique) → byte → errors →
-comment → dispatch. Keep it building at each step; commit per lemma.
-
-## Build / check commands
+## Build / check
 
 ```
-export PATH="$HOME/.elan/bin:$PATH"
-cd lean && lake build                         # whole Lean dev (1 sorry in Refine)
-grep -c '  sorry' lean/Hex0/Refine.lean       # should be 1 until loop_iteration closes
-lake env lean Hex0/Validate.lean              # model-vs-spec differential battery
-
-eval $(opam env); cd coq && make -j64          # Coq dev (Refine.v: only loop_iteration Admitted)
-cd bare && make run                            # bare-metal hex0 -> "Hello\n"
-uv run tools/gen_image.py                      # regen Image.{lean,v} from the ELF
+export PATH=~/.opam/CP.2025.01.0~8.20~2025.01/bin:$PATH    # has coqc 8.20, NOT on PATH by default
+cd coq && make -jN                                          # whole Coq dev incl. RvCross.v + RvCrossStep.v
+coqc -q -R . Hex0Coq RvCrossStep.v                          # type-check one file directly (no make)
+echo 'Require Import Hex0Coq.RvCross. Print Assumptions decode_agrees.' | coqc-stdin   # axioms
+grep -rnE '^\s*(Admitted|admit)' coq/*.v                    # remaining holes (should be none)
 ```
 
-## Things NOT yet done (beyond the one sorry)
+`opam` is NOT on PATH; the switch is `~/.opam/CP.2025.01.0~8.20~2025.01`. New files must be
+added to `coq/_CoqProject` (the Makefile auto-regenerates from it: `rm -f Makefile Makefile.conf`
+is unnecessary, `make` rebuilds the rule).
 
-- **Coq `core_refines` is now FULLY PROVED, `Admitted`-free.**
-  `Print Assumptions Hex0Coq.Refine.core_refines` ⇒ `functional_extensionality_dep`
-  ONLY (standard consistent axiom, for `mem : Z → Z` state equality) — no
-  `loop_iteration`, no `admit`/`sorry`. The full per-token tail was ported
-  (mirroring `lean/Hex0/Refine.lean`): `loop_prefix`, the spacing branch
-  (`spacing_tail`/`loop_spacing`), the error infra (`error_result`/
-  `halt_epilogue`/`bgeu_eq_taken`/`bgeu_ge_taken`/`reach_error`), the signed
-  branch blocks (`li_blt/bge_nt/t`), the beq fall-through chains
-  (`high/low_beq_ft`), `read_prefix`, the nibble parses (`high/low_parse`,
-  `high/low_parse_unknown`, `low_split`, `combine_nibbles`/`land_hilo`),
-  `store_epilogue`, the composites `reach64`/`reach124`, `loop_byte`, the five
-  error cases (`loop_trailing/split/unknown_high/unknown_low/short`), the comment
-  branch (`comment_read`/`comment_loop` induction/`loop_comment`), and the
-  `loop_iteration` head-char dispatch. Each branch lemma carries an explicit fuel
-  bound (`k ≤ 50·(chars consumed)`) so `loop_correct`'s `50·|rest|+4` total holds
-  and the fixed-fuel `runOn` (100000) absorbs the run via `runUntil_stab`.
-  Coq gotchas resolved (see `coq/Refine.v` header): `set (..) in *` so `step`
-  eqns fold; **avoid `simpl andb` over `nth .. coreBytes`** (coqc hangs — use
-  `replace (guard) with true/false`); **`lia` can't reason about `100000`
-  (`Nat.of_num_uint`)** so bound through `Z`; the `Z`-bytes/`nat`-spec gap needs
-  `zin`/`Z.to_nat` threaded through `LoopInv`/dispatch; `repeat split` auto-closes
-  definitional eqs (mis-aligns bullets — use `repeat apply conj`); a `%nat`-scoped
-  `(... =? ...)%nat` parses an inner `nth l 0` default as `0%nat` not `0%Z`.
-- **Task #7 (ISA cross-check)**: prove our `decode`+`step` agree with
-  `sail-riscv-lean` (opencompl) / `riscv-coq`, to remove "model = hardware" from
-  the TCB (currently testing-backed). `sail-riscv-lean` is 171k LoC, WIP,
-  "not executable" — use it as an oracle for the ~12 instrs only; or hand-audit.
+## The oracle (this was the key discovery)
+
+`RESUME` used to say the only ISA oracle was `sail-riscv-lean` (171k LoC, WIP, not
+executable). **WRONG / obsolete**: the opam switch already has **`coq-riscv.0.0.5`** (the MIT
+`riscv-coq` / riscv-semantics model — the bedrock2/`compiler` spec, `hs-to-coq` from the
+official Haskell) + **`coq-coqutil.0.0.6`** + **`bedrock2`**, all in
+`~/.opam/.../lib/coq/user-contrib/{riscv,coqutil,bedrock2}/`, on the default load path
+(`Require Import riscv.Spec.Decode.` just works). All 12 of our instruction forms exist in
+its `InstructionI`. **Do the Coq proof against `riscv-coq`; the Lean side stays
+testing-backed (or a separate `sail-riscv-lean` decode-only differential later).**
+
+Key files in the oracle (paths under `…/user-contrib/riscv/`):
+- `Spec/Decode.v` — `decode : InstructionSet -> Z -> Instruction`; `Instruction` wraps
+  `InstructionI` via `IInstruction`, rejects via `InvalidInstruction (i:Z)`. For `RV64I`
+  the result list collapses so a valid `decodeI` ⇒ `IInstruction decodeI`.
+- `Spec/ExecuteI.v` — `execute : InstructionI -> p unit`, monadic over `RiscvMachine p t`.
+- `Spec/Machine.v` — the `RiscvProgram`/`RiscvMachine` classes (`getRegister/setRegister/
+  getPC/setPC/loadByte/storeByte/endCycleNormal/…`).
+- `Platform/Minimal.v` — `IsRiscvMachine : RiscvProgram (OState RiscvMachine) word`. `OState
+  S A = S -> option A * S`. `setPC` writes **`getNextPc`**, not `getPc`; `endCycleNormal`
+  does `pc := nextPc; nextPc := nextPc + 4` (so invariant `nextPc = pc + 4` holds each cycle).
+- `Platform/Run.v` — `run1 iset = pc<-getPC; inst<-loadWord Fetch pc; execute (decode iset
+  (combine 4 inst));; endCycleNormal`.
+- `Platform/RiscvMachine.v` — the state record (`getRegs : map Z word; getPc; getNextPc;
+  getMem : map word byte; getXAddrs; getLog`). `loadWord Fetch` fails unless `isXAddr4B`.
+- `Utility/MkMachineWidth.v` — `+`=`word.add`, `or`=`word.or`, signed `<`=`word.lts`,
+  `ltu`=`word.ltu`, `sll w n`=`word.slu w (of_Z n)`, `ZToReg`/`fromImm`=`word.of_Z`,
+  `uInt8ToReg a`=`of_Z (combine 1 a)`, `regToInt8 a`=`split 1 (unsigned a)`, `reg_eqb`=`word.eqb`.
+
+## GOTCHAS that cost real time — do not rediscover
+
+1. **STRICT GOAL SELECTOR.** Importing coqutil/bedrock2 turns on a strict focusing
+   discipline: after **every** `destruct`/`split`/`induction` that leaves >1 goal you MUST
+   use bullets (`-`/`+`/`*`) or `[ .. | .. ]`. Symptom: `Error: Expected a single focused
+   goal but 2 goals are focused`, reported at the *next* tactic. This bit me ~6 times. Write
+   bullets from the start.
+2. **`cbn`/`simpl` will NOT unfold `combine_deprecated` or `le_combine`** (coqutil Fixpoints).
+   For the fetch combine: `rewrite combine_eq` (→ `le_combine (tuple.to_list bs)`), then
+   `cbn [HList.tuple.to_list]`, then **`cbv [LittleEndianList.le_combine]`** (cbv, not cbn).
+   Note `LittleEndian.combine` is a *notation* for `combine_deprecated`; the constant name is
+   `combine_deprecated` (unqualified), `le_combine` is `LittleEndianList.le_combine`.
+3. **`run1` / Minimal `OState` reduction recipe** (proved as `run1_fetch`):
+   `unfold Run.run1, Machine.getPC, Machine.loadWord, IsRiscvMachine, loadN, fail_if_None.
+   cbv [Bind Return OState_Monad get put]. cbn [fst snd].` then `rewrite Hload, HxAddr.` Use
+   the **qualified** projection names (`Machine.getPC`, `Machine.loadWord`, `Machine.getRegister`,
+   `Machine.setRegister`) — `unfold getPC` (the field) does NOT touch `Machine.getPC` (the
+   projection). `get`/`put` are `OStateOperations.{get,put}` (need `Import OStateOperations`).
+4. **decode reduction recipe** (T1, in `RvCross.v`): `Opaque bitSlice signExtend Z.shiftl
+   Z.lor` so `cbn` reduces only riscv's decode control-flow and leaves operands abstract;
+   `rewrite` the control fields (opcode/funct3/funct7) to concrete via `bs_f`; `cbn`; convert
+   operands `field`↔`bitSlice` (`bs_f`/`f_bs`) and `sext`↔`signExtend` (`sext_signExtend`,
+   range via `range_tac`); close the `lor`-reassociation with **`with_strategy transparent
+   [bitSlice] prove_Zeq_bitwise`** (coqutil's bitwise prover; `Opaque` blocks its `unfold
+   bitSlice`, hence `with_strategy`).
+5. **`field w lo len = bitSlice w lo (lo+len)`** (= our div/mod vs coqutil land/shiftr) via
+   `coqutil.Z.BitOps.bitSlice_alt`. `bs_f w a b c : 0<=a -> b=a+c -> 0<=c -> bitSlice w a b =
+   field w a c` (the `b=a+c` is discharged by `lia`, normalizing the `lo+len` literal).
+6. **`sext k = signExtend k` only on in-range inputs** (`0<=raw<2^k`); the range for
+   `lor`/`shiftl` immediates is discharged by `range_tac` (= `repeat first [apply lor_lt |
+   apply shiftl_field_lt | apply field_lt]; lia`). The SLLI `shamt≥32` narrowing does **not**
+   affect T1 (only the reverse direction).
+7. **`Register0` reduces to `0`** (it's effectively `Z0`) — `unfold Register0` fails ("Cannot
+   coerce Z0 to evaluable reference"). To discharge the `r = Register0` branch: `exfalso; cbn
+   in E; lia`.
+8. **Word address arithmetic**: `Require Import bedrock2.ZnWords` and use `ZnWords` to prove
+   word identities like `word.add (word.add pc (of_Z 1)) (of_Z 1) = word.add pc (of_Z 2)`.
+   For `word.add (of_Z a)(of_Z b) = of_Z (wadd a b)` use `word.unsigned_inj` + `br_add` +
+   `Z.add_mod` (proved as `wadd_of_Z`).
+9. **`word.of_Z` in a lemma statement needs `(word:=word)`** or elaboration can't infer the
+   width (`Could not find an instance for "Interface.word ?width"`).
+10. **The `RiscvMachine` record accessors need a `Bitwidth 64` instance** in context: add
+    `Context {BW: Bitwidth 64}` (from `coqutil.Word.Bitwidth`).
+11. Concrete instantiation (if ever needed instead of the abstract Section context): `riscv.
+    Utility.Words64Naive` (word) + `riscv.Utility.DefaultMemImpl64` (Mem) + `coqutil.Map.
+    Z_keyed_SortedListMap.Zkeyed_map` (Registers). Verified `run1 RV64I : RiscvMachine ->
+    option unit * RiscvMachine` type-checks.
+
+## What's proved (file map)
+
+**`coq/RvCross.v`** (T1, decode):
+- bridges `field_bitSlice`, `sext_signExtend`; range toolkit `field_range/field_lt/lor_lt/
+  shiftl_field_lt` + `range_tac`; `field_sub0` (subfield-of-zero, for SLLI's funct6/shamtHi
+  from funct7=0); `bs_f`/`f_bs`; `embed : Rv64i.Instr -> Decode.Instruction`.
+- per-form `decode_addi/slli/add/or/lbu/sb/beq/blt/bge/bgeu/jal/jalr` (each: control rewrite →
+  `cbn` → convert → `prove_Zeq_bitwise`).
+- `decode_agrees` (opcode/funct dispatch; error leaves ⇒ contradict `i≠Iunknown`).
+
+**`coq/RvCrossStep.v`** (T2 infrastructure):
+- helpers `byte_uoz`, `testbit_hi`, `land_lo_hi`.
+- `WordBridge` section: `wrap64`, `br_add`, `br_or`, `br_ltu`, `toS_signed`, `br_lts`,
+  `wadd_of_Z`.
+- `Fetch` section: `fetch_combine` — `combine 4 (load_bytes 4 rm pc) = f0+f1·256+f2·2¹⁶+f3·2²⁴`
+  given the 4 map bytes (this is our `fetch32`). THE KEYSTONE.
+- `Run1` section: `run1_fetch` (run1 → `execute (decode …)` + `endCycleNormal`), `getReg_red`,
+  `setReg_red`, `endcycle_red`.
+- `Bridge` section: `RegAgree`, `MemAgree D`, `PcAgree`, `Rrel = RegAgree ∧ MemAgree D ∧
+  PcAgree`, `WFfetch`, and `getReg_R` (register read under `RegAgree`, x0-aware).
+
+## The remaining T2 work (the recipe, validated in scratch)
+
+For each instruction, prove `exec_<i> : Rrel s m D -> <fetch-WF> -> Rv64i.decode (fetch32 s) =
+I<i> … -> ∃ m', run1 RV64I m = (Some tt, m') ∧ Rrel (Rv64i.step s) m' D`. Recipe:
+
+1. **fetch connection** (shared lemma to write): from `Rrel`+`MemAgree`(4 fetch addrs in D)+
+   no-wrap, get `∃ bs, load_bytes 4 (getMem m) (getPc m) = Some bs ∧ combine 4 bs = fetch32 s`.
+   Use `fetch_combine` with `f := fun i => s.mem (s.pc + i)`; the address bridge is
+   `unsigned (word.add (getPc m) (of_Z i)) = s.pc + i` (i<4, no wrap) via `word.unsigned_add`+
+   `unsigned_of_Z`+`mod_small` (or `ZnWords`). `fetch32 s` range `0 ≤ _ < 2^32` from bytes<256.
+2. `isXAddr4 → isXAddr4B = true` (need `isXAddr1B` reflect lemma; search `isXAddr1B_holds`/its
+   converse in `Platform/RiscvMachine.v`).
+3. `run1_fetch` → goal is about `execute (decode RV64I (combine 4 bs)) m`. Rewrite
+   `combine 4 bs = fetch32 s`, then `decode_agrees` (T1) ⇒ `decode RV64I (fetch32 s) =
+   embed (Rv64i.decode (fetch32 s)) = IInstruction (<ctor> …)` (needs `fetch32 s` in range +
+   `≠ Iunknown`, the hypothesis).
+4. `Execute.execute (IInstruction c) = ExecuteI.execute c` — `cbn [Execute.execute]`.
+   Reduce the `ExecuteI.execute` body (a `Bind` chain) with `getReg_R` (reads) and
+   `setReg_red` (writes) + `cbv [Bind Return OState_Monad]`. The written word is
+   `word.add (of_Z (rget s rs1)) (of_Z imm)` = `of_Z (wadd …)` by `wadd_of_Z`.
+5. `endcycle_red` advances pc.
+6. Reassemble `Rrel (step s) m' D`: `RegAgree` via `map.get_put_same`/`get_put_diff`
+   (`coqutil.Map.Properties`) + `wadd_of_Z`; `MemAgree` unchanged for non-memory instrs
+   (m' mem = m mem); `PcAgree` from `endcycle_red` + `PcAgree m` (pc:=nextPc=pc+4=`wadd s.pc 4`).
+
+Per-instruction specifics (see `CROSSCHECK.md` §4–6):
+- **x0 casing**: `getReg_R` handles `rs1=0`. For `rd=0`, `setRegister 0 = Return tt` (no
+  change) and `rset s 0` ignores — needs a separate small reduction (`setReg0_red`) and the
+  `RegAgree` is trivially preserved.
+- **branches** (`beq/blt/bge/bgeu`): no register write; pc = taken? `wadd pc imm` : `pc+4`.
+  riscv raises a **misaligned-target exception** if `newPC mod 4 ≠ 0` → precondition "target
+  4-aligned" (true for `core`; see §5). Guards bridge via `br_ltu`/`br_lts`/`word.eqb`↔`=`.
+- **`lbu`**: `loadByte` reads `getMem` (data addr must be in D); `uInt8ToReg` zero-extends ⇒
+  our `mod 256`. Need a `loadByte_red` like `getReg_red`.
+- **`sb`**: `storeByte` = `storeN 1` = `putmany_of_tuple` (1-tuple) on `getMem`; updates
+  `MemAgree` at the store addr (others preserved via `map.get_put_diff`), needs store addr ∈ D
+  and the output-region disjointness (reuse the `Refine.v` geometry). The genuinely new piece.
+- **`jal`/`jalr`**: register write (`rd := pc+4`) + pc jump; `jalr` clears bit 0
+  (`and _ (lnot 1)` = our `a - a mod 2`); same alignment precondition as branches.
+
+Then **`step_agrees`** = dispatch on `Rv64i.decode (fetch32 s)` to the 12 `exec_*`.
+
+**Transport corollary `core_refines_riscv`** (the real deliverable): frame `step_agrees` as a
+forward simulation, induct (like `loop_correct`) to lift the whole run, and compose with the
+finished `core_refines` so the *reference model running the real bytes* computes `coreSpec`.
+Needs a prologue lemma `init_riscv inp cap` is `Rrel`-related to our `mkInit` (analogue of
+`init_loopinv`). See `CROSSCHECK.md` §1 (T2) and the answer recorded there about "use the
+reference model instead" = sense (b), transport.
+
+## Lean-side notes (still true, lower priority)
+
+- Lean is 4.30.0 via elan, **no Mathlib**. Banned: `norm_num`, `ring`, `set…with`. Use
+  `decide`/`omega`/`simp`/`Nat.le_refl`. `lake build`'s root must import a file or it's skipped
+  (`lake env lean Hex0/Foo.lean` to check directly). See `lean-build-root` memory.
+- `core_refines` is `sorry`-free; `#print axioms` = `[propext, Classical.choice, Quot.sound]`.
+- A Lean execute/step cross-check would need `sail-riscv-lean` (171k LoC, WIP) — deferred; the
+  Coq cross-check + the existing Lean↔Coq computational cross-validation (`Validate.*`) cover it.
