@@ -116,7 +116,7 @@ def parse_claude(path):
         role = msg.get("role", typ)
         content = msg.get("content")
         blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]
-        text_blocks, rendered = [], []
+        text_blocks, rendered, tool_results = [], [], []
         for b in blocks:
             if not isinstance(b, dict):
                 rendered.append(str(b)); continue
@@ -133,7 +133,8 @@ def parse_claude(path):
                 c = b.get("content")
                 if isinstance(c, list):
                     c = "\n".join(x.get("text","") if isinstance(x,dict) else str(x) for x in c)
-                rendered.append(f"**↩︎ tool result**\n```\n{trunc(c)}\n```")
+                tag = " (error)" if b.get("is_error") else ""
+                tool_results.append(f"```\n{trunc(c)}\n```{tag}")
         if role == "assistant":
             if msg.get("model"):
                 models.add(msg["model"])
@@ -148,14 +149,18 @@ def parse_claude(path):
                 flush_turn(); cur_rid, cur_body = rid, []
             cur_body.extend(r for r in rendered if r.strip())
         else:
+            # A "user"-role message is either a real human turn or just the
+            # tool_result(s) returned for the assistant's last tool calls. Only
+            # the former is a human turn; render results under their own header.
             flush_turn(); cur_rid, cur_body = None, []
-            n_user += 1
-            for t in text_blocks:
-                if t.strip():
-                    user_prompts.append(t)
-            body = "\n\n".join(r for r in rendered if r.strip())
-            if body.strip():
-                lines.append(f"### 👤 **User**\n\n{body}\n")
+            human = [t for t in text_blocks if t.strip()]
+            if human:
+                n_user += 1
+                user_prompts.extend(human)
+                lines.append("### 👤 **User**\n\n" + "\n\n".join(human) + "\n")
+            if tool_results:
+                hdr = "Tool result" + ("s" if len(tool_results) > 1 else "")
+                lines.append(f"### 🛠️ **{hdr}**\n\n" + "\n\n".join(tool_results) + "\n")
     flush_turn()
     for u in usage_by_req.values():
         tok["input"] += u.get("input_tokens", 0) or 0
@@ -345,7 +350,7 @@ def write_session(sess, subdir):
         f"- **Agent:** {sess['agent']}\n",
         f"- **Model(s):** {', '.join(sess['models']) or '?'}\n",
         f"- **Started:** {fmt_ts(sess['first_ts'])}  |  **Last activity:** {fmt_ts(sess['last_ts'])}\n",
-        f"- **Turns:** {sess['n_user']} user / {sess['n_assist']} assistant  |  **Tool calls:** {sess['n_tool']}\n",
+        f"- **Turns:** {sess['n_user']} human / {sess['n_assist']} assistant  |  **Tool calls:** {sess['n_tool']}\n",
         f"- **Source:** `{sess['path']}`\n\n",
         "## Token cost\n\n" + tokline + "\n\n",
         "## Summary\n\n",
@@ -426,7 +431,7 @@ def main():
     R.append("\n")
     for label, group in (("Claude Code", cl), ("Codex", cx)):
         R.append(f"## {label} sessions\n\n")
-        R.append("| # | Date | Model | Turns | Tools | Output tok | Cost | First request | File |\n")
+        R.append("| # | Date | Model | Human/Asst | Tools | Output tok | Cost | First request | File |\n")
         R.append("|--|---|---|--:|--:|--:|--:|---|---|\n")
         for i, s in enumerate(group, 1):
             t = s["tok"]
