@@ -66,6 +66,31 @@ decoder.** Proof structure actually used (≈300 lines):
   contradicts the hypothesis). The SLLI `shamt≥32` gap (§5) does **not** affect T1 —
   it only concerns the reverse direction.
 
+### ✅ T2 step-cross-check landed (`coq/RvCrossExec.v`, 2026-06-03)
+
+`step_agrees` is **proved, `Admitted`-free** (`Print Assumptions` ⇒ only the standard
+`functional_extensionality_dep`, same axiom the whole dev + coqutil/riscv already use):
+
+```coq
+Theorem step_agrees : forall s (m:RMach) D,
+  Rrel s m D -> WFstep s m D ->
+  Rv64i.decode (Rv64i.fetch32 s) <> Iunknown ->
+  exists m', Run.run1 RV64I m = (Some tt, m') /\ Rrel (Rv64i.step s) m' D.
+```
+
+So under the state bridge `Rrel` and the §5 side conditions `WFstep` (branch/jump
+targets 4-aligned; `lbu`/`sb` data address in the tracked domain `D` — all true of the
+loaded `core`), **one of our `step`s computes exactly one riscv-coq `run1` cycle, which
+succeeds and lands in a bridge-related state.** Built by `make`. All **12** per-instruction
+lemmas `exec_addi/add/or/slli/lbu/sb/beq/blt/bge/bgeu/jal/jalr` are proved (each: fetch →
+`run1` reduce → `decode_agrees` (T1) → `ExecuteI` reduce through the word/mem bridges →
+reassemble `Rrel`). New surfaced facts (now theorems, not assumptions): SLLI `shamt<32`
+narrowing, misaligned-target exception (→ alignment side conditions), JALR bit-0 clear
+(`clearbit0`: `Z.land a (2^64-2) = a - a mod 2`), x0 read-0/ignore-write, register-index
+validity, fetch executability/data-domain. The **only** remaining T2 item is the transport
+corollary `core_refines_riscv` (lift `step_agrees` over a whole run and compose with
+`core_refines`).
+
 ### ◐ T2 foundation landed (`coq/RvCrossStep.v`, 2026-06-02)
 
 The two instruction-independent foundations of the execute/step simulation are

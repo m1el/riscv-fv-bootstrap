@@ -14,12 +14,15 @@ both Lean and Coq — see the git log and `PROOF.md`. The live frontier is now t
   `Rv64i.decode` is proved equal to `riscv-coq`'s `Decode.decode RV64I` on all 12 forms,
   for every 32-bit word. `Admitted`-free; `Print Assumptions decode_agrees` ⇒ **Closed
   under the global context (ZERO axioms)**. The decoder is no longer in the TCB.
-- **T2 (execute/step cross-check) — all reusable infrastructure is proved**, in
-  `coq/RvCrossStep.v` (`Admitted`-free): word bridge, fetch bridge, `run1` reduction
-  toolkit, bridge relation `Rrel`, bridge corollaries. **Remaining: the 12 per-instruction
-  `exec_*` lemmas + `step_agrees` + the transport corollary `core_refines_riscv`.** The
-  per-instruction recipe was validated end-to-end in scratch; nothing unsolved remains.
-- Work is on branch **`isa-crosscheck-decode`** (4 commits). Not merged to master.
+- **T2 (execute/step cross-check) — `step_agrees` is COMPLETE** (`coq/RvCrossExec.v`,
+  `Admitted`-free; `Print Assumptions step_agrees` ⇒ only `functional_extensionality_dep`).
+  All 12 per-instruction `exec_*` lemmas + `step_agrees` are proved on top of
+  `RvCrossStep.v`'s foundations (word bridge, fetch bridge, `run1` toolkit, `Rrel`). Under
+  `Rrel` + `WFstep` (the §5 alignment / data-domain side conditions, all true of `core`),
+  one `Rv64i.step` = one riscv-coq `Run.run1 RV64I` cycle landing in a related state.
+  **The ONLY remaining T2 item is the transport corollary `core_refines_riscv`** (lift
+  `step_agrees` over a whole run by induction + compose with `core_refines`).
+- Work is on branch **`isa-crosscheck-decode`**. Not merged to master.
 
 ## Build / check
 
@@ -133,10 +136,60 @@ Key files in the oracle (paths under `…/user-contrib/riscv/`):
 - `Bridge` section: `RegAgree`, `MemAgree D`, `PcAgree`, `Rrel = RegAgree ∧ MemAgree D ∧
   PcAgree`, `WFfetch`, and `getReg_R` (register read under `RegAgree`, x0-aware).
 
-## The remaining T2 work (the recipe, validated in scratch)
+**`coq/RvCrossExec.v`** (T2 step-cross-check, `Admitted`-free):
+- inversions `inv_*` (recover `field` operands from a decode result); pure projection facts
+  `rget_rset_{same,diff}`, `rget/mem/pc_{setPc,storeByte}`; `clearbit0` (`Z.land a (2^64-2)
+  = a - a mod 2`, via `Z.bitblast`; JALR bit-0 clear) + `lxor_1_ones` (`vm_compute`).
+- monad toolkit `OState_bind_{value,step}`, `getReg_bind`, `getPC_bind`/`getPC_red`,
+  `setPC_red`, `translate_bind` (translate = id on Minimal), `loadByte_bind`/`loadByte_red`,
+  `storeByte_red`, `combine1`, `regToInt8_of_Z`, `byte_of_Z_mod`.
+- value bridges `wor_of_Z`, `wshl_of_Z`, `eqb_of_Z`, `lts_of_Z`, `ltu_of_Z`, `add_of_Z_r`,
+  `jalr_target`, `wadd_newPC`, `remu4_aligned`; range helpers `w{add,or,shl}_range`,
+  `rget_range`, `clearbit_range`; fetch glue `fetch_byte`/`fetch_conn`/`fetch32_range`.
+- finishers `finish_cycle` (the keystone: `endCycleNormal` re-establishes the `nextPc=pc+4`
+  invariant unconditionally), `writeReg_cycle`, `setPC_cycle`, `noop_cycle`,
+  `writeReg_setPC_cycle`, `store_cycle`; shared prologue tactic `exec_setup`.
+- the 12 `exec_{addi,add,or,slli,lbu,sb,beq,blt,bge,bgeu,jal,jalr}`; `WFstep` (bundled §5
+  side conditions); `step_agrees` (dispatch on `decode (fetch32 s)` to the 12 `exec_*`).
 
-For each instruction, prove `exec_<i> : Rrel s m D -> <fetch-WF> -> Rv64i.decode (fetch32 s) =
-I<i> … -> ∃ m', run1 RV64I m = (Some tt, m') ∧ Rrel (Rv64i.step s) m' D`. Recipe:
+GOTCHAS that cost real time here (do not rediscover):
+- `Machine.{get,set}Register`/`setPC` in a `let (o,m3) := … m in` statement: elaboration
+  applies before typeclass resolution → "Non-functional construction". Ascribe
+  `(… : OState RiscvMachine unit) m`.
+- `unfold OState_Monad` over-unfolds the *monad argument inside* `getRegister`/etc., so a
+  later `rewrite getReg_R` finds no match. Use the monad-agnostic `OState_bind_step`/`_value`
+  (which only touch `Bind`) instead; pair with `cbn beta` to expose `f r m`.
+- `rewrite H` where `H : combine 4 bs = fetch32 s` hits an occurrence-check quirk ("subgoal
+  identical to original"). Use `replace … with … by (symmetry; exact H)` (or `apply
+  (eq_trans H)` at goal level).
+- record updaters (`withRegs`/`withPc`/`withNextPc`/`withMem`/`withXAddrs`) only reduce once
+  the machine is `destruct`ed to `mkRiscvMachine …`; then `cbn [getRegs withRegs …]` (list
+  the projection AND the updater). Don't bare-`cbn` near `rset` — it eagerly unfolds it;
+  prefer the pure `rget_rset_*`/`mem_*` lemmas applied symbolically.
+- `combine_deprecated`/`split_deprecated` won't `cbn`-reduce: for `combine 1` use `rewrite
+  combine_eq; cbn [tuple.to_list]; cbv [le_combine]`; closed bit-consts like `Z.lxor 1
+  (2^64-1)` are fastest via `vm_compute`.
+- `Z.bitblast` (from `coqutil.Z.bitblast`) reduces a `land`/`lxor` equality to one per-bit
+  goal; finish with `Z.testbit_even_{0,succ}`, `Z.shiftr_spec`/`Z.testbit_ones_nonneg`, and
+  `Z.bits_above_log2` for the high bits. Under `bedrock2` the strict goal selector is on, so
+  bitblast that leaves >1 goal needs bullets/`vm_compute`.
+
+## The remaining T2 work: the transport corollary `core_refines_riscv`
+
+`step_agrees` is **DONE** (`coq/RvCrossExec.v`) — the per-instruction recipe below is now
+fully realised; this section is kept as the record of how each `exec_*` was built. The live
+frontier is `core_refines_riscv`: frame `step_agrees` as a forward simulation, induct (like
+`loop_correct` in `Refine.v`) to lift the whole run, add a prologue lemma relating riscv's
+init machine to our `mkInit` by `Rrel` (analogue of `init_loopinv`), and compose with the
+finished `core_refines` so the *reference model running the real bytes* computes `coreSpec`.
+Build the `WFstep` side conditions hold over the run from the `WellFormed`/`LoopInv` layout
+(code 4-aligned ⊆ `getXAddrs`; `Dom` = code∪input∪output ⊆ `getMem`; reuse `Refine.v`'s
+store-disjointness geometry). See `CROSSCHECK.md` §1 (T2) / §3.
+
+### How each `exec_*` was built (the realised recipe)
+
+For each instruction, `exec_<i> : Rrel s m D -> WFfetch s m D -> Rv64i.decode (fetch32 s) =
+I<i> … -> [side cond] -> ∃ m', run1 RV64I m = (Some tt, m') ∧ Rrel (Rv64i.step s) m' D`:
 
 1. **fetch connection** (shared lemma to write): from `Rrel`+`MemAgree`(4 fetch addrs in D)+
    no-wrap, get `∃ bs, load_bytes 4 (getMem m) (getPc m) = Some bs ∧ combine 4 bs = fetch32 s`.
