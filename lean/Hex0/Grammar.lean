@@ -30,22 +30,22 @@ theorem nibble_not_comment {c v : Nat} (h : nibble c = some v) : isComment c = f
   simp only [nibble] at h
   by_cases hd : 48 ≤ c ∧ c ≤ 57
   · obtain ⟨h1, h2⟩ := hd; simp only [isComment, c_hash, c_semi, Bool.or_eq_false_iff,
-      beq_eq_false_iff_ne]; omega
+      beq_eq_false_iff_ne]; refine ⟨?_, ?_⟩ <;> omega
   · rw [if_neg hd] at h
     by_cases hl : 65 ≤ c ∧ c ≤ 70
     · obtain ⟨h1, h2⟩ := hl; simp only [isComment, c_hash, c_semi, Bool.or_eq_false_iff,
-        beq_eq_false_iff_ne]; omega
+        beq_eq_false_iff_ne]; refine ⟨?_, ?_⟩ <;> omega
     · rw [if_neg hl] at h; exact absurd h (by simp)
 
 theorem nibble_not_space {c v : Nat} (h : nibble c = some v) : isSpace c = false := by
   simp only [nibble] at h
   by_cases hd : 48 ≤ c ∧ c ≤ 57
   · obtain ⟨h1, h2⟩ := hd; simp only [isSpace, c_nl, c_sp, c_us, Bool.or_eq_false_iff,
-      beq_eq_false_iff_ne]; omega
+      beq_eq_false_iff_ne]; refine ⟨⟨?_, ?_⟩, ?_⟩ <;> omega
   · rw [if_neg hd] at h
     by_cases hl : 65 ≤ c ∧ c ≤ 70
     · obtain ⟨h1, h2⟩ := hl; simp only [isSpace, c_nl, c_sp, c_us, Bool.or_eq_false_iff,
-        beq_eq_false_iff_ne]; omega
+        beq_eq_false_iff_ne]; refine ⟨⟨?_, ?_⟩, ?_⟩ <;> omega
     · rw [if_neg hl] at h; exact absurd h (by simp)
 
 theorem nibble_not_lowstop {c v : Nat} (h : nibble c = some v) : isLowStop c = false := by
@@ -54,7 +54,8 @@ theorem nibble_not_lowstop {c v : Nat} (h : nibble c = some v) : isLowStop c = f
 /-- A spacing char is not a comment char. -/
 theorem space_not_comment {c : Nat} (h : isSpace c = true) : isComment c = false := by
   simp only [isSpace, c_nl, c_sp, c_us, beq_iff_eq, Bool.or_eq_true] at h
-  simp only [isComment, c_hash, c_semi, Bool.or_eq_false_iff, beq_eq_false_iff_ne]; omega
+  simp only [isComment, c_hash, c_semi, Bool.or_eq_false_iff, beq_eq_false_iff_ne]
+  refine ⟨?_, ?_⟩ <;> omega
 
 /-! ## `decodeS` token-decomposition lemmas (one per token class). -/
 
