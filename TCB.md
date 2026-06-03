@@ -18,14 +18,13 @@ hex0 spec" to hold. Written CompCert-style: an explicit, enumerated boundary.
   `coreSpec` on the embedded input and every error class. *Finite/testing-grade.*
 - **General refinement** (`lean/Hex0/Refine.lean`) — `core_refines : ∀ inp cap,
   WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`. **Fully
-  proved, `sorry`-free** (axioms: `propext`/`Classical.choice`/`Quot.sound`).
-  The **Coq `Refine.v`** port now proves `core_refines` modulo the single
-  `Admitted` per-token dispatch lemma `loop_iteration` (`Print Assumptions
-  core_refines` ⇒ `loop_iteration` + `functional_extensionality_dep`, a standard
-  consistent axiom for `mem : Z → Z` state equality). Everything assembling the
-  theorem — engine, `LoopInv`, `loop_correct` (fuel-bounded induction),
-  `init_loopinv`, conversion — is kernel-checked. Only `loop_iteration` (the
-  ~2500-line Lean dispatch tail) remains to port.
+  proved, `sorry`-free** (axioms: `propext`/`Quot.sound` — `Classical.choice`-free).
+  The **Coq `Refine.v`** port now proves `core_refines` **fully, `Admitted`-free**
+  (`Print Assumptions core_refines` ⇒ only `functional_extensionality_dep`, a
+  standard consistent axiom for `mem : Z → Z` state equality). Everything
+  assembling the theorem — engine, `LoopInv`, `loop_correct` (fuel-bounded
+  induction), `loop_iteration` (the per-token dispatch tail), `init_loopinv`,
+  conversion — is kernel-checked in both Lean and Coq.
 
 ## Trusted (IN the TCB)
 

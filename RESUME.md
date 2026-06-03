@@ -20,9 +20,22 @@ both Lean and Coq — see the git log and `PROOF.md`. The live frontier is now t
   `RvCrossStep.v`'s foundations (word bridge, fetch bridge, `run1` toolkit, `Rrel`). Under
   `Rrel` + `WFstep` (the §5 alignment / data-domain side conditions, all true of `core`),
   one `Rv64i.step` = one riscv-coq `Run.run1 RV64I` cycle landing in a related state.
-  **The ONLY remaining T2 item is the transport corollary `core_refines_riscv`** (lift
-  `step_agrees` over a whole run by induction + compose with `core_refines`).
-- Work is on branch **`isa-crosscheck-decode`**. Not merged to master.
+- **T2 transport corollary `core_refines_riscv` is DONE** (`coq/RvCrossRun.v`,
+  `Admitted`-free, `Print Assumptions` ⇒ only `functional_extensionality_dep`).
+  `transport_run` lifts `step_agrees` over a whole run by induction (the `rrun`
+  lockstep iterator); `model_result` reuses `init_loopinv`+`loop_correct`; the
+  theorem composes them so the riscv-coq reference model running the real `core`
+  bytes halts computing `coreSpec` (a0=status, a1=length, `Rrel`-related output).
+  Two hypotheses are factored out explicitly (the honest residual): the init-state
+  match `Rrel (mkInit …) m D`, and `RunWF` (the §5 per-step side conditions hold
+  along the run). Discharging those unconditionally (build the finite-map init
+  machine; prove WFstep over the run from `CodeLoaded`/`LoopInv` + xaddr/store
+  geometry) is the next, larger step — see `RvCrossRun.v` header.
+- **T1 reverse direction is DONE** too: `decode_agrees_rev`+`embed_inj`
+  (`coq/RvCross.v`, ZERO axioms) — riscv-coq decoding to one of our 12 forms pins
+  our decode to the same form; the SLLI `shamt≥32` narrowing is exactly the
+  `decode w <> Iunknown` hypothesis.
+- Work is on branch **`isa-crosscheck-decode`**, fast-forwarded onto `master`.
 
 ## Build / check
 
@@ -174,17 +187,22 @@ GOTCHAS that cost real time here (do not rediscover):
   `Z.bits_above_log2` for the high bits. Under `bedrock2` the strict goal selector is on, so
   bitblast that leaves >1 goal needs bullets/`vm_compute`.
 
-## The remaining T2 work: the transport corollary `core_refines_riscv`
+## T2 transport corollary `core_refines_riscv` — DONE (`coq/RvCrossRun.v`)
 
-`step_agrees` is **DONE** (`coq/RvCrossExec.v`) — the per-instruction recipe below is now
-fully realised; this section is kept as the record of how each `exec_*` was built. The live
-frontier is `core_refines_riscv`: frame `step_agrees` as a forward simulation, induct (like
-`loop_correct` in `Refine.v`) to lift the whole run, add a prologue lemma relating riscv's
-init machine to our `mkInit` by `Rrel` (analogue of `init_loopinv`), and compose with the
-finished `core_refines` so the *reference model running the real bytes* computes `coreSpec`.
-Build the `WFstep` side conditions hold over the run from the `WellFormed`/`LoopInv` layout
-(code 4-aligned ⊆ `getXAddrs`; `Dom` = code∪input∪output ⊆ `getMem`; reuse `Refine.v`'s
-store-disjointness geometry). See `CROSSCHECK.md` §1 (T2) / §3.
+`step_agrees` (`coq/RvCrossExec.v`) and the transport corollary (`coq/RvCrossRun.v`)
+are both **DONE**; the per-instruction recipe below is kept as the record of how each
+`exec_*` was built. `RvCrossRun.v` realises exactly the plan that used to live here:
+`transport_run` frames `step_agrees` as a forward simulation and inducts on fuel (via
+the `rrun` lockstep iterator and the definitional shift `nstep (S k) s = nstep k (step s)`)
+to lift a whole run; `model_result` reuses `init_loopinv`+`loop_correct`; `core_refines_riscv`
+composes them so the *reference model running the real bytes* computes `coreSpec`.
+
+**The remaining (larger) step** — making it unconditional — is discharging the two
+explicit hypotheses: (a) construct the finite-map riscv init machine from `mkInit` and
+prove `Rrel`; (b) prove `RunWF` (the `WFstep` side conditions hold over the run) from the
+`WellFormed`/`LoopInv` layout (code 4-aligned ⊆ `getXAddrs`; `Dom` = code∪input∪output ⊆
+`getMem`; xaddr preservation; reuse `Refine.v`'s store-disjointness geometry). See
+`CROSSCHECK.md` §1 (T2) / §3 and the `RvCrossRun.v` header.
 
 ### How each `exec_*` was built (the realised recipe)
 
@@ -240,6 +258,8 @@ reference model instead" = sense (b), transport.
 - Lean is 4.30.0 via elan, **no Mathlib**. Banned: `norm_num`, `ring`, `set…with`. Use
   `decide`/`omega`/`simp`/`Nat.le_refl`. `lake build`'s root must import a file or it's skipped
   (`lake env lean Hex0/Foo.lean` to check directly). See `lean-build-root` memory.
-- `core_refines` is `sorry`-free; `#print axioms` = `[propext, Classical.choice, Quot.sound]`.
+- `core_refines` is `sorry`-free; `#print axioms` = `[propext, Quot.sound]` (no
+  `Classical.choice` — the omega-on-compound-goals / `decide_eq_decide` / base-case-`simp`
+  leaks were removed; the grammar layer still uses `Classical.choice`).
 - A Lean execute/step cross-check would need `sail-riscv-lean` (171k LoC, WIP) — deferred; the
   Coq cross-check + the existing Lean↔Coq computational cross-validation (`Validate.*`) cover it.

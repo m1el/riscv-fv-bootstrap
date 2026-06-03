@@ -12,9 +12,9 @@ Goal: run hex0 on bare-metal `qemu-system-riscv` **and** have a formal proof
 | 3 | Hand-rolled **executable RV64I** model in **Lean + Coq** (the 12 instr forms `core` uses) | model |
 | 4 | Both models execute the **real binary** and match `coreSpec` (13-input differential battery, all error classes) | testing-grade, cross-validated vs QEMU |
 | 5 | **Certification** theorems: deployed bytes = `coreSpec` on embedded input + battery. Lean via `native_decide`; **Coq via `vm_compute` (kernel-checked)** | **finite / testing-grade** (proved, but covers finitely many inputs) |
-| 6 | **General refinement** (Lean **and Coq**): `core_refines : ∀ inp cap, WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`, **fully proved**. Lean: `sorry`-free, `#print axioms` = `[propext, Classical.choice, Quot.sound]`. Coq: `Admitted`-free, `Print Assumptions` = `[functional_extensionality_dep]` only. | **proof-grade, COMPLETE (both)** |
+| 6 | **General refinement** (Lean **and Coq**): `core_refines : ∀ inp cap, WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`, **fully proved**. Lean: `sorry`-free, `#print axioms` = `[propext, Quot.sound]` (`Classical.choice`-free). Coq: `Admitted`-free, `Print Assumptions` = `[functional_extensionality_dep]` only. | **proof-grade, COMPLETE (both)** |
 | 7a | **ISA cross-check, decode half** (`coq/RvCross.v`): `decode_agrees : ∀ w, 0≤w<2³² → ∀ i, Rv64i.decode w = i → i ≠ unknown → Decode.decode RV64I w = embed i` — our decoder proved equal to **riscv-coq** (`coq-riscv.0.0.5`, the bedrock2/`compiler` reference model) on all 12 forms, for every 32-bit word. `Admitted`-free; `Print Assumptions` = **Closed under the global context (zero axioms)**. | **proof-grade, COMPLETE** |
-| 7b | ISA cross-check, **execute/step half** (`step_agrees`, forward simulation vs riscv-coq's `Run.run1` over the Minimal `OState` machine) + transport corollary `core_refines_riscv` | **`step_agrees` PROVED** (`coq/RvCrossExec.v`: 12 `exec_*` + dispatch on `decode (fetch32 s)`, `Admitted`-free, `Print Assumptions` ⇒ only `functional_extensionality_dep`) on `RvCrossStep.v`'s bridges; under `Rrel` + `WFstep` one `Rv64i.step` = one `run1 RV64I` cycle. Remaining: transport corollary `core_refines_riscv` only |
+| 7b | ISA cross-check, **execute/step half** (`step_agrees`, forward simulation vs riscv-coq's `Run.run1` over the Minimal `OState` machine) + transport corollary `core_refines_riscv` | **PROVED.** `step_agrees` (`coq/RvCrossExec.v`: 12 `exec_*` + dispatch on `decode (fetch32 s)`) and the transport corollary `core_refines_riscv` (`coq/RvCrossRun.v`: `transport_run` inducts `step_agrees` over a whole run via the `rrun` lockstep iterator, composed with `init_loopinv`+`loop_correct`) are both `Admitted`-free, `Print Assumptions` ⇒ only `functional_extensionality_dep`. Under `Rrel`+`WFstep` one `Rv64i.step` = one `run1 RV64I` cycle; the corollary lifts this so the riscv-coq reference model running the real `core` bytes computes `coreSpec`, modulo two **explicit** factored hypotheses (init-state `Rrel` match + per-step `RunWF` along the run). Reverse decode `decode_agrees_rev`+`embed_inj` (`coq/RvCross.v`, ZERO axioms) also added. Remaining: discharge the two corollary hypotheses unconditionally |
 
 ### The honest epistemics (see also the conversation)
 
@@ -24,7 +24,8 @@ Goal: run hex0 on bare-metal `qemu-system-riscv` **and** have a formal proof
 - The only thing that **dominates testing** is item 6, the general theorem
   `core_refines : ∀ inp cap, WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`,
   established by induction over the loop. **This proof is now complete and `sorry`-free**
-  (kernel-checked; only the standard `propext`/`Classical.choice`/`Quot.sound` axioms).
+  (kernel-checked; axioms `[propext, Quot.sound]` — `Classical.choice`-free; the
+  grammar layer in `Grammar.lean` still uses `Classical.choice`).
 
 ## Proof plan for `core_refines` (the 4 steps) and where each stands
 
@@ -52,8 +53,8 @@ type-checks and is kernel-checked, assembling the prologue (`loadBytes_frame`/
 `loadBytes_get`, `code_initOn`/`in_initOn`, `init_loopinv`), the induction
 (`loop_correct`), `runFuel_add`, and the `observe↔coreSpec` conversion
 (`decode_bytes_lt`, `range_getD`, `coreSpec_props`, `toNat`/`ofNat`).
-`#print axioms Hex0.Refine.core_refines` → `[propext, Classical.choice, Quot.sound]`
-(no `sorryAx`). **The entire verified-tower refinement for hex0 has no remaining
+`#print axioms Hex0.Refine.core_refines` → `[propext, Quot.sound]` (`Classical.choice`-free,
+no `sorryAx`). **The entire verified-tower refinement for hex0 has no remaining
 `sorry`.**
 
 Next: **Finish the ISA cross-check** (task #7). The **decode half is DONE**

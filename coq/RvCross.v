@@ -351,3 +351,34 @@ Proof.
                      +++ exfalso; apply Hni; reflexivity.
                  --- exfalso; apply Hni; reflexivity.
 Qed.
+
+(** ** Reverse direction (the correspondence is faithful both ways on the 12
+    modelled forms).
+
+    [embed] is injective on the modelled forms, so whenever riscv-coq decodes [w]
+    to [embed j] AND our decoder also returns a modelled form ([decode w <> Iunknown]),
+    the two outputs coincide ([decode w = j]).  Equivalently: our decoder never
+    *mis*classifies -- if it commits to one of the 12 forms, it commits to the SAME
+    one riscv-coq does.
+
+    The hypothesis [Rv64i.decode w <> Iunknown] is exactly the documented narrowing
+    (CROSSCHECK.md §5): for the encodings our decoder *declines* (returns [Iunknown])
+    -- every instruction outside our 12 forms, and SLLI with [shamt >= 32] (where
+    riscv-coq at RV64I still yields [Slli] but our decoder requires [funct7 = 0],
+    i.e. bit 25 = shamt[5] = 0) -- no reverse claim is made.  On every [core] SLLI
+    ([shamt in {0..4}]) the proviso holds, so the reverse agreement applies there. *)
+Lemma embed_inj : forall i j, i <> Iunknown -> embed i = embed j -> i = j.
+Proof.
+  intros i j Hi Heq.
+  destruct i; try (exfalso; apply Hi; reflexivity);
+    destruct j; cbn in Heq; try discriminate; inversion Heq; subst; reflexivity.
+Qed.
+
+Theorem decode_agrees_rev : forall w, 0 <= w < 2 ^ 32 ->
+  forall j, Rv64i.decode w <> Iunknown -> decode RV64I w = embed j -> Rv64i.decode w = j.
+Proof.
+  intros w Hw j Hni Hdec.
+  pose proof (decode_agrees w Hw (Rv64i.decode w) eq_refl Hni) as Hfwd.
+  rewrite Hfwd in Hdec.
+  apply embed_inj; assumption.
+Qed.

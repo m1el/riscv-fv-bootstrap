@@ -400,7 +400,7 @@ Lemma Result_pc f inp cap : Result f inp cap -> f.(pc) = 0.
 Proof. unfold Result. destruct (coreSpec (zin inp) (Z.to_nat cap)) as [[st bs] ln]. tauto. Qed.
 
 (* Base case: input exhausted -> halts Ok with output preserved. (Uses core_eof;
-   the readMem/coreSpec packaging is the remaining detail -- Admitted for now.) *)
+   the readMem/coreSpec packaging -- PROVED, see Qed below.) *)
 Theorem eof_result : forall inp cap emitted s,
   LoopInv inp cap s [] emitted -> Result (runUntil 0 4 s) inp cap.
 Proof.
@@ -3144,7 +3144,7 @@ Proof.
 Qed.
 
 (* One iteration: consume >= 1 char in <= 50 steps/char, preserving LoopInv, or
-   halt correctly. The per-token dispatch (FRONTIER) -- Admitted for now. *)
+   halt correctly. The per-token dispatch -- PROVED, see Qed below. *)
 Theorem loop_iteration : forall inp cap rest emitted s,
   rest <> [] -> LoopInv inp cap s rest emitted ->
   exists k,

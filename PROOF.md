@@ -170,7 +170,7 @@ until the last per-token case lands; check no `Admitted` remain with
 ```
 cd lean && lake build                       # full Lean dev (Refine + Grammar), sorry-free
 lake env lean Hex0/Refine.lean              # type-check Refine directly (no cache)
-#print axioms Hex0.Refine.core_refines      # ⇒ [propext, Classical.choice, Quot.sound]
+#print axioms Hex0.Refine.core_refines      # ⇒ [propext, Quot.sound]  (Classical.choice-free)
 eval $(opam env); cd coq && make -jN        # Coq dev (Refine.v: port in progress)
 grep -rn 'Admitted\|sorry' coq/ lean/       # remaining holes
 ```

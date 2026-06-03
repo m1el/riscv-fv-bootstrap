@@ -5,9 +5,10 @@
   it quantifies over every input via induction on the main loop, so it dominates
   any amount of emulator testing. It uses NO `native_decide`.
 
-  STATUS: scaffold. The per-step reduction primitive is proved and works (see
-  `step_li_t0`); the loop invariant and top-level statement are pinned down; the
-  inductive body is the remaining frontier (marked `sorry`). See STATUS.md.
+  STATUS: COMPLETE. `core_refines` is fully proved, `sorry`-free. The per-step
+  reduction primitives (`step_li_t0` etc.), the loop invariant, the inductive body
+  (`loop_iteration`/`loop_correct`), the prologue (`init_loopinv`), and the
+  top-level assembly are all closed by `Qed`/`rfl`. See STATUS.md.
 -/
 import Hex0.Rv64i
 import Hex0.Spec
@@ -955,7 +956,9 @@ theorem loop_spacing (inp : List Nat) (cap : Nat) (c : Nat) (rest' emitted : Lis
   have hsc : Hex0.isComment c = false := by
     simp only [Hex0.isSpace, Hex0.c_nl, Hex0.c_sp, Hex0.c_us, beq_iff_eq, Bool.or_eq_true] at hss
     simp only [Hex0.isComment, Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff, beq_eq_false_iff_ne]
-    omega
+    -- split the conjunction goal before `omega` (a conjunction goal pulls in
+    -- `Classical.choice`); `hss : c = 10 ∨ c = 32 ∨ c = 95` feeds each subgoal.
+    (repeat' apply And.intro) <;> omega
   obtain ⟨s4, hrun4, hpc4, ht2, ht0, hmem4, hcode4, hother4⟩ :=
     loop_prefix inp cap c rest' emitted s inv
   obtain ⟨k, htpc, htmem, htother⟩ := spacing_tail s4 hcode4 c hpc4 ht2 hss
@@ -980,7 +983,9 @@ theorem slt_ofNat (a b : Nat) (ha : a < 2 ^ 63) (hb : b < 2 ^ 63) :
       BitVec.toInt_eq_toNat_of_lt (by rw [BitVec.toNat_ofNat]; omega),
       BitVec.toNat_ofNat, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega),
       Nat.mod_eq_of_lt (by omega)]
-  exact decide_eq_decide.mpr (by omega)
+  -- goal: `decide ((a:ℤ) < b) = decide (a < b)`; close via the cast lemma
+  -- `Int.ofNat_lt` (choice-free) rather than `decide_eq_decide` (pulls in Classical.choice).
+  simp only [Int.ofNat_lt]
 
 /-- `addi rd,rs1,imm` with `imm` a (negative) two's-complement offset `-sub`
     computes `rs1 - sub` when `rs1 ≥ sub`. Used for the nibble value `c - 48` /
@@ -995,23 +1000,52 @@ theorem nibble_addi (c sub : Nat) (imm : BitVec 12)
 theorem nibble_lt (c v : Nat) (h : Hex0.nibble c = some v) : v < 16 := by
   unfold Hex0.nibble at h; split at h <;> simp_all <;> omega
 
+/-- If `nibble c = none`, then `c` is outside both hex-digit ranges. Proved with
+    explicit decidable case splits (`Nat.lt_or_ge`) so that `omega` never sees a
+    negated conjunction — which would otherwise pull in `Classical.choice`. -/
+theorem nibble_none_range (c : Nat) (hn : Hex0.nibble c = none) :
+    c < 48 ∨ (57 < c ∧ c < 65) ∨ 70 < c := by
+  simp only [Hex0.nibble] at hn
+  rcases Nat.lt_or_ge c 48 with h | h
+  · exact Or.inl h
+  · rcases Nat.lt_or_ge c 58 with h2 | h2
+    · rw [if_pos ⟨h, by omega⟩] at hn; exact absurd hn (by simp)
+    · rcases Nat.lt_or_ge c 65 with h3 | h3
+      · exact Or.inr (Or.inl ⟨by omega, h3⟩)
+      · rcases Nat.lt_or_ge c 71 with h4 | h4
+        · rw [if_neg (fun hcon => by omega), if_pos ⟨h3, by omega⟩] at hn
+          exact absurd hn (by simp)
+        · exact Or.inr (Or.inr (by omega))
+
+/-- If `nibble l = some v`, then `l` is in one of the two hex-digit ranges.
+    Choice-free (see `nibble_none_range`). -/
+theorem nibble_some_range (l v : Nat) (h : Hex0.nibble l = some v) :
+    (48 ≤ l ∧ l ≤ 57) ∨ (65 ≤ l ∧ l ≤ 70) := by
+  simp only [Hex0.nibble] at h
+  rcases Nat.lt_or_ge l 48 with hh | hh
+  · rw [if_neg (fun hcon => by omega), if_neg (fun hcon => by omega)] at h; exact absurd h (by simp)
+  · rcases Nat.lt_or_ge l 58 with h2 | h2
+    · exact Or.inl ⟨hh, by omega⟩
+    · rcases Nat.lt_or_ge l 65 with h3 | h3
+      · rw [if_neg (fun hcon => by omega), if_neg (fun hcon => by omega)] at h; exact absurd h (by simp)
+      · rcases Nat.lt_or_ge l 71 with h4 | h4
+        · exact Or.inr ⟨h3, by omega⟩
+        · rw [if_neg (fun hcon => by omega), if_neg (fun hcon => by omega)] at h; exact absurd h (by simp)
+
 /-- A hex digit is never a low-stop char (`\n ' ' '_' '#' ';'`). -/
 theorem nibble_not_lowstop (l v : Nat) (h : Hex0.nibble l = some v) : Hex0.isLowStop l = false := by
-  have hr : (48 ≤ l ∧ l ≤ 57) ∨ (65 ≤ l ∧ l ≤ 70) := by
-    simp only [Hex0.nibble] at h
-    by_cases hd : 48 ≤ l ∧ l ≤ 57
-    · exact Or.inl hd
-    · rw [if_neg hd] at h
-      by_cases he : 65 ≤ l ∧ l ≤ 70
-      · exact Or.inr he
-      · rw [if_neg he] at h; exact absurd h (by simp)
+  have hr : (48 ≤ l ∧ l ≤ 57) ∨ (65 ≤ l ∧ l ≤ 70) := nibble_some_range l v h
   simp only [Hex0.isLowStop, Hex0.isSpace, Hex0.isComment, Hex0.c_nl, Hex0.c_sp, Hex0.c_us,
     Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff, beq_eq_false_iff_ne]
-  omega
+  -- split the conjunction goal before `omega`: `omega` closing a conjunction goal
+  -- directly pulls in `Classical.choice`; one disequality per subgoal does not.
+  rcases hr with h | h <;> (repeat' apply And.intro) <;> omega
 
 /-- `skipComment` drops the newline that ends a comment. -/
 theorem skipComment_cons_nl (c : Nat) (rest : List Nat) (h : c = Hex0.c_nl) :
-    Hex0.skipComment (c :: rest) = rest := by simp [Hex0.skipComment, h]
+    -- `subst; rfl` rather than `simp [...]`: the closed numeral `c_nl` makes the
+    -- base case compute, and `simp` here would pull in `Classical.choice`.
+    Hex0.skipComment (c :: rest) = rest := by subst h; rfl
 
 /-- `skipComment` keeps scanning past a non-newline. -/
 theorem skipComment_cons_ne (c : Nat) (rest : List Nat) (h : c ≠ Hex0.c_nl) :
@@ -1946,14 +1980,7 @@ theorem high_parse_unknown (s : State) (hcode : CodeLoaded s) (c : Nat)
     (hc256 : c < 256) (hn : Hex0.nibble c = none) :
     ∃ k, (runFuel 0 k s).pc = BitVec.ofNat 64 (Image.coreAddr + 312) ∧
       (runFuel 0 k s).mem = s.mem ∧ (∀ i, i ≠ 28 → (runFuel 0 k s).rget i = s.rget i) := by
-  have hrange : c < 48 ∨ (57 < c ∧ c < 65) ∨ 70 < c := by
-    simp only [Hex0.nibble] at hn
-    by_cases hd : 48 ≤ c ∧ c ≤ 57
-    · rw [if_pos hd] at hn; exact absurd hn (by simp)
-    · rw [if_neg hd] at hn
-      by_cases hl : 65 ≤ c ∧ c ≤ 70
-      · rw [if_pos hl] at hn; exact absurd hn (by simp)
-      · omega
+  have hrange : c < 48 ∨ (57 < c ∧ c < 65) ∨ 70 < c := nibble_none_range c hn
   rcases hrange with h | ⟨h1, h2⟩ | h
   · -- c < 48: blt at 64 taken
     have b := li_blt_t s 64 48 c 0x00f4#13 (BitVec.ofNat 64 (Image.coreAddr + 312)) hcode hpc h7
@@ -2023,14 +2050,7 @@ theorem low_parse_unknown (s : State) (hcode : CodeLoaded s) (c : Nat)
     (hc256 : c < 256) (hn : Hex0.nibble c = none) :
     ∃ k, (runFuel 0 k s).pc = BitVec.ofNat 64 (Image.coreAddr + 312) ∧
       (runFuel 0 k s).mem = s.mem ∧ (∀ i, i ≠ 28 → (runFuel 0 k s).rget i = s.rget i) := by
-  have hrange : c < 48 ∨ (57 < c ∧ c < 65) ∨ 70 < c := by
-    simp only [Hex0.nibble] at hn
-    by_cases hd : 48 ≤ c ∧ c ≤ 57
-    · rw [if_pos hd] at hn; exact absurd hn (by simp)
-    · rw [if_neg hd] at hn
-      by_cases hl : 65 ≤ c ∧ c ≤ 70
-      · rw [if_pos hl] at hn; exact absurd hn (by simp)
-      · omega
+  have hrange : c < 48 ∨ (57 < c ∧ c < 65) ∨ 70 < c := nibble_none_range c hn
   rcases hrange with h | ⟨h1, h2⟩ | h
   · have b := li_blt_t s 164 48 c 0x0090#13 (BitVec.ofNat 64 (Image.coreAddr + 312)) hcode hpc h7
       (by decide) (by decide) (by decide) h (by omega) (by omega) (by decide) (by decide)
