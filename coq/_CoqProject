@@ -5,6 +5,7 @@ Image.v
 Harness.v
 Certify.v
 Refine.v
+Grammar.v
 RvCross.v
 RvCrossStep.v
 RvCrossExec.v
