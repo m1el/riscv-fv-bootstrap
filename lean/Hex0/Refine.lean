@@ -237,7 +237,7 @@ theorem loadBytes_get :
         · simp only [List.length_cons] at hlen; omega
         · simp only [List.length_cons] at hlen; omega
         · omega)]
-      simp [Nat.add_zero, List.getD_cons_zero]
+      simp [Nat.add_zero]
     | succ j' =>
       rw [show base + (j' + 1) = (base + 1) + j' from by omega,
           ih (base + 1) _ j' (by simp only [List.length_cons] at hj; omega)
@@ -3285,7 +3285,7 @@ theorem decodeS_bytes_lt : ∀ (st : Hex0.St) (l : List Nat),
           exact decodeS_bytes_lt .High rest (fun _ h => nomatch h) b hb
         · rw [if_neg hs] at hb
           cases hn : Hex0.nibble c with
-          | none => rw [hn] at hb; simp [Hex0.decodeS] at hb
+          | none => rw [hn] at hb; simp at hb
           | some hi => rw [hn] at hb
                        exact decodeS_bytes_lt (.Low hi) rest
                          (fun hi' h => by cases h; exact nibble_lt _ _ hn) b hb
@@ -3305,7 +3305,7 @@ theorem decodeS_bytes_lt : ∀ (st : Hex0.St) (l : List Nat),
             have := hpre hi rfl
             omega
           · exact decodeS_bytes_lt .High rest (fun _ hh => nomatch hh) b h
-  termination_by st l => l.length
+  termination_by _st l => l.length
   decreasing_by
     · exact Nat.lt_of_le_of_lt (Hex0.skipComment_len rest) (by simp)
     · simp
