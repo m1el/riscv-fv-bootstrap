@@ -6339,4 +6339,471 @@ theorem p2_lo_value (s4 : State) (c hi : Nat) (hcode : CodeLoaded1 s4)
           rset_rget _ _ _ _ (by decide) h0, if_neg hreg,
           hw1, li_block_frame _ _ _ i h28]
 
+/-! ## Pass 2: byte tokens, assembled. -/
+
+set_option maxRecDepth 8000 in
+set_option maxHeartbeats 1600000 in
+/-- A COMPLETE pass-2 iteration for a byte token: the machine computes the
+    nibbles (validated by pass 1, via `scan_ok`), emits `hi*16+lo` at
+    `outAddr + |emitted|`, and loops back. -/
+theorem p2_byte (inp : List Nat) (cap : Nat) (c : Nat) (rest' : List Nat)
+    (labF labNow : Labels) (m : Nat) (emitted : List Nat) (s : State)
+    (inv : P2Inv inp cap s labF labNow m emitted (c :: rest'))
+    (hsc : Hex0.isComment c = false) (hss : Hex0.isSpace c = false)
+    (hncol : (c == Hex1.c_colon) = false) (hnpct : (c == Hex1.c_pct) = false) :
+    ∃ n s' l rest2 b, rest' = l :: rest2 ∧ 0 < n ∧ runFuel 0 n s = s' ∧
+      P2Inv inp cap s' labF labNow m (emitted ++ [b]) rest2 := by
+  have hlbl := inv.wf.lbl_fits
+  have hin := inv.wf.in_fits
+  have hout := inv.wf.out_fits
+  have hcap63 := inv.wf.cap63
+  have hlen64 : inp.length < 2 ^ 64 := by
+    simp only [Image1.inputAddr, Image1.outAddr, Image1.lblAddr] at hin hout hlbl
+    omega
+  have hrest'_eq : inp.drop (inp.length - rest'.length) = rest' :=
+    suffix_step inp c rest' inv.suffix
+  have hc256 : c < 256 := by
+    apply inv.wf.bytes_ok
+    have : c ∈ inp.drop (inp.length - (c :: rest').length) := by
+      rw [inv.suffix]; exact List.mem_cons_self
+    exact List.drop_subset _ _ this
+  have hc64 : c < 2 ^ 64 := by omega
+  have hne7 : c ≠ 35 ∧ c ≠ 59 ∧ c ≠ 10 ∧ c ≠ 32 ∧ c ≠ 95 ∧ c ≠ 58 ∧ c ≠ 37 := by
+    simp only [Hex0.isComment, Hex0.c_hash, Hex0.c_semi, Bool.or_eq_false_iff,
+      beq_eq_false_iff_ne] at hsc
+    simp only [Hex0.isSpace, Hex0.c_nl, Hex0.c_sp, Hex0.c_us, Bool.or_eq_false_iff,
+      beq_eq_false_iff_ne] at hss
+    simp only [Hex1.c_colon, beq_eq_false_iff_ne] at hncol
+    simp only [Hex1.c_pct, beq_eq_false_iff_ne] at hnpct
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> omega
+  -- the scan certifies the token shape
+  have hscu := inv.scan_ok
+  rw [Hex1.scan1] at hscu
+  rw [if_neg (by simp [hsc]), if_neg (by simp [hss]), if_neg (by simp [hncol]),
+      if_neg (by simp [hnpct])] at hscu
+  -- machine: prefix + dispatch fall-through to 440
+  obtain ⟨s4, hrun4, hpc4, ht2, hidx4, hmem4, hcode4, hframe4⟩ :=
+    p2_prefix inp cap c rest' labF labNow m emitted s inv
+  obtain ⟨sd, hrund, hpcd, hmemd, hframed⟩ := p2_byte_fall s4 c hcode4 hpc4 ht2 hc64 hne7
+  have hcoded : CodeLoaded1 sd := by
+    intro i hi2
+    rw [show sd.mem = s4.mem from hmemd]
+    exact hcode4 i hi2
+  have hmem_sd : sd.mem = s.mem := by rw [hmemd, hmem4]
+  have hframe_sd : ∀ i, i ≠ 0 → i ≠ 5 → i ≠ 7 → i ≠ 28 → sd.rget i = s.rget i := by
+    intro i h0 h5 h7 h28
+    rw [hframed i h28]
+    exact hframe4 i h0 h5 h7 h28
+  have ht2d : sd.rget 7 = BitVec.ofNat 64 c := by
+    rw [hframed 7 (by decide)]; exact ht2
+  have h5sd : sd.rget 5 = BitVec.ofNat 64 (inp.length - rest'.length) := by
+    rw [hframed 5 (by decide)]; exact hidx4
+  cases hnh : Hex0.nibble c with
+  | none =>
+    rw [hnh] at hscu
+    simp at hscu
+  | some hi =>
+    simp only [hnh] at hscu
+    have hhi16 : hi < 16 := nibble_lt c hi hnh
+    cases rest' with
+    | nil =>
+      rw [Hex1.scan1] at hscu
+      simp at hscu
+    | cons l rest2 =>
+      rw [Hex1.scan1] at hscu
+      cases hls : Hex1.isLowStop l with
+      | true =>
+        rw [if_pos hls] at hscu
+        simp at hscu
+      | false =>
+        rw [if_neg (by simp [hls])] at hscu
+        cases hnl : Hex0.nibble l with
+        | none =>
+          simp only [hnl] at hscu
+          simp at hscu
+        | some lo =>
+          simp only [hnl] at hscu
+          have hlo16 : lo < 16 := nibble_lt l lo hnl
+          have hposm : emitted.length + 1 ≤ m := by
+            have h := scan1_pos_le rest2.length .High labNow (emitted.length + 1) rest2
+              (Nat.le_refl _)
+            rw [hscu] at h
+            exact h
+          have hposcap : emitted.length < cap := by
+            have := inv.m_le
+            omega
+          have hge2 : rest2.length + 2 ≤ inp.length := by
+            have h := congrArg List.length inv.suffix
+            simp only [List.length_drop, List.length_cons] at h
+            omega
+          have hidx1lt : inp.length - (l :: rest2).length < inp.length := by
+            simp only [List.length_cons]; omega
+          have hgetl : inp.getD (inp.length - (l :: rest2).length) 0 = l := by
+            rw [← getD_drop]; rw [hrest'_eq]; rfl
+          have hl256 : l < 256 := by
+            apply inv.wf.bytes_ok
+            have : l ∈ inp.drop (inp.length - (l :: rest2).length) := by
+              rw [hrest'_eq]; exact List.mem_cons_self
+            exact List.drop_subset _ _ this
+          -- machine: high-nibble value
+          obtain ⟨nH, sH, hrunH, hnH, hpcH, hr29H, hmemH, hframeH⟩ :=
+            p2_hi_value sd c hi hcoded hpcd ht2d hc256 hnh
+          have hcodeH : CodeLoaded1 sH := by
+            intro i hi2
+            rw [hmemH]
+            exact hcoded i hi2
+          have hmem_sH : sH.mem = s.mem := by rw [hmemH, hmem_sd]
+          have hframe_sH : ∀ i, i ≠ 0 → i ≠ 5 → i ≠ 7 → i ≠ 28 → i ≠ 29 →
+              sH.rget i = s.rget i := by
+            intro i h0 h5 h7 h28 h29
+            rw [hframeH i h28 h29]
+            exact hframe_sd i h0 h5 h7 h28
+          have h5H : sH.rget 5 = BitVec.ofNat 64 (inp.length - (l :: rest2).length) := by
+            rw [hframeH 5 (by decide) (by decide)]
+            exact h5sd
+          have h10H : sH.rget 10 = BitVec.ofNat 64 Image1.inputAddr := by
+            rw [hframe_sH 10 (by decide) (by decide) (by decide) (by decide) (by decide)]
+            exact inv.a0
+          have hinH : InputLoaded sH inp := by
+            intro j hj
+            rw [hmem_sH]
+            exact inv.in_mem j hj
+          -- machine: read the low char
+          obtain ⟨s8, hrun8, hpc8, ht2_8, h5_8, hmem8, hcode8, hframe8⟩ :=
+            p2_read2 sH inp l (inp.length - (l :: rest2).length) hcodeH hpcH h5H h10H
+              hinH hidx1lt hgetl hl256
+          have hmem_s8 : s8.mem = s.mem := by rw [hmem8, hmem_sH]
+          have hframe_s8 : ∀ i, i ≠ 0 → i ≠ 5 → i ≠ 7 → i ≠ 28 → i ≠ 29 →
+              s8.rget i = s.rget i := by
+            intro i h0 h5 h7 h28 h29
+            rw [hframe8 i h0 h5 h7 h28]
+            exact hframe_sH i h0 h5 h7 h28 h29
+          have hr29_8 : s8.rget 29 = BitVec.ofNat 64 hi := by
+            rw [hframe8 29 (by decide) (by decide) (by decide) (by decide)]
+            exact hr29H
+          have h5_8' : s8.rget 5 = BitVec.ofNat 64 (inp.length - rest2.length) := by
+            rw [h5_8]
+            congr 1
+            simp only [List.length_cons]
+            omega
+          -- machine: low-nibble value
+          obtain ⟨nL, sL, hrunL, hnL, hpcL, hr30L, hmemL, hframeL⟩ :=
+            p2_lo_value s8 l lo hcode8 hpc8 ht2_8 hl256 hnl
+          have hcodeL : CodeLoaded1 sL := by
+            intro i hi2
+            rw [hmemL]
+            exact hcode8 i hi2
+          have hmem_sL : sL.mem = s.mem := by rw [hmemL, hmem_s8]
+          have hframe_sL : ∀ i, i ≠ 0 → i ≠ 5 → i ≠ 7 → i ≠ 28 → i ≠ 29 → i ≠ 30 →
+              sL.rget i = s.rget i := by
+            intro i h0 h5 h7 h28 h29 h30
+            rw [hframeL i h28 h30]
+            exact hframe_s8 i h0 h5 h7 h28 h29
+          have hr29L : sL.rget 29 = BitVec.ofNat 64 hi := by
+            rw [hframeL 29 (by decide) (by decide)]
+            exact hr29_8
+          have h5L : sL.rget 5 = BitVec.ofNat 64 (inp.length - rest2.length) := by
+            rw [hframeL 5 (by decide) (by decide)]
+            exact h5_8'
+          have h6L : sL.rget 6 = BitVec.ofNat 64 emitted.length := by
+            rw [hframe_sL 6 (by decide) (by decide) (by decide) (by decide) (by decide)
+                (by decide)]
+            exact inv.outidx
+          have h12L : sL.rget 12 = BitVec.ofNat 64 Image1.outAddr := by
+            rw [hframe_sL 12 (by decide) (by decide) (by decide) (by decide) (by decide)
+                (by decide)]
+            exact inv.a2
+          have hqL : sL.pc ≠ 0 := by rw [hpcL]; exact corePc_ne_zero 492 (by omega)
+          -- store epilogue (492..512): slli/or/add/sb/addi/jal
+          have hu1 : step sL = (sL.rset 29 (BitVec.ofNat 64 hi <<< 4)).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 496)) := by
+            rw [step_slli sL 492 29 29 4 hcodeL (by rw [coreBytes_len]; omega) hpcL dec_492,
+                hr29L,
+                show sL.pc + 4 = BitVec.ofNat 64 (Image1.coreAddr + 496) from by
+                  rw [hpcL]; decide]
+          let u1 := (sL.rset 29 (BitVec.ofNat 64 hi <<< 4)).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 496))
+          have hsu1 : u1 = (sL.rset 29 (BitVec.ofNat 64 hi <<< 4)).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 496)) := rfl
+          try rw [← hsu1] at hu1
+          have hcu1 : CodeLoaded1 u1 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hcodeL)
+          have hpcu1 : u1.pc = BitVec.ofNat 64 (Image1.coreAddr + 496) := rfl
+          have hqu1 : u1.pc ≠ 0 := by rw [hpcu1]; exact corePc_ne_zero 496 (by omega)
+          have h29u1 : u1.rget 29 = BitVec.ofNat 64 hi <<< 4 := by
+            rw [hsu1, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]
+            simp
+          have h30u1 : u1.rget 30 = BitVec.ofNat 64 lo := by
+            rw [hsu1, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+                if_neg (by decide : (30:Nat) ≠ 29)]
+            exact hr30L
+          have hu2 : step u1 = (u1.rset 29 (BitVec.ofNat 64 hi <<< 4
+              ||| BitVec.ofNat 64 lo)).setPc (BitVec.ofNat 64 (Image1.coreAddr + 500)) := by
+            rw [step_or u1 496 29 29 30 hcu1 (by rw [coreBytes_len]; omega) hpcu1 dec_496,
+                h29u1, h30u1,
+                show u1.pc + 4 = BitVec.ofNat 64 (Image1.coreAddr + 500) from by
+                  rw [hpcu1]; decide]
+          let u2 := (u1.rset 29 (BitVec.ofNat 64 hi <<< 4 ||| BitVec.ofNat 64 lo)).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 500))
+          have hsu2 : u2 = (u1.rset 29 (BitVec.ofNat 64 hi <<< 4
+              ||| BitVec.ofNat 64 lo)).setPc (BitVec.ofNat 64 (Image1.coreAddr + 500)) := rfl
+          try rw [← hsu2] at hu2
+          have hcu2 : CodeLoaded1 u2 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hcu1)
+          have hpcu2 : u2.pc = BitVec.ofNat 64 (Image1.coreAddr + 500) := rfl
+          have hqu2 : u2.pc ≠ 0 := by rw [hpcu2]; exact corePc_ne_zero 500 (by omega)
+          have h12u2 : u2.rget 12 = BitVec.ofNat 64 Image1.outAddr := by
+            rw [hsu2, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+                if_neg (by decide : (12:Nat) ≠ 29), hsu1, Hex0.Refine.setPc_rget,
+                rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (12:Nat) ≠ 29)]
+            exact h12L
+          have h6u2 : u2.rget 6 = BitVec.ofNat 64 emitted.length := by
+            rw [hsu2, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+                if_neg (by decide : (6:Nat) ≠ 29), hsu1, Hex0.Refine.setPc_rget,
+                rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (6:Nat) ≠ 29)]
+            exact h6L
+          have hu3 : step u2 = (u2.rset 28 (BitVec.ofNat 64
+              (Image1.outAddr + emitted.length))).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 504)) := by
+            rw [step_add u2 500 28 12 6 hcu2 (by rw [coreBytes_len]; omega) hpcu2 dec_500,
+                show u2.rget 12 + u2.rget 6 = BitVec.ofNat 64
+                    (Image1.outAddr + emitted.length) from by
+                  rw [h12u2, h6u2]; exact addr_ofNat_succ _ _,
+                show u2.pc + 4 = BitVec.ofNat 64 (Image1.coreAddr + 504) from by
+                  rw [hpcu2]; decide]
+          let u3 := (u2.rset 28 (BitVec.ofNat 64 (Image1.outAddr + emitted.length))).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 504))
+          have hsu3 : u3 = (u2.rset 28 (BitVec.ofNat 64
+              (Image1.outAddr + emitted.length))).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 504)) := rfl
+          try rw [← hsu3] at hu3
+          have hcu3 : CodeLoaded1 u3 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hcu2)
+          have hpcu3 : u3.pc = BitVec.ofNat 64 (Image1.coreAddr + 504) := rfl
+          have hqu3 : u3.pc ≠ 0 := by rw [hpcu3]; exact corePc_ne_zero 504 (by omega)
+          have h28u3 : u3.rget 28 = BitVec.ofNat 64 (Image1.outAddr + emitted.length) := by
+            rw [hsu3, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]
+            simp
+          have h29u3 : u3.rget 29 = BitVec.ofNat 64 hi <<< 4 ||| BitVec.ofNat 64 lo := by
+            rw [hsu3, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+                if_neg (by decide : (29:Nat) ≠ 28), hsu2, Hex0.Refine.setPc_rget,
+                rset_rget _ _ _ _ (by decide) (by decide)]
+            simp
+          have h6u3 : u3.rget 6 = BitVec.ofNat 64 emitted.length := by
+            rw [hsu3, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+                if_neg (by decide : (6:Nat) ≠ 28)]
+            exact h6u2
+          have hmem_u3 : u3.mem = s.mem := by
+            rw [hsu3, hsu2, hsu1]
+            simp only [Hex0.Refine.setPc_mem, Hex0.Refine.rset_mem]
+            exact hmem_sL
+          have hu4 : step u3 = (u3.storeByte (BitVec.ofNat 64
+              (Image1.outAddr + emitted.length)) (BitVec.ofNat 8 (hi * 16 + lo))).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 508)) := by
+            rw [step_sb u3 504 28 29 (0#12) hcu3 (by rw [coreBytes_len]; omega) hpcu3 dec_504,
+                show u3.rget 28 + (0#12).signExtend 64 = BitVec.ofNat 64
+                    (Image1.outAddr + emitted.length) from by
+                  rw [h28u3, show ((0#12).signExtend 64) = 0#64 from by decide,
+                      BitVec.add_zero],
+                show (u3.rget 29).setWidth 8 = BitVec.ofNat 8 (hi * 16 + lo) from by
+                  rw [h29u3]; exact combine_nibbles hi lo hhi16 hlo16,
+                show u3.pc + 4 = BitVec.ofNat 64 (Image1.coreAddr + 508) from by
+                  rw [hpcu3]; decide]
+          let u4 := (u3.storeByte (BitVec.ofNat 64 (Image1.outAddr + emitted.length))
+              (BitVec.ofNat 8 (hi * 16 + lo))).setPc (BitVec.ofNat 64 (Image1.coreAddr + 508))
+          have hsu4 : u4 = (u3.storeByte (BitVec.ofNat 64
+              (Image1.outAddr + emitted.length)) (BitVec.ofNat 8 (hi * 16 + lo))).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 508)) := rfl
+          try rw [← hsu4] at hu4
+          have hcu4 : CodeLoaded1 u4 :=
+            codeLoaded1_setPc _ _ (codeLoaded1_storeByte u3 _ _ hcu3 (by
+              intro i2 hi2
+              rw [coreBytes_len] at hi2
+              refine ofNat_ne _ _ ?_ ?_ ?_
+              · simp only [Image1.coreAddr]; omega
+              · simp only [Image1.outAddr, Image1.lblAddr] at hout hlbl ⊢; omega
+              · simp only [Image1.coreAddr, Image1.inputAddr, Image1.outAddr] at hin ⊢
+                omega))
+          have hpcu4 : u4.pc = BitVec.ofNat 64 (Image1.coreAddr + 508) := rfl
+          have hqu4 : u4.pc ≠ 0 := by rw [hpcu4]; exact corePc_ne_zero 508 (by omega)
+          have h6u4 : u4.rget 6 = BitVec.ofNat 64 emitted.length := by
+            rw [hsu4, Hex0.Refine.setPc_rget, Hex0.Refine.storeByte_rget]
+            exact h6u3
+          have hu5 : step u4 = (u4.rset 6 (BitVec.ofNat 64 (emitted.length + 1))).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 512)) := by
+            rw [step_addi u4 508 6 6 (BitVec.ofNat 12 1) hcu4 (by rw [coreBytes_len]; omega)
+                hpcu4 dec_508,
+                show u4.rget 6 + (BitVec.ofNat 12 1).signExtend 64
+                    = BitVec.ofNat 64 (emitted.length + 1) from by
+                  rw [h6u4, show ((BitVec.ofNat 12 1).signExtend 64) = (1 : Word) from by
+                        decide,
+                      show (1:Word) = BitVec.ofNat 64 1 from rfl, addr_ofNat_succ],
+                show u4.pc + 4 = BitVec.ofNat 64 (Image1.coreAddr + 512) from by
+                  rw [hpcu4]; decide]
+          let u5 := (u4.rset 6 (BitVec.ofNat 64 (emitted.length + 1))).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 512))
+          have hsu5 : u5 = (u4.rset 6 (BitVec.ofNat 64 (emitted.length + 1))).setPc
+              (BitVec.ofNat 64 (Image1.coreAddr + 512)) := rfl
+          try rw [← hsu5] at hu5
+          have hcu5 : CodeLoaded1 u5 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hcu4)
+          have hpcu5 : u5.pc = BitVec.ofNat 64 (Image1.coreAddr + 512) := rfl
+          have hqu5 : u5.pc ≠ 0 := by rw [hpcu5]; exact corePc_ne_zero 512 (by omega)
+          have hu6 : step u5 = u5.setPc (BitVec.ofNat 64 (Image1.coreAddr + 368)) := by
+            rw [step_jal u5 512 0 (BitVec.ofNat 21 2097008) hcu5
+                (by rw [coreBytes_len]; omega) hpcu5 dec_512, rset_zero,
+                show u5.pc + (BitVec.ofNat 21 2097008).signExtend 64
+                    = BitVec.ofNat 64 (Image1.coreAddr + 368) from by rw [hpcu5]; decide]
+          let sF := u5.setPc (BitVec.ofNat 64 (Image1.coreAddr + 368))
+          have hsF : sF = u5.setPc (BitVec.ofNat 64 (Image1.coreAddr + 368)) := rfl
+          try rw [← hsF] at hu6
+          have hrunE : runFuel 0 6 sL = sF := by
+            simp only [runFuel]
+            rw [hu1, hu2, hu3, hu4, hu5, hu6, if_neg hqL, if_neg hqu1, if_neg hqu2,
+                if_neg hqu3, if_neg hqu4, if_neg hqu5]
+          have hmem_at : ∀ a, sF.mem a
+              = if a = BitVec.ofNat 64 (Image1.outAddr + emitted.length)
+                then BitVec.ofNat 8 (hi * 16 + lo) else s.mem a := by
+            intro a
+            rw [hsF, hsu5, hsu4]
+            simp only [Hex0.Refine.setPc_mem, Hex0.Refine.rset_mem]
+            rw [storeByte_mem]
+            simp only []
+            rw [hmem_u3]
+          have hregF : ∀ i, i ≠ 0 → i ≠ 5 → i ≠ 6 → i ≠ 7 → i ≠ 28 → i ≠ 29 → i ≠ 30 →
+              sF.rget i = s.rget i := by
+            intro i h0 h5i h6i h7i h28i h29i h30i
+            rw [hsF, Hex0.Refine.setPc_rget, hsu5, Hex0.Refine.setPc_rget,
+                rset_rget _ _ _ _ (by decide) h0, if_neg h6i,
+                hsu4, Hex0.Refine.setPc_rget, Hex0.Refine.storeByte_rget,
+                hsu3, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg h28i,
+                hsu2, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg h29i,
+                hsu1, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg h29i]
+            exact hframe_sL i h0 h5i h7i h28i h29i h30i
+          have h5F : sF.rget 5 = BitVec.ofNat 64 (inp.length - rest2.length) := by
+            rw [hsF, Hex0.Refine.setPc_rget, hsu5, Hex0.Refine.setPc_rget,
+                rset_rget _ _ _ _ (by decide) (by decide), if_neg (by decide : (5:Nat) ≠ 6),
+                hsu4, Hex0.Refine.setPc_rget, Hex0.Refine.storeByte_rget,
+                hsu3, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+                if_neg (by decide : (5:Nat) ≠ 28),
+                hsu2, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+                if_neg (by decide : (5:Nat) ≠ 29),
+                hsu1, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+                if_neg (by decide : (5:Nat) ≠ 29)]
+            exact h5L
+          have h6F : sF.rget 6 = BitVec.ofNat 64 (emitted.length + 1) := by
+            rw [hsF, Hex0.Refine.setPc_rget, hsu5, Hex0.Refine.setPc_rget,
+                rset_rget _ _ _ _ (by decide) (by decide)]
+            simp
+          -- spec side: the emit telescope steps through the byte
+          obtain ⟨out2, st2, hrest⟩ : ∃ o s2,
+              Hex1.emit1 .High labF (emitted.length + 1) rest2 = (o, s2) :=
+            ⟨_, _, rfl⟩
+          have hstep_e : Hex1.emit1 .High labF emitted.length (c :: l :: rest2)
+              = ((hi * 16 + lo) :: out2, st2) := by
+            rw [Hex1.emit1]
+            rw [if_neg (by simp [hsc]), if_neg (by simp [hss]), if_neg (by simp [hncol]),
+                if_neg (by simp [hnpct])]
+            simp only [hnh]
+            rw [Hex1.emit1]
+            rw [if_neg (by simp [hls])]
+            simp only [hnl, hrest]
+          refine ⟨4 + (14 + (nH + (3 + (nL + 6)))), sF, l, rest2, hi * 16 + lo, rfl,
+            by omega, ?_, ?_⟩
+          · rw [runFuel_add, hrun4, runFuel_add, hrund, runFuel_add, hrunH,
+                runFuel_add, hrun8, runFuel_add, hrunL, hrunE]
+          · exact {
+              wf := inv.wf
+              at_loop := rfl
+              code := codeLoaded1_setPc _ _ hcu5
+              a0 := by
+                rw [hregF 10 (by decide) (by decide) (by decide) (by decide) (by decide)
+                    (by decide) (by decide)]
+                exact inv.a0
+              a1 := by
+                rw [hregF 11 (by decide) (by decide) (by decide) (by decide) (by decide)
+                    (by decide) (by decide)]
+                exact inv.a1
+              a2 := by
+                rw [hregF 12 (by decide) (by decide) (by decide) (by decide) (by decide)
+                    (by decide) (by decide)]
+                exact inv.a2
+              a3 := by
+                rw [hregF 13 (by decide) (by decide) (by decide) (by decide) (by decide)
+                    (by decide) (by decide)]
+                exact inv.a3
+              a4 := by
+                rw [hregF 14 (by decide) (by decide) (by decide) (by decide) (by decide)
+                    (by decide) (by decide)]
+                exact inv.a4
+              ra0 := by
+                rw [hregF 1 (by decide) (by decide) (by decide) (by decide) (by decide)
+                    (by decide) (by decide)]
+                exact inv.ra0
+              in_mem := by
+                intro j hj
+                rw [hmem_at, if_neg (ofNat_ne _ _
+                  (by
+                    simp only [Image1.inputAddr, Image1.outAddr, Image1.lblAddr]
+                      at hin hout hlbl ⊢
+                    omega)
+                  (by
+                    simp only [Image1.outAddr, Image1.lblAddr] at hout hlbl ⊢
+                    omega)
+                  (by
+                    simp only [Image1.inputAddr, Image1.outAddr] at hin ⊢
+                    omega))]
+                exact inv.in_mem j hj
+              idx := h5F
+              suffix := suffix_step inp l rest2 hrest'_eq
+              outidx := by
+                rw [h6F]
+                congr 1
+                simp
+              out_mem := by
+                intro j hj
+                rw [show (emitted ++ [hi * 16 + lo]).length = emitted.length + 1 from by
+                      simp] at hj
+                rw [hmem_at]
+                by_cases hje : j = emitted.length
+                · subst hje
+                  rw [if_pos rfl]
+                  simp only [List.getD_eq_getElem?_getD,
+                    List.getElem?_append_right (Nat.le_refl _), Nat.sub_self]
+                  rfl
+                · rw [if_neg (ofNat_ne _ _
+                    (by
+                      simp only [Image1.outAddr, Image1.lblAddr] at hout hlbl ⊢
+                      omega)
+                    (by
+                      simp only [Image1.outAddr, Image1.lblAddr] at hout hlbl ⊢
+                      omega)
+                    (by omega))]
+                  simp only [List.getD_eq_getElem?_getD,
+                    List.getElem?_append_left (by omega : j < emitted.length)]
+                  exact inv.out_mem j (by omega)
+              tbl := by
+                intro cc hcc k hk
+                rw [hmem_at, if_neg (ofNat_ne _ _
+                  (by
+                    simp only [Image1.lblAddr] at hlbl ⊢
+                    omega)
+                  (by
+                    simp only [Image1.outAddr, Image1.lblAddr] at hout hlbl ⊢
+                    omega)
+                  (by
+                    simp only [Image1.outAddr, Image1.lblAddr] at hout hlbl ⊢
+                    omega))]
+                exact inv.tbl cc hcc k hk
+              m_le := inv.m_le
+              lab_le := inv.lab_le
+              scan_inp := inv.scan_inp
+              scan_ok := by
+                rw [show (emitted ++ [hi * 16 + lo]).length = emitted.length + 1 from by
+                      simp]
+                exact hscu
+              spec := by
+                have h := inv.spec
+                rw [hstep_e] at h
+                rw [show (emitted ++ [hi * 16 + lo]).length = emitted.length + 1 from by
+                      simp,
+                    hrest, h]
+                simp }
+
 end Hex1.Refine
