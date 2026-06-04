@@ -2069,3 +2069,525 @@ Proof.
     + apply (inputLoaded_eqmem s); [exact hmemF| exact hinm].
     + apply (tableLoaded_eqmem s); [exact hmemF| exact htbl].
 Qed.
+
+(** ** Pass-1 iteration: label definitions (`:l`), plus the Result1 builder
+    for the empty-output error exits. *)
+
+(* package a Result1 from a halted error-exit state (output empty) *)
+Lemma error_result1 : forall f inp cap labf m st,
+  scan1 High1 noLabels 0 (zin inp) = (labf, m, st) ->
+  st <> Ok1 ->
+  Z.of_nat m <= cap ->
+  f.(pc) = 0 -> rget f 10 = Z.of_nat (statusCode1 st) -> rget f 11 = 0 ->
+  Result1 f inp cap.
+Proof.
+  intros f inp cap labf m st hscan hne hm hpc h10 h11.
+  assert (hcapm : (Z.to_nat cap <? m)%nat = false)
+    by (apply Nat.ltb_ge; lia).
+  assert (hcs : coreSpec1 (zin inp) (Z.to_nat cap) = (statusCode1 st, [], 0%nat)).
+  { unfold coreSpec1, decode1. rewrite hscan.
+    destruct st; try congruence; rewrite hcapm; reflexivity. }
+  unfold Result1. rewrite hcs.
+  repeat apply conj; [exact hpc| exact h10| exact h11| reflexivity].
+Qed.
+
+(* spec-side colon unfolds *)
+Lemma scan1_colon lab pos rest :
+  scan1 High1 lab pos (58%nat :: rest) = scan1 Col1 lab pos rest.
+Proof. simp scan1. reflexivity. Qed.
+
+Lemma scan1_col_nil lab pos : scan1 Col1 lab pos [] = (lab, pos, TrailTok1).
+Proof. now simp scan1. Qed.
+
+Lemma scan1_col_cons lab pos lc rest :
+  scan1 Col1 lab pos (lc :: rest)
+  = match lab lc with
+    | Some _ => (lab, pos, Dup1)
+    | None => scan1 High1 (setLabel lab lc pos) pos rest
+    end.
+Proof. now simp scan1. Qed.
+
+(* dispatch 52 -> 264 for ':' (5 not-taken blocks + 1 taken): 12 steps *)
+Lemma p1_colon_tail s4 :
+  CodeLoaded1 s4 -> s4.(pc) = Image1.coreAddr + 52 -> rget s4 7 = 58 ->
+  exists s', runUntil 0 12 s4 = s' /\
+    s'.(pc) = Image1.coreAddr + 264 /\ s'.(mem) = s4.(mem) /\ CodeLoaded1 s' /\
+    (forall i, i <> 28 -> rget s' i = rget s4 i).
+Proof.
+  intros hcode hpc ht2.
+  pose proof (li1_beq_ne s4 52 35 58 276 hcode ltac:(lia)
+    ltac:(rewrite coreBytes1_len; lia) hpc ht2 ltac:(vm_compute; reflexivity)
+    ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia)) as hb1.
+  set (sB := setPc (rset s4 28 35) (Image1.coreAddr + (52 + 8))) in *.
+  assert (hcB : CodeLoaded1 sB) by
+    (apply (CodeLoaded1_eqmem s4); [unfold sB; rewrite setPc_mem, rset_mem; reflexivity| exact hcode]).
+  assert (hpcB : sB.(pc) = Image1.coreAddr + 60) by (unfold sB; cbn; lia).
+  assert (h7B : rget sB 7 = 58) by
+    (unfold sB; rewrite (li_block_frame s4 35 _ 7 ltac:(lia)); exact ht2).
+  pose proof (li1_beq_ne sB 60 59 58 268 hcB ltac:(lia)
+    ltac:(rewrite coreBytes1_len; lia) hpcB h7B ltac:(vm_compute; reflexivity)
+    ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia)) as hb2.
+  set (sC := setPc (rset sB 28 59) (Image1.coreAddr + (60 + 8))) in *.
+  assert (hcC : CodeLoaded1 sC) by
+    (apply (CodeLoaded1_eqmem sB); [unfold sC; rewrite setPc_mem, rset_mem; reflexivity| exact hcB]).
+  assert (hpcC : sC.(pc) = Image1.coreAddr + 68) by (unfold sC; cbn; lia).
+  assert (h7C : rget sC 7 = 58) by
+    (unfold sC; rewrite (li_block_frame sB 59 _ 7 ltac:(lia)); exact h7B).
+  pose proof (li1_beq_ne sC 68 10 58 (-36) hcC ltac:(lia)
+    ltac:(rewrite coreBytes1_len; lia) hpcC h7C ltac:(vm_compute; reflexivity)
+    ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia)) as hb3.
+  set (sD := setPc (rset sC 28 10) (Image1.coreAddr + (68 + 8))) in *.
+  assert (hcD : CodeLoaded1 sD) by
+    (apply (CodeLoaded1_eqmem sC); [unfold sD; rewrite setPc_mem, rset_mem; reflexivity| exact hcC]).
+  assert (hpcD : sD.(pc) = Image1.coreAddr + 76) by (unfold sD; cbn; lia).
+  assert (h7D : rget sD 7 = 58) by
+    (unfold sD; rewrite (li_block_frame sC 10 _ 7 ltac:(lia)); exact h7C).
+  pose proof (li1_beq_ne sD 76 32 58 (-44) hcD ltac:(lia)
+    ltac:(rewrite coreBytes1_len; lia) hpcD h7D ltac:(vm_compute; reflexivity)
+    ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia)) as hb4.
+  set (sE := setPc (rset sD 28 32) (Image1.coreAddr + (76 + 8))) in *.
+  assert (hcE : CodeLoaded1 sE) by
+    (apply (CodeLoaded1_eqmem sD); [unfold sE; rewrite setPc_mem, rset_mem; reflexivity| exact hcD]).
+  assert (hpcE : sE.(pc) = Image1.coreAddr + 84) by (unfold sE; cbn; lia).
+  assert (h7E : rget sE 7 = 58) by
+    (unfold sE; rewrite (li_block_frame sD 32 _ 7 ltac:(lia)); exact h7D).
+  pose proof (li1_beq_ne sE 84 95 58 (-52) hcE ltac:(lia)
+    ltac:(rewrite coreBytes1_len; lia) hpcE h7E ltac:(vm_compute; reflexivity)
+    ltac:(vm_compute; reflexivity) ltac:(lia) ltac:(lia)) as hb5.
+  set (sF := setPc (rset sE 28 95) (Image1.coreAddr + (84 + 8))) in *.
+  assert (hcF : CodeLoaded1 sF) by
+    (apply (CodeLoaded1_eqmem sE); [unfold sF; rewrite setPc_mem, rset_mem; reflexivity| exact hcE]).
+  assert (hpcF : sF.(pc) = Image1.coreAddr + 92) by (unfold sF; cbn; lia).
+  assert (h7F : rget sF 7 = 58) by
+    (unfold sF; rewrite (li_block_frame sE 95 _ 7 ltac:(lia)); exact h7E).
+  pose proof (li1_beq_eq sF 92 58 58 168 (Image1.coreAddr + 264) hcF ltac:(lia)
+    ltac:(rewrite coreBytes1_len; lia) hpcF h7F ltac:(vm_compute; reflexivity)
+    ltac:(vm_compute; reflexivity) ltac:(lia) eq_refl
+    ltac:(rewrite (wadd_id (Image1.coreAddr + (92 + 4)) 168
+            ltac:(unfold Image1.coreAddr; lia)); lia)) as hb6.
+  exists (setPc (rset sF 28 58) (Image1.coreAddr + 264)).
+  split.
+  { replace 12%nat with (2 + (2 + (2 + (2 + (2 + 2)))))%nat by lia.
+    rewrite runUntil_add, hb1, runUntil_add, hb2, runUntil_add, hb3,
+            runUntil_add, hb4, runUntil_add, hb5, hb6. reflexivity. }
+  repeat apply conj.
+  - apply setPc_pc.
+  - rewrite setPc_mem, rset_mem. unfold sF. rewrite setPc_mem, rset_mem.
+    unfold sE. rewrite setPc_mem, rset_mem. unfold sD. rewrite setPc_mem, rset_mem.
+    unfold sC. rewrite setPc_mem, rset_mem. unfold sB. rewrite setPc_mem, rset_mem.
+    reflexivity.
+  - apply (CodeLoaded1_eqmem sF);
+      [rewrite setPc_mem, rset_mem; reflexivity| exact hcF].
+  - intros i hi. rewrite (li_block_frame sF 58 _ i hi).
+    unfold sF. rewrite (li_block_frame sE 95 _ i hi).
+    unfold sE. rewrite (li_block_frame sD 32 _ i hi).
+    unfold sD. rewrite (li_block_frame sC 10 _ i hi).
+    unfold sC. rewrite (li_block_frame sB 59 _ i hi).
+    unfold sB. rewrite (li_block_frame s4 35 _ i hi). reflexivity.
+Qed.
+
+(* A COMPLETE pass-1 iteration for a label definition (':l'): prefix +
+   dispatch to 264 + the slot test. Outcomes: fresh label installed (back to
+   the loop head, 2 chars consumed), duplicate (exit 688), EOF (exit 712). *)
+Lemma p1_labelDef : forall inp cap rest' lab pos s,
+  P1Inv inp cap s lab pos (58 :: rest') ->
+  exists k,
+    (exists rest2 lab2, (length rest2 < length ((58:Z) :: rest'))%nat /\
+        (k <= 50 * (length ((58:Z) :: rest') - length rest2))%nat /\
+        P1Inv inp cap (runUntil 0 k s) lab2 pos rest2)
+    \/ ((k <= 50 * length ((58:Z) :: rest'))%nat /\ Result1 (runUntil 0 k s) inp cap).
+Proof.
+  intros inp cap rest' lab pos s inv. pose proof inv as inv0.
+  destruct (p1_prefix inp cap 58 rest' lab pos s inv)
+    as (s4 & hrun4 & hpc4 & ht2 & hcr & ht0 & hmem4 & hcode4 & hother4).
+  destruct (p1_colon_tail s4 hcode4 hpc4 ht2)
+    as (sL & hrunT & hpcL & hmemL & hcodeL & hothL).
+  destruct inv as [hwf hpc0 hcode ha0 ha1 ha2 ha3 ha4 hra hinm hidx hsuf houtidx
+                   hposle htbl hlable hspec].
+  pose proof (WellFormed1_cap63 _ _ hwf) as hcap63.
+  pose proof (in_fits1 _ _ hwf) as hinf. pose proof (out_fits1 _ _ hwf) as houtf.
+  pose proof (lbl_fits1 _ _ hwf) as hlblf. pose proof (cap_nonneg _ _ hwf) as hcap0.
+  set (idx1 := (length inp - length rest')%nat) in *.
+  assert (hge : (length rest' + 1 <= length inp)%nat).
+  { pose proof (f_equal (@length Z) hsuf) as Hl. rewrite length_skipn in Hl.
+    simpl length in Hl. lia. }
+  assert (hsufx : skipn idx1 inp = rest')
+    by (apply (suffix_step1 inp 58 rest'); exact hsuf).
+  assert (h5L : rget sL 5 = Z.of_nat idx1).
+  { rewrite (hothL 5 ltac:(lia)), ht0. unfold idx1. lia. }
+  assert (hothLS : forall i, i <> 0 -> i <> 5 -> i <> 7 -> i <> 28 ->
+            rget sL i = rget s i).
+  { intros i h0 h5 h7 h28.
+    rewrite (hothL i h28), (hother4 i h0 h5 h7 h28). reflexivity. }
+  assert (hmemLS : sL.(mem) = s.(mem)) by (rewrite hmemL; exact hmem4).
+  assert (ha1L : rget sL 11 = Z.of_nat (length inp))
+    by (rewrite (hothLS 11 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact ha1).
+  assert (hraL : rget sL 1 = 0)
+    by (rewrite (hothLS 1 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact hra).
+  assert (hrun16 : runUntil 0 16 s = sL).
+  { replace 16%nat with (4 + 12)%nat by lia.
+    rewrite runUntil_add, hrun4, hrunT. reflexivity. }
+  destruct rest' as [|l rest''].
+  - (* EOF after ':' -> TrailTok exit (712) *)
+    assert (hidx1 : idx1 = length inp) by (unfold idx1; simpl; lia).
+    assert (hbt : step sL = setPc sL (Image1.coreAddr + 712)).
+    { apply (bgeu1_eq_taken sL 264 5 11 (Z.of_nat (length inp)) 448 _ hcodeL ltac:(lia)
+        ltac:(rewrite coreBytes1_len; lia) hpcL
+        ltac:(rewrite h5L, hidx1; reflexivity) ha1L ltac:(vm_compute; reflexivity)).
+      rewrite (wadd_id (Image1.coreAddr + 264) 448 ltac:(unfold Image1.coreAddr; lia)).
+      lia. }
+    set (sX := setPc sL (Image1.coreAddr + 712)) in *.
+    assert (hcodeX : CodeLoaded1 sX)
+      by (apply (CodeLoaded1_eqmem sL); [reflexivity| exact hcodeL]).
+    assert (hpcX : sX.(pc) = Image1.coreAddr + 712) by reflexivity.
+    assert (hraX : rget sX 1 = 0) by (unfold sX; rewrite setPc_rget; exact hraL).
+    destruct (exit_zero sX 712 8 hcodeX ltac:(lia) ltac:(rewrite coreBytes1_len; lia)
+                hpcX hraX ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity)
+                ltac:(vm_compute; reflexivity) ltac:(lia))
+      as (f & hrunE & hfpc & hf10 & hf11 & hfmem).
+    exists (16 + (1 + 3))%nat. right. split; [simpl length; lia|].
+    rewrite (runUntil_add 16 (1+3)), hrun16.
+    assert (hpL0 : sL.(pc) <> 0) by (rewrite hpcL; unfold Image1.coreAddr; lia).
+    rewrite (runUntil_add 1 3), (runUntil_one sL hpL0), hbt. fold sX. rewrite hrunE.
+    apply (error_result1 f inp cap lab pos TrailTok1).
+    + rewrite <- hspec. change (zin (58 :: nil)) with (58%nat :: @nil nat).
+      rewrite scan1_colon. apply scan1_col_nil.
+    + discriminate.
+    + exact hposle.
+    + exact hfpc.
+    + exact hf10.
+    + exact hf11.
+  - (* read the label byte l *)
+    assert (hidxlt : (idx1 < length inp)%nat) by (unfold idx1; simpl length in *; lia).
+    assert (Hl : nth idx1 inp 0 = l).
+    { transitivity (nth 0 (skipn idx1 inp) 0).
+      - rewrite nth_skipn. f_equal. lia.
+      - rewrite hsufx. reflexivity. }
+    assert (HinL : In l inp).
+    { rewrite <- (firstn_skipn idx1 inp). apply in_or_app. right.
+      rewrite hsufx. left; reflexivity. }
+    assert (Hlr : 0 <= l < 256) by (apply (bytes_ok1 _ _ hwf); exact HinL).
+    assert (hl' : Z.of_nat (Z.to_nat l) = l) by (apply Z2Nat.id; lia).
+    set (l' := Z.to_nat l) in *.
+    assert (hl256 : (l' < 256)%nat) by (unfold l'; lia).
+    unfold Image1.inputAddr, Image1.outAddr, Image1.lblAddr, Image1.coreAddr in *.
+    (* step: bgeu NOT taken at 264 *)
+    assert (hult : ultb (rget sL 5) (rget sL 11) = true).
+    { rewrite h5L, ha1L. unfold ultb. apply Z.ltb_lt. lia. }
+    assert (hu1 : step sL = setPc sL (2147483792 + 268)).
+    { rewrite (step1_bgeu sL 264 5 11 448 hcodeL ltac:(lia)
+        ltac:(rewrite coreBytes1_len; lia) hpcL ltac:(vm_compute; reflexivity)), hult.
+      cbn match. rewrite hpcL, (wadd_id (2147483792 + 264) 4 ltac:(lia)).
+      f_equal; lia. }
+    set (sM1 := setPc sL (2147483792 + 268)) in *.
+    assert (hc1 : CodeLoaded1 sM1)
+      by (apply (CodeLoaded1_eqmem sL); [reflexivity| exact hcodeL]).
+    assert (hpc1 : sM1.(pc) = 2147483792 + 268) by reflexivity.
+    (* step: add t3,a0,t0 *)
+    assert (ha0L : rget sM1 10 = 2147484516).
+    { unfold sM1. rewrite setPc_rget.
+      rewrite (hothLS 10 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)). exact ha0. }
+    assert (haddr : wadd (rget sM1 10) (rget sM1 5) = 2147484516 + Z.of_nat idx1).
+    { rewrite ha0L. unfold sM1. rewrite setPc_rget, h5L. apply wadd_id. lia. }
+    assert (hu2 : step sM1 = setPc (rset sM1 28 (2147484516 + Z.of_nat idx1)) (2147483792 + 272)).
+    { rewrite (step1_add sM1 268 28 10 5 hc1 ltac:(lia) ltac:(rewrite coreBytes1_len; lia)
+        hpc1 ltac:(vm_compute; reflexivity)), haddr, hpc1,
+        (wadd_id (2147483792 + 268) 4 ltac:(lia)). f_equal; lia. }
+    set (sM2 := setPc (rset sM1 28 (2147484516 + Z.of_nat idx1)) (2147483792 + 272)) in *.
+    assert (hmem2 : sM2.(mem) = s.(mem))
+      by (unfold sM2, sM1; rewrite setPc_mem, rset_mem, setPc_mem; exact hmemLS).
+    assert (hc2 : CodeLoaded1 sM2) by (apply (CodeLoaded1_eqmem s); [exact hmem2| exact hcode]).
+    assert (hpc2 : sM2.(pc) = 2147483792 + 272) by reflexivity.
+    (* step: lbu t2,0(t3) *)
+    assert (hr28_2 : rget sM2 28 = 2147484516 + Z.of_nat idx1).
+    { unfold sM2. rewrite setPc_rget, (rset_rget sM1 28 _ 28 ltac:(lia) ltac:(lia)),
+        Z.eqb_refl. reflexivity. }
+    assert (hbyteIn : s.(mem) (2147484516 + Z.of_nat idx1) = nth idx1 inp 0).
+    { pose proof (hinm (Z.of_nat idx1) ltac:(lia)) as h.
+      unfold Image1.inputAddr in h. rewrite Nat2Z.id in h. exact h. }
+    assert (hbyte : sM2.(mem) (wadd (rget sM2 28) 0) mod 256 = l).
+    { rewrite hr28_2, (wadd_id (2147484516 + Z.of_nat idx1) 0 ltac:(lia)), Z.add_0_r,
+        hmem2, hbyteIn, Hl. apply Z.mod_small. exact Hlr. }
+    assert (hu3 : step sM2 = setPc (rset sM2 7 l) (2147483792 + 276)).
+    { rewrite (step1_lbu sM2 272 7 28 0 hc2 ltac:(lia) ltac:(rewrite coreBytes1_len; lia)
+        hpc2 ltac:(vm_compute; reflexivity)), hbyte, hpc2,
+        (wadd_id (2147483792 + 272) 4 ltac:(lia)). f_equal; lia. }
+    set (sM3 := setPc (rset sM2 7 l) (2147483792 + 276)) in *.
+    assert (hmem3 : sM3.(mem) = s.(mem))
+      by (unfold sM3; rewrite setPc_mem, rset_mem; exact hmem2).
+    assert (hc3 : CodeLoaded1 sM3) by (apply (CodeLoaded1_eqmem s); [exact hmem3| exact hcode]).
+    assert (hpc3 : sM3.(pc) = 2147483792 + 276) by reflexivity.
+    (* step: addi t0,t0,1 *)
+    assert (hr5_3 : rget sM3 5 = Z.of_nat idx1).
+    { unfold sM3. rewrite setPc_rget, (rset_rget sM2 7 l 5 ltac:(lia) ltac:(lia)).
+      replace (5 =? 7) with false by reflexivity.
+      unfold sM2. rewrite setPc_rget, (rset_rget sM1 28 _ 5 ltac:(lia) ltac:(lia)).
+      replace (5 =? 28) with false by reflexivity.
+      unfold sM1. rewrite setPc_rget. exact h5L. }
+    assert (hu4 : step sM3 = setPc (rset sM3 5 (Z.of_nat idx1 + 1)) (2147483792 + 280)).
+    { rewrite (step1_addi sM3 276 5 5 1 hc3 ltac:(lia) ltac:(rewrite coreBytes1_len; lia)
+        hpc3 ltac:(vm_compute; reflexivity)), hr5_3,
+        (wadd_id (Z.of_nat idx1) 1 ltac:(lia)), hpc3,
+        (wadd_id (2147483792 + 276) 4 ltac:(lia)). f_equal; lia. }
+    set (sM4 := setPc (rset sM3 5 (Z.of_nat idx1 + 1)) (2147483792 + 280)) in *.
+    assert (hmem4' : sM4.(mem) = s.(mem))
+      by (unfold sM4; rewrite setPc_mem, rset_mem; exact hmem3).
+    assert (hc4 : CodeLoaded1 sM4) by (apply (CodeLoaded1_eqmem s); [exact hmem4'| exact hcode]).
+    assert (hpc4' : sM4.(pc) = 2147483792 + 280) by reflexivity.
+    (* step: slli t3,t2,3 *)
+    assert (hr7_4 : rget sM4 7 = l).
+    { unfold sM4. rewrite setPc_rget, (rset_rget sM3 5 _ 7 ltac:(lia) ltac:(lia)).
+      replace (7 =? 5) with false by reflexivity.
+      unfold sM3. rewrite setPc_rget, (rset_rget sM2 7 l 7 ltac:(lia) ltac:(lia)),
+        Z.eqb_refl. reflexivity. }
+    assert (hu5 : step sM4 = setPc (rset sM4 28 (8 * l)) (2147483792 + 284)).
+    { rewrite (step1_slli sM4 280 28 7 3 hc4 ltac:(lia) ltac:(rewrite coreBytes1_len; lia)
+        hpc4' ltac:(vm_compute; reflexivity)), hr7_4, (wshl3 l Hlr), hpc4',
+        (wadd_id (2147483792 + 280) 4 ltac:(lia)). f_equal; lia. }
+    set (sM5 := setPc (rset sM4 28 (8 * l)) (2147483792 + 284)) in *.
+    assert (hmem5 : sM5.(mem) = s.(mem))
+      by (unfold sM5; rewrite setPc_mem, rset_mem; exact hmem4').
+    assert (hc5 : CodeLoaded1 sM5) by (apply (CodeLoaded1_eqmem s); [exact hmem5| exact hcode]).
+    assert (hpc5 : sM5.(pc) = 2147483792 + 284) by reflexivity.
+    (* step: add t3,t3,a4 *)
+    assert (hr28_5 : rget sM5 28 = 8 * l).
+    { unfold sM5. rewrite setPc_rget, (rset_rget sM4 28 _ 28 ltac:(lia) ltac:(lia)),
+        Z.eqb_refl. reflexivity. }
+    assert (ha4_5 : rget sM5 14 = 2147489280).
+    { unfold sM5. rewrite setPc_rget, (rset_rget sM4 28 _ 14 ltac:(lia) ltac:(lia)).
+      replace (14 =? 28) with false by reflexivity.
+      unfold sM4. rewrite setPc_rget, (rset_rget sM3 5 _ 14 ltac:(lia) ltac:(lia)).
+      replace (14 =? 5) with false by reflexivity.
+      unfold sM3. rewrite setPc_rget, (rset_rget sM2 7 l 14 ltac:(lia) ltac:(lia)).
+      replace (14 =? 7) with false by reflexivity.
+      unfold sM2. rewrite setPc_rget, (rset_rget sM1 28 _ 14 ltac:(lia) ltac:(lia)).
+      replace (14 =? 28) with false by reflexivity.
+      unfold sM1. rewrite setPc_rget.
+      rewrite (hothLS 14 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)). exact ha4. }
+    assert (hslot : wadd (rget sM5 28) (rget sM5 14) = 2147489280 + 8 * Z.of_nat l').
+    { rewrite hr28_5, ha4_5, (wadd_id (8 * l) 2147489280 ltac:(lia)).
+      rewrite hl'. lia. }
+    assert (hu6 : step sM5 = setPc (rset sM5 28 (2147489280 + 8 * Z.of_nat l'))
+                                   (2147483792 + 288)).
+    { rewrite (step1_add sM5 284 28 28 14 hc5 ltac:(lia) ltac:(rewrite coreBytes1_len; lia)
+        hpc5 ltac:(vm_compute; reflexivity)), hslot, hpc5,
+        (wadd_id (2147483792 + 284) 4 ltac:(lia)). f_equal; lia. }
+    set (sM6 := setPc (rset sM5 28 (2147489280 + 8 * Z.of_nat l')) (2147483792 + 288)) in *.
+    assert (hmem6 : sM6.(mem) = s.(mem))
+      by (unfold sM6; rewrite setPc_mem, rset_mem; exact hmem5).
+    assert (hc6 : CodeLoaded1 sM6) by (apply (CodeLoaded1_eqmem s); [exact hmem6| exact hcode]).
+    assert (hpc6 : sM6.(pc) = 2147483792 + 288) by reflexivity.
+    (* step: ld t4,0(t3) reads the slot *)
+    assert (hr28_6 : rget sM6 28 = 2147489280 + 8 * Z.of_nat l').
+    { unfold sM6. rewrite setPc_rget, (rset_rget sM5 28 _ 28 ltac:(lia) ltac:(lia)),
+        Z.eqb_refl. reflexivity. }
+    assert (hslotrange : 0 <= encodeSlot (lab l') < 2 ^ 64).
+    { destruct (lab l') as [p|] eqn:Elab; cbn.
+      - pose proof (hlable l' p Elab). lia.
+      - lia. }
+    assert (htblS : TableLoaded sM6 lab)
+      by (apply (tableLoaded_eqmem s); [exact hmem6| exact htbl]).
+    assert (hldval : loadWord sM6 (wadd (rget sM6 28) 0) = encodeSlot (lab l')).
+    { rewrite hr28_6, (wadd_id (2147489280 + 8 * Z.of_nat l') 0 ltac:(lia)), Z.add_0_r.
+      pose proof (loadWord_slot sM6 lab l' htblS hl256 hslotrange) as h.
+      unfold Image1.lblAddr in h. exact h. }
+    assert (hu7 : step sM6 = setPc (rset sM6 29 (encodeSlot (lab l'))) (2147483792 + 292)).
+    { rewrite (step1_ld sM6 288 29 28 0 hc6 ltac:(lia) ltac:(rewrite coreBytes1_len; lia)
+        hpc6 ltac:(vm_compute; reflexivity)), hldval, hpc6,
+        (wadd_id (2147483792 + 288) 4 ltac:(lia)). f_equal; lia. }
+    set (sM7 := setPc (rset sM6 29 (encodeSlot (lab l'))) (2147483792 + 292)) in *.
+    assert (hmem7 : sM7.(mem) = s.(mem))
+      by (unfold sM7; rewrite setPc_mem, rset_mem; exact hmem6).
+    assert (hc7 : CodeLoaded1 sM7) by (apply (CodeLoaded1_eqmem s); [exact hmem7| exact hcode]).
+    assert (hpc7 : sM7.(pc) = 2147483792 + 292) by reflexivity.
+    assert (hr29_7 : rget sM7 29 = encodeSlot (lab l')).
+    { unfold sM7. rewrite setPc_rget, (rset_rget sM6 29 _ 29 ltac:(lia) ltac:(lia)),
+        Z.eqb_refl. reflexivity. }
+    (* assemble the 7 steps 264..288 *)
+    assert (hpL : sL.(pc) <> 0) by (rewrite hpcL; lia).
+    assert (hp1 : sM1.(pc) <> 0) by (rewrite hpc1; lia).
+    assert (hp2 : sM2.(pc) <> 0) by (rewrite hpc2; lia).
+    assert (hp3 : sM3.(pc) <> 0) by (rewrite hpc3; lia).
+    assert (hp4 : sM4.(pc) <> 0) by (rewrite hpc4'; lia).
+    assert (hp5 : sM5.(pc) <> 0) by (rewrite hpc5; lia).
+    assert (hp6 : sM6.(pc) <> 0) by (rewrite hpc6; lia).
+    assert (hrun7 : runUntil 0 7 sL = sM7).
+    { rewrite (runUntil_S 6 sL hpL), hu1, (runUntil_S 5 sM1 hp1), hu2,
+              (runUntil_S 4 sM2 hp2), hu3, (runUntil_S 3 sM3 hp3), hu4,
+              (runUntil_S 2 sM4 hp4), hu5, (runUntil_S 1 sM5 hp5), hu6,
+              (runUntil_S 0 sM6 hp6), hu7. reflexivity. }
+    (* the register frame from s to sM7 (clobbers 5,7,28,29) *)
+    assert (hoth7 : forall i, i <> 0 -> i <> 5 -> i <> 7 -> i <> 28 -> i <> 29 ->
+              rget sM7 i = rget s i).
+    { intros i h0 h5 h7 h28 h29.
+      unfold sM7. rewrite setPc_rget, (rset_rget sM6 29 _ i ltac:(lia) h0).
+      replace (i =? 29) with false by (symmetry; apply Z.eqb_neq; exact h29).
+      unfold sM6. rewrite setPc_rget, (rset_rget sM5 28 _ i ltac:(lia) h0).
+      replace (i =? 28) with false by (symmetry; apply Z.eqb_neq; exact h28).
+      unfold sM5. rewrite setPc_rget, (rset_rget sM4 28 _ i ltac:(lia) h0).
+      replace (i =? 28) with false by (symmetry; apply Z.eqb_neq; exact h28).
+      unfold sM4. rewrite setPc_rget, (rset_rget sM3 5 _ i ltac:(lia) h0).
+      replace (i =? 5) with false by (symmetry; apply Z.eqb_neq; exact h5).
+      unfold sM3. rewrite setPc_rget, (rset_rget sM2 7 l i ltac:(lia) h0).
+      replace (i =? 7) with false by (symmetry; apply Z.eqb_neq; exact h7).
+      unfold sM2. rewrite setPc_rget, (rset_rget sM1 28 _ i ltac:(lia) h0).
+      replace (i =? 28) with false by (symmetry; apply Z.eqb_neq; exact h28).
+      unfold sM1. rewrite setPc_rget.
+      exact (hothLS i h0 h5 h7 h28). }
+    assert (hr5_7 : rget sM7 5 = Z.of_nat idx1 + 1).
+    { unfold sM7. rewrite setPc_rget, (rset_rget sM6 29 _ 5 ltac:(lia) ltac:(lia)).
+      replace (5 =? 29) with false by reflexivity.
+      unfold sM6. rewrite setPc_rget, (rset_rget sM5 28 _ 5 ltac:(lia) ltac:(lia)).
+      replace (5 =? 28) with false by reflexivity.
+      unfold sM5. rewrite setPc_rget, (rset_rget sM4 28 _ 5 ltac:(lia) ltac:(lia)).
+      replace (5 =? 28) with false by reflexivity.
+      unfold sM4. rewrite setPc_rget, (rset_rget sM3 5 _ 5 ltac:(lia) ltac:(lia)),
+        Z.eqb_refl. reflexivity. }
+    assert (hraM : rget sM7 1 = 0)
+      by (rewrite (hoth7 1 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact hra).
+    (* spec unfolding through ':' and the label byte *)
+    assert (hspec2 : scan1 Col1 lab pos (l' :: zin rest'') = scan1 High1 noLabels 0 (zin inp)).
+    { rewrite <- hspec.
+      change (zin (58 :: l :: rest'')) with (58%nat :: zin (l :: rest'')).
+      rewrite scan1_colon.
+      change (zin (l :: rest'')) with (Z.to_nat l :: zin rest''). reflexivity. }
+    destruct (lab l') as [p|] eqn:Elab.
+    + (* duplicate -> exit 688 *)
+      assert (hp63 : Z.of_nat p < 2 ^ 63).
+      { pose proof (hlable l' p Elab). lia. }
+      assert (hslt : sltb (rget sM7 29) (rget sM7 0) = false).
+      { rewrite hr29_7, rget_zero. exact (encodeSlot_some_nonneg p hp63). }
+      assert (hu8 : step sM7 = setPc sM7 (2147483792 + 688)).
+      { rewrite (step1_bge sM7 292 29 0 396 hc7 ltac:(lia)
+          ltac:(rewrite coreBytes1_len; lia) hpc7 ltac:(vm_compute; reflexivity)), hslt.
+        cbn match. rewrite hpc7, (wadd_id (2147483792 + 292) 396 ltac:(lia)).
+        f_equal; lia. }
+      set (sX := setPc sM7 (2147483792 + 688)) in *.
+      assert (hcodeX : CodeLoaded1 sX)
+        by (apply (CodeLoaded1_eqmem sM7); [reflexivity| exact hc7]).
+      assert (hpcX : sX.(pc) = Image1.coreAddr + 688) by (unfold Image1.coreAddr; reflexivity).
+      assert (hraX : rget sX 1 = 0) by (unfold sX; rewrite setPc_rget; exact hraM).
+      destruct (exit_zero sX 688 6 hcodeX ltac:(lia) ltac:(rewrite coreBytes1_len; lia)
+                  hpcX hraX ltac:(vm_compute; reflexivity) ltac:(vm_compute; reflexivity)
+                  ltac:(vm_compute; reflexivity) ltac:(lia))
+        as (f & hrunE & hfpc & hf10 & hf11 & hfmem).
+      exists (16 + (7 + (1 + 3)))%nat. right. split; [simpl length; lia|].
+      rewrite (runUntil_add 16 (7 + (1 + 3))), hrun16,
+              (runUntil_add 7 (1 + 3)), hrun7.
+      assert (hp7 : sM7.(pc) <> 0) by (rewrite hpc7; lia).
+      rewrite (runUntil_add 1 3), (runUntil_one sM7 hp7), hu8. fold sX. rewrite hrunE.
+      apply (error_result1 f inp cap lab pos Dup1).
+      * rewrite <- hspec2, scan1_col_cons, Elab. reflexivity.
+      * discriminate.
+      * exact hposle.
+      * exact hfpc.
+      * exact hf10.
+      * exact hf11.
+    + (* fresh label -> sd; j 36; invariant with setLabel *)
+      assert (hslt : sltb (rget sM7 29) (rget sM7 0) = true).
+      { rewrite hr29_7, rget_zero. exact encodeSlot_none_neg. }
+      assert (hu8 : step sM7 = setPc sM7 (2147483792 + 296)).
+      { rewrite (step1_bge sM7 292 29 0 396 hc7 ltac:(lia)
+          ltac:(rewrite coreBytes1_len; lia) hpc7 ltac:(vm_compute; reflexivity)), hslt.
+        cbn match. rewrite hpc7, (wadd_id (2147483792 + 292) 4 ltac:(lia)).
+        f_equal; lia. }
+      set (sM8 := setPc sM7 (2147483792 + 296)) in *.
+      assert (hc8 : CodeLoaded1 sM8)
+        by (apply (CodeLoaded1_eqmem sM7); [reflexivity| exact hc7]).
+      assert (hpc8 : sM8.(pc) = 2147483792 + 296) by reflexivity.
+      assert (hr28_8 : rget sM8 28 = 2147489280 + 8 * Z.of_nat l').
+      { unfold sM8. rewrite setPc_rget.
+        unfold sM7. rewrite setPc_rget, (rset_rget sM6 29 _ 28 ltac:(lia) ltac:(lia)).
+        replace (28 =? 29) with false by reflexivity. exact hr28_6. }
+      assert (hr6_8 : rget sM8 6 = Z.of_nat pos).
+      { unfold sM8. rewrite setPc_rget.
+        rewrite (hoth7 6 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)).
+        exact houtidx. }
+      (* sd t1,0(t3): install the slot *)
+      assert (hu9 : step sM8 = setPc (storeWord sM8 (2147489280 + 8 * Z.of_nat l')
+                                        (Z.of_nat pos)) (2147483792 + 300)).
+      { rewrite (step1_sd sM8 296 28 6 0 hc8 ltac:(lia)
+          ltac:(rewrite coreBytes1_len; lia) hpc8 ltac:(vm_compute; reflexivity)),
+          hr28_8, hr6_8,
+          (wadd_id (2147489280 + 8 * Z.of_nat l') 0 ltac:(lia)), Z.add_0_r, hpc8,
+          (wadd_id (2147483792 + 296) 4 ltac:(lia)). f_equal; lia. }
+      set (sM9 := setPc (storeWord sM8 (2147489280 + 8 * Z.of_nat l') (Z.of_nat pos))
+                        (2147483792 + 300)) in *.
+      assert (hpc9 : sM9.(pc) = 2147483792 + 300) by reflexivity.
+      assert (hmem8 : sM8.(mem) = s.(mem)) by (unfold sM8; rewrite setPc_mem; exact hmem7).
+      assert (hc9 : CodeLoaded1 sM9).
+      { apply (CodeLoaded1_eqmem (storeWord sM8 (2147489280 + 8 * Z.of_nat l')
+                  (Z.of_nat pos))); [reflexivity|].
+        apply codeLoaded1_storeWord;
+          [apply (CodeLoaded1_eqmem s); [exact hmem8| exact hcode]|].
+        unfold Image1.coreAddr. lia. }
+      (* jal back to the loop head *)
+      assert (hu10 : step sM9 = setPc sM9 (2147483792 + 36)).
+      { rewrite (step1_jal sM9 300 0 (-264) hc9 ltac:(lia)
+          ltac:(rewrite coreBytes1_len; lia) hpc9 ltac:(vm_compute; reflexivity)),
+          rset_zero, hpc9, (wadd_id (2147483792 + 300) (-264) ltac:(lia)).
+        f_equal; lia. }
+      set (sF := setPc sM9 (2147483792 + 36)) in *.
+      assert (hp7 : sM7.(pc) <> 0) by (rewrite hpc7; lia).
+      assert (hp8 : sM8.(pc) <> 0) by (rewrite hpc8; lia).
+      assert (hp9 : sM9.(pc) <> 0) by (rewrite hpc9; lia).
+      assert (hrunF : runUntil 0 (16 + (7 + 3)) s = sF).
+      { rewrite (runUntil_add 16 (7 + 3)), hrun16, (runUntil_add 7 3), hrun7,
+                (runUntil_S 2 sM7 hp7), hu8, (runUntil_S 1 sM8 hp8), hu9,
+                (runUntil_S 0 sM9 hp9), hu10. reflexivity. }
+      exists (16 + (7 + 3))%nat. left. exists rest''. exists (setLabel lab l' pos).
+      rewrite hrunF.
+      assert (hmemF : sF.(mem) = (storeWord sM8 (2147489280 + 8 * Z.of_nat l')
+                                    (Z.of_nat pos)).(mem))
+        by reflexivity.
+      assert (hrF : forall i, i <> 0 -> rget sF i = rget sM7 i).
+      { intros i h0. unfold sF. rewrite setPc_rget. unfold sM9.
+        rewrite setPc_rget, storeWord_rget. unfold sM8. rewrite setPc_rget. reflexivity. }
+      assert (hothF : forall i, i <> 0 -> i <> 5 -> i <> 7 -> i <> 28 -> i <> 29 ->
+                rget sF i = rget s i).
+      { intros i h0 h5 h7 h28 h29. rewrite (hrF i h0).
+        exact (hoth7 i h0 h5 h7 h28 h29). }
+      split; [simpl length; lia| split; [simpl length; lia|]].
+      assert (hsufx2 : skipn (S idx1) inp = rest'').
+      { replace (S idx1) with (1 + idx1)%nat by lia.
+        rewrite <- skipn_skipn, hsufx. reflexivity. }
+      refine {| p1_wf := hwf; p1_at_loop := _; p1_code := _; p1_a0 := _; p1_a1 := _;
+                p1_a2 := _; p1_a3 := _; p1_a4 := _; p1_ra := _; p1_in_mem := _;
+                p1_idx := _; p1_suffix := _; p1_outidx := _; p1_pos_le := hposle;
+                p1_tbl := _; p1_lab_le := _; p1_spec := _ |}.
+      * apply setPc_pc.
+      * apply (CodeLoaded1_eqmem sM9); [reflexivity| exact hc9].
+      * rewrite (hothF 10 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact ha0.
+      * rewrite (hothF 11 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact ha1.
+      * rewrite (hothF 12 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact ha2.
+      * rewrite (hothF 13 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact ha3.
+      * rewrite (hothF 14 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact ha4.
+      * rewrite (hothF 1 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)); exact hra.
+      * (* input intact through the slot store *)
+        apply (inputLoaded_eqmem (storeWord sM8 (2147489280 + 8 * Z.of_nat l')
+                 (Z.of_nat pos))); [exact hmemF|].
+        apply inputLoaded_storeWord;
+          [apply (inputLoaded_eqmem s); [exact hmem8| exact hinm]|].
+        unfold Image1.inputAddr. lia.
+      * rewrite (hrF 5 ltac:(lia)), hr5_7. simpl length.
+        unfold idx1. simpl length in *. lia.
+      * replace (length inp - length rest'')%nat with (S idx1)
+          by (unfold idx1; simpl length in *; lia).
+        exact hsufx2.
+      * rewrite (hrF 6 ltac:(lia)).
+        rewrite (hoth7 6 ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia) ltac:(lia)).
+        exact houtidx.
+      * (* table now holds setLabel lab l' pos *)
+        apply (tableLoaded_eqmem (storeWord sM8 (2147489280 + 8 * Z.of_nat l')
+                 (Z.of_nat pos))); [exact hmemF|].
+        pose proof (storeWord_slot sM8 lab l' pos
+          ltac:(apply (tableLoaded_eqmem s); [exact hmem8| exact htbl]) hl256) as h.
+        unfold Image1.lblAddr in h. exact h.
+      * (* lab_le for the extended map *)
+        intros c0 p0 hc0. unfold setLabel in hc0.
+        destruct (Nat.eqb_spec c0 l') as [->|hne].
+        -- inversion hc0; subst p0; lia.
+        -- exact (hlable c0 p0 hc0).
+      * (* the scan telescope through the fresh definition *)
+        rewrite <- hspec2, scan1_col_cons, Elab. reflexivity.
+Qed.
