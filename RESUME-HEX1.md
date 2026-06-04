@@ -35,17 +35,21 @@ DONE and committed (everything green at HEAD):
   REFINE1.md "Files" for the chunk-by-chunk DONE list. 1830 lines green
   through chunk 7 (comment inner loop).
 
-## MID-FLIGHT: none (chunks 8-11 landed; see REFINE1.md DONE list)
+## STATUS: Refine1 (Lean) IS COMPLETE -- core1_refines proved
 
-Pass-1 iteration lemmas are ALL proved: p1_spacing, p1_comment, p1_labelDef,
-p1_ref, p1_byte (+ the chain tails p1_colon_tail/p1_pct_tail/p1_fall_tail/
-p1_high_ok/p1_high_unk/p1_low_read/p1_stop_split/p1_stop_fall/p1_low_ok/
-p1_low_unk, the Result1 builders error_result1/short_result1, scan1_pos_le,
-sub_ofNat, decode1_m, corePc_ne_zero). Next: pass1_correct (item 4 below).
+`lean/Hex1/Refine.lean` (~9000 lines) proves, sorry-free and without
+native_decide:
 
-Build check: `cd lean && lake env lean Hex1/Refine.lean` (NOT lake build).
-Chunk workflow unchanged (python append scripts to /tmp, compile, commit
-per green chunk).
+    core1_refines : ∀ inp cap, WellFormed1 inp cap →
+      ∃ fuel, observe1 inp cap fuel = Hex1.coreSpec1 inp cap
+
+All of pass 1, pass 2 (incl. the offBytes i32 value lemmas), pass1_correct/
+pass2_correct, the spec props (emit1_props/coreSpec1_props), and the final
+observe conversion are in. `import Hex1.Refine` added to Hex1.lean; full
+`lake build` green. See REFINE1.md for the full DONE list and gotchas.
+
+Items 1-7 of the old "remaining work" list below are ALL DONE (kept for
+the offset/lemma notes they contain). Tasks #5/#6 (Lean Refine1) CLOSED.
 
 ## The established chunk workflow (IMPORTANT)
 

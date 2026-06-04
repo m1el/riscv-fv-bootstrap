@@ -8281,4 +8281,420 @@ theorem pass2_correct : ∀ (n : Nat) (inp : List Nat) (cap : Nat) (rest : List 
                 ih inp cap rest2 labF labNow m (emitted ++ [b]) s1 hlen2' hinv1
               exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
 
+/-! ## Spec shape lemmas for the observe conversion. -/
+
+/-- `offBytes` entries are bytes. -/
+theorem offBytes_lt (p pos : Nat) : ∀ b ∈ Hex1.offBytes p pos, b < 256 := by
+  intro b hb
+  simp only [Hex1.offBytes, List.mem_cons, List.not_mem_nil, or_false] at hb
+  rcases hb with h | h | h | h <;> subst h <;> omega
+
+/-- Under an Ok scan, the emit phase stays below the scan's stop position and
+    outputs bytes only (the two walks take the same control path; emit may
+    stop early at an unbound reference). -/
+theorem emit1_props : ∀ (n : Nat) (st : Hex1.St1) (rest : List Nat), rest.length ≤ n →
+    (∀ hi, st = .Low hi → hi < 16) →
+    ∀ (lab1 labE : Labels) (pos : Nat) (labF' : Labels) (m : Nat),
+    Hex1.scan1 st lab1 pos rest = (labF', m, .Ok) →
+    (Hex1.emit1 st labE pos rest).1.length + pos ≤ m ∧
+    ∀ b ∈ (Hex1.emit1 st labE pos rest).1, b < 256 := by
+  intro n
+  induction n with
+  | zero =>
+    intro st rest hn hpre lab1 labE pos labF' m hscan
+    have hrest : rest = [] := by
+      cases rest with
+      | nil => rfl
+      | cons c r => simp only [List.length_cons] at hn; omega
+    subst hrest
+    cases st with
+    | High =>
+      rw [Hex1.scan1] at hscan
+      have hm : pos = m := by
+        have := congrArg (fun t => t.2.1) hscan
+        simpa using this
+      rw [Hex1.emit1]
+      exact ⟨by simp; omega, by intro b hb; simp at hb⟩
+    | Low hi =>
+      rw [Hex1.scan1] at hscan
+      have := congrArg (fun t => t.2.2) hscan
+      simp at this
+    | Col =>
+      rw [Hex1.scan1] at hscan
+      have := congrArg (fun t => t.2.2) hscan
+      simp at this
+    | Pct =>
+      rw [Hex1.scan1] at hscan
+      have := congrArg (fun t => t.2.2) hscan
+      simp at this
+  | succ n ihn =>
+    intro st rest hn hpre lab1 labE pos labF' m hscan
+    cases rest with
+    | nil =>
+      cases st with
+      | High =>
+        rw [Hex1.scan1] at hscan
+        have hm : pos = m := by
+          have := congrArg (fun t => t.2.1) hscan
+          simpa using this
+        rw [Hex1.emit1]
+        exact ⟨by simp; omega, by intro b hb; simp at hb⟩
+      | Low hi =>
+        rw [Hex1.scan1] at hscan
+        have := congrArg (fun t => t.2.2) hscan
+        simp at this
+      | Col =>
+        rw [Hex1.scan1] at hscan
+        have := congrArg (fun t => t.2.2) hscan
+        simp at this
+      | Pct =>
+        rw [Hex1.scan1] at hscan
+        have := congrArg (fun t => t.2.2) hscan
+        simp at this
+    | cons c rest' =>
+      have hn' : rest'.length ≤ n := by
+        simp only [List.length_cons] at hn; omega
+      cases st with
+      | High =>
+        rw [Hex1.scan1] at hscan
+        rw [Hex1.emit1]
+        by_cases hc : Hex0.isComment c = true
+        · rw [if_pos hc] at hscan
+          rw [if_pos hc]
+          exact ihn .High (Hex0.skipComment rest')
+            (Nat.le_trans (Hex0.skipComment_len rest') hn') (fun _ h => nomatch h)
+            lab1 labE pos labF' m hscan
+        · rw [if_neg hc] at hscan
+          rw [if_neg hc]
+          by_cases hs : Hex0.isSpace c = true
+          · rw [if_pos hs] at hscan
+            rw [if_pos hs]
+            exact ihn .High rest' hn' (fun _ h => nomatch h) lab1 labE pos labF' m hscan
+          · rw [if_neg hs] at hscan
+            rw [if_neg hs]
+            by_cases hcol : (c == Hex1.c_colon) = true
+            · rw [if_pos hcol] at hscan
+              rw [if_pos hcol]
+              exact ihn .Col rest' hn' (fun _ h => nomatch h) lab1 labE pos labF' m hscan
+            · rw [if_neg hcol] at hscan
+              rw [if_neg hcol]
+              by_cases hpct : (c == Hex1.c_pct) = true
+              · rw [if_pos hpct] at hscan
+                rw [if_pos hpct]
+                exact ihn .Pct rest' hn' (fun _ h => nomatch h) lab1 labE pos labF' m hscan
+              · rw [if_neg hpct] at hscan
+                rw [if_neg hpct]
+                cases hnib : Hex0.nibble c with
+                | none =>
+                  simp only [hnib] at hscan
+                  have := congrArg (fun t => t.2.2) hscan
+                  simp at this
+                | some hi =>
+                  simp only [hnib] at hscan ⊢
+                  exact ihn (.Low hi) rest' hn'
+                    (fun hi' h => by cases h; exact nibble_lt c hi hnib)
+                    lab1 labE pos labF' m hscan
+      | Low hi =>
+        rw [Hex1.scan1] at hscan
+        rw [Hex1.emit1]
+        by_cases hls : Hex1.isLowStop c = true
+        · rw [if_pos hls] at hscan
+          have := congrArg (fun t => t.2.2) hscan
+          simp at this
+        · rw [if_neg hls] at hscan
+          rw [if_neg hls]
+          cases hnib : Hex0.nibble c with
+          | none =>
+            simp only [hnib] at hscan
+            have := congrArg (fun t => t.2.2) hscan
+            simp at this
+          | some lo =>
+            simp only [hnib] at hscan ⊢
+            obtain ⟨out2, st2, he⟩ : ∃ o s2,
+                Hex1.emit1 .High labE (pos + 1) rest' = (o, s2) := ⟨_, _, rfl⟩
+            obtain ⟨hlen, hbytes⟩ := ihn .High rest' hn' (fun _ h => nomatch h)
+              lab1 labE (pos + 1) labF' m hscan
+            simp only [he] at hlen hbytes
+            simp only [he]
+            constructor
+            · simp only [List.length_cons]
+              omega
+            · intro b hb
+              simp only [List.mem_cons] at hb
+              rcases hb with h | h
+              · subst h
+                have h1 : hi < 16 := hpre hi rfl
+                have h2 : lo < 16 := nibble_lt c lo hnib
+                omega
+              · exact hbytes b h
+      | Col =>
+        rw [Hex1.scan1] at hscan
+        rw [Hex1.emit1]
+        cases hll : lab1 c with
+        | some pp =>
+          simp only [hll] at hscan
+          have := congrArg (fun t => t.2.2) hscan
+          simp at this
+        | none =>
+          simp only [hll] at hscan
+          exact ihn .High rest' hn' (fun _ h => nomatch h)
+            (setLabel lab1 c pos) labE pos labF' m hscan
+      | Pct =>
+        rw [Hex1.scan1] at hscan
+        rw [Hex1.emit1]
+        have hpos4 : pos + 4 ≤ m := by
+          have h := scan1_pos_le rest'.length .High lab1 (pos + 4) rest' (Nat.le_refl _)
+          rw [hscan] at h
+          exact h
+        cases hll : labE c with
+        | none =>
+          simp only [hll]
+          exact ⟨by simp; omega, by intro b hb; simp at hb⟩
+        | some p =>
+          simp only [hll]
+          obtain ⟨out2, st2, he⟩ : ∃ o s2,
+              Hex1.emit1 .High labE (pos + 4) rest' = (o, s2) := ⟨_, _, rfl⟩
+          obtain ⟨hlen, hbytes⟩ := ihn .High rest' hn' (fun _ h => nomatch h)
+            lab1 labE (pos + 4) labF' m hscan
+          simp only [he] at hlen hbytes
+          simp only [he]
+          constructor
+          · rw [List.length_append, offBytes_len]
+            omega
+          · intro b hb
+            rw [List.mem_append] at hb
+            rcases hb with h | h
+            · exact offBytes_lt p pos b h
+            · exact hbytes b h
+
+/-- Shape facts about `coreSpec1` needed for the conversion. -/
+theorem coreSpec1_props (inp : List Nat) (cap : Nat) :
+    (Hex1.coreSpec1 inp cap).1 < 2 ^ 64 ∧
+    (Hex1.coreSpec1 inp cap).2.2 = (Hex1.coreSpec1 inp cap).2.1.length ∧
+    (Hex1.coreSpec1 inp cap).2.2 ≤ cap ∧
+    (∀ b ∈ (Hex1.coreSpec1 inp cap).2.1, b < 256) := by
+  obtain ⟨labF, m, st, hscan⟩ : ∃ l mm s2,
+      Hex1.scan1 .High Hex1.noLabels 0 inp = (l, mm, s2) := ⟨_, _, _, rfl⟩
+  cases st with
+  | Ok =>
+    obtain ⟨out, st', hemit⟩ : ∃ o s2, Hex1.emit1 .High labF 0 inp = (o, s2) :=
+      ⟨_, _, rfl⟩
+    have hdec : Hex1.decode1 inp = (out, m, st') := by
+      simp only [Hex1.decode1, hscan, hemit]
+    obtain ⟨hlen, hbytes⟩ := emit1_props inp.length .High inp (Nat.le_refl _)
+      (fun _ h => nomatch h) Hex1.noLabels labF 0 labF m hscan
+    simp only [hemit] at hlen hbytes
+    simp only [Hex1.coreSpec1, hdec]
+    by_cases hlt : cap < m
+    · rw [if_pos hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+    · rw [if_neg hlt]
+      cases st' with
+      | Ok =>
+        exact ⟨by show (0:Nat) < 2 ^ 64; decide, rfl,
+          by show out.length ≤ cap; omega, hbytes⟩
+      | Undef =>
+        exact ⟨by show (7:Nat) < 2 ^ 64; decide, rfl,
+          by show out.length ≤ cap; omega, hbytes⟩
+      | Split =>
+        exact ⟨by show (3:Nat) < 2 ^ 64; decide, rfl, Nat.zero_le _,
+          by intro b hb; simp at hb⟩
+      | Trailing =>
+        exact ⟨by show (4:Nat) < 2 ^ 64; decide, rfl, Nat.zero_le _,
+          by intro b hb; simp at hb⟩
+      | Unknown =>
+        exact ⟨by show (5:Nat) < 2 ^ 64; decide, rfl, Nat.zero_le _,
+          by intro b hb; simp at hb⟩
+      | Dup =>
+        exact ⟨by show (6:Nat) < 2 ^ 64; decide, rfl, Nat.zero_le _,
+          by intro b hb; simp at hb⟩
+      | TrailTok =>
+        exact ⟨by show (8:Nat) < 2 ^ 64; decide, rfl, Nat.zero_le _,
+          by intro b hb; simp at hb⟩
+  | Split =>
+    have hdec : Hex1.decode1 inp = ([], m, .Split) := by
+      simp only [Hex1.decode1, hscan]
+    simp only [Hex1.coreSpec1, hdec]
+    by_cases hlt : cap < m
+    · rw [if_pos hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+    · rw [if_neg hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+  | Trailing =>
+    have hdec : Hex1.decode1 inp = ([], m, .Trailing) := by
+      simp only [Hex1.decode1, hscan]
+    simp only [Hex1.coreSpec1, hdec]
+    by_cases hlt : cap < m
+    · rw [if_pos hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+    · rw [if_neg hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+  | Unknown =>
+    have hdec : Hex1.decode1 inp = ([], m, .Unknown) := by
+      simp only [Hex1.decode1, hscan]
+    simp only [Hex1.coreSpec1, hdec]
+    by_cases hlt : cap < m
+    · rw [if_pos hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+    · rw [if_neg hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+  | Dup =>
+    have hdec : Hex1.decode1 inp = ([], m, .Dup) := by
+      simp only [Hex1.decode1, hscan]
+    simp only [Hex1.coreSpec1, hdec]
+    by_cases hlt : cap < m
+    · rw [if_pos hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+    · rw [if_neg hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+  | Undef =>
+    have hdec : Hex1.decode1 inp = ([], m, .Undef) := by
+      simp only [Hex1.decode1, hscan]
+    simp only [Hex1.coreSpec1, hdec]
+    by_cases hlt : cap < m
+    · rw [if_pos hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+    · rw [if_neg hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+  | TrailTok =>
+    have hdec : Hex1.decode1 inp = ([], m, .TrailTok) := by
+      simp only [Hex1.decode1, hscan]
+    simp only [Hex1.coreSpec1, hdec]
+    by_cases hlt : cap < m
+    · rw [if_pos hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+    · rw [if_neg hlt]
+      exact ⟨by decide, rfl, Nat.zero_le _, by intro b hb; simp at hb⟩
+
+/-! ## The prologue and the general refinement theorem. -/
+
+set_option maxRecDepth 8000 in
+/-- The two `li` steps at 28/32 establish the pass-1 invariant on the whole
+    input with the empty label map. -/
+theorem p1_entry (inp : List Nat) (cap : Nat) (s : State) (hwf : WellFormed1 inp cap)
+    (hp1 : Pass1Entry inp cap s) :
+    ∃ s', runFuel 0 2 s = s' ∧ P1Inv inp cap s' Hex1.noLabels 0 inp := by
+  have hu1 : step s = (s.rset 5 (BitVec.ofNat 64 0)).setPc
+      (BitVec.ofNat 64 (Image1.coreAddr + 32)) := by
+    rw [step_addi s 28 5 0 (BitVec.ofNat 12 0) hp1.code (by rw [coreBytes_len]; omega)
+        hp1.pc dec_28,
+        show s.rget 0 + (BitVec.ofNat 12 0).signExtend 64 = BitVec.ofNat 64 0 from by
+          rw [Hex0.Refine.rget_zero]; decide,
+        show s.pc + 4 = BitVec.ofNat 64 (Image1.coreAddr + 32) from by
+          rw [hp1.pc, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ]]
+  let s1 := (s.rset 5 (BitVec.ofNat 64 0)).setPc (BitVec.ofNat 64 (Image1.coreAddr + 32))
+  have hs1 : s1 = (s.rset 5 (BitVec.ofNat 64 0)).setPc
+      (BitVec.ofNat 64 (Image1.coreAddr + 32)) := rfl
+  try rw [← hs1] at hu1
+  have hc1 : CodeLoaded1 s1 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hp1.code)
+  have hpc1 : s1.pc = BitVec.ofNat 64 (Image1.coreAddr + 32) := rfl
+  have hu2 : step s1 = (s1.rset 6 (BitVec.ofNat 64 0)).setPc
+      (BitVec.ofNat 64 (Image1.coreAddr + 36)) := by
+    rw [step_addi s1 32 6 0 (BitVec.ofNat 12 0) hc1 (by rw [coreBytes_len]; omega)
+        hpc1 dec_32,
+        show s1.rget 0 + (BitVec.ofNat 12 0).signExtend 64 = BitVec.ofNat 64 0 from by
+          rw [Hex0.Refine.rget_zero]; decide,
+        show s1.pc + 4 = BitVec.ofNat 64 (Image1.coreAddr + 36) from by
+          rw [hpc1, show (4:Word) = BitVec.ofNat 64 4 from rfl, addr_ofNat_succ]]
+  let s2 := (s1.rset 6 (BitVec.ofNat 64 0)).setPc (BitVec.ofNat 64 (Image1.coreAddr + 36))
+  have hs2 : s2 = (s1.rset 6 (BitVec.ofNat 64 0)).setPc
+      (BitVec.ofNat 64 (Image1.coreAddr + 36)) := rfl
+  try rw [← hs2] at hu2
+  have hp0 : s.pc ≠ 0 := by rw [hp1.pc]; exact corePc_ne_zero 28 (by omega)
+  have hq1 : s1.pc ≠ 0 := by rw [hpc1]; exact corePc_ne_zero 32 (by omega)
+  have hrun : runFuel 0 2 s = s2 := by
+    simp only [runFuel]
+    rw [hu1, hu2, if_neg hp0, if_neg hq1]
+  have hmem2 : s2.mem = s.mem := by
+    rw [hs2, hs1]
+    simp only [Hex0.Refine.setPc_mem, Hex0.Refine.rset_mem]
+  have hreg2 : ∀ i, i ≠ 0 → i ≠ 5 → i ≠ 6 → s2.rget i = s.rget i := by
+    intro i h0 h5 h6
+    rw [hs2, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg h6,
+        hs1, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg h5]
+  refine ⟨s2, hrun, ?_⟩
+  exact {
+    wf := hwf
+    at_loop := rfl
+    code := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hc1)
+    a0 := by rw [hreg2 10 (by decide) (by decide) (by decide)]; exact hp1.a0
+    a1 := by rw [hreg2 11 (by decide) (by decide) (by decide)]; exact hp1.a1
+    a2 := by rw [hreg2 12 (by decide) (by decide) (by decide)]; exact hp1.a2
+    a3 := by rw [hreg2 13 (by decide) (by decide) (by decide)]; exact hp1.a3
+    a4 := by rw [hreg2 14 (by decide) (by decide) (by decide)]; exact hp1.a4
+    ra0 := by rw [hreg2 1 (by decide) (by decide) (by decide)]; exact hp1.ra0
+    in_mem := by
+      intro j hj
+      rw [hmem2]
+      exact hp1.in_mem j hj
+    idx := by
+      rw [hs2, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+          if_neg (by decide : (5:Nat) ≠ 6), hs1, Hex0.Refine.setPc_rget,
+          rset_rget _ _ _ _ (by decide) (by decide)]
+      simp [Nat.sub_self]
+    suffix := by simp
+    outidx := by
+      rw [hs2, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide)]
+      simp
+    pos_le := by omega
+    tbl := by
+      intro cc hcc k hk
+      rw [hmem2]
+      exact hp1.tbl cc hcc k hk
+    lab_le := by
+      intro cc pp h
+      simp [Hex1.noLabels] at h
+    spec := rfl }
+
+/-- Observable behaviour of the real core1: (status, output bytes, length). -/
+def observe1 (inp : List Nat) (cap fuel : Nat) : Nat × List Nat × Nat :=
+  Harness1.observe inp cap fuel
+
+set_option maxHeartbeats 1000000 in
+/-- THE general refinement theorem (T1 for hex1): for every well-formed
+    input, running the real 724-byte core1 image computes `coreSpec1`. -/
+theorem core1_refines (inp : List Nat) (cap : Nat) (hwf : WellFormed1 inp cap) :
+    ∃ fuel, observe1 inp cap fuel = Hex1.coreSpec1 inp cap := by
+  obtain ⟨sE, hrunE, hentry⟩ := init_phase inp cap hwf
+  obtain ⟨s0, hrun0, hinv0⟩ := p1_entry inp cap sE hwf hentry
+  obtain ⟨k1, s1, hrun1, hres1⟩ :=
+    pass1_correct inp.length inp cap inp Hex1.noLabels 0 s0 (Nat.le_refl _) hinv0
+  have hfinal : ∃ k2 f, runFuel 0 k2 s1 = f ∧ Result1 f inp cap := by
+    rcases hres1 with hr | ⟨labF, m, hp2⟩
+    · exact ⟨0, s1, rfl, hr⟩
+    · obtain ⟨s2, hrun2, hinv2⟩ := p2_entry inp cap labF m s1 hp2
+      obtain ⟨k3, f, hrun3, hres⟩ :=
+        pass2_correct inp.length inp cap inp labF Hex1.noLabels m [] s2
+          (Nat.le_refl _) hinv2
+      exact ⟨2 + k3, f, by rw [runFuel_add, hrun2, hrun3], hres⟩
+  obtain ⟨k2, f, hrun2, hpcf, h10, h11, hmem⟩ := hfinal
+  obtain ⟨hst, hlen, hle, hbytes⟩ := coreSpec1_props inp cap
+  have hol : (Hex1.coreSpec1 inp cap).2.2 < 2 ^ 64 := by
+    have h1 := hwf.out_fits
+    have h2 := hwf.lbl_fits
+    simp only [Image1.outAddr, Image1.lblAddr] at h1 h2
+    omega
+  refine ⟨772 + (2 + (k1 + k2)), ?_⟩
+  have hrunAll : runFuel 0 (772 + (2 + (k1 + k2))) (Harness1.initOn inp cap) = f := by
+    rw [runFuel_add, hrunE, runFuel_add, hrun0, runFuel_add, hrun1, hrun2]
+  simp only [observe1, Harness1.observe, hrunAll]
+  have e10 : (f.rget 10).toNat = (Hex1.coreSpec1 inp cap).1 := by
+    rw [h10, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hst]
+  have e11 : (f.rget 11).toNat = (Hex1.coreSpec1 inp cap).2.2 := by
+    rw [h11, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hol]
+  have eOut : Harness.readMem f.mem Image1.outAddr (f.rget 11).toNat
+      = (Hex1.coreSpec1 inp cap).2.1 := by
+    rw [e11, hlen]
+    unfold Harness.readMem
+    apply List.ext_getElem
+    · simp
+    · intro i h1 _
+      have hi : i < (Hex1.coreSpec1 inp cap).2.1.length := by simpa using h1
+      have hi2 : i < (Hex1.coreSpec1 inp cap).2.2 := by rw [hlen]; exact hi
+      simp only [List.getElem_map, List.getElem_range]
+      rw [hmem i hi2, BitVec.toNat_ofNat, List.getD_eq_getElem?_getD,
+          List.getElem?_eq_getElem hi, Option.getD_some]
+      exact Nat.mod_eq_of_lt (hbytes _ (List.getElem_mem hi))
+  rw [eOut, e10, e11]
+
 end Hex1.Refine

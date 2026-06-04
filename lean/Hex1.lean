@@ -5,3 +5,4 @@ import Hex1.Harness
 import Hex1.Certify
 import Hex1.RefineBase
 import Hex1.DecodeFacts
+import Hex1.Refine

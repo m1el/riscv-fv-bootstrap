@@ -46,7 +46,31 @@ but with THREE loops (init / pass1 / pass2) and the label table region.
     on the suffix-length bound, dispatch by char class over the five
     iteration lemmas; conclusion Result1 OR P2Start (chunk 12).
     PASS 1 IS DONE.
-  NEXT (in order): P2Inv,
+  - P2Inv (incl. scan_inp whole-scan field, residual scan_ok for
+    control-flow totality + write bounds, emit telescope spec), p2_entry,
+    emit_result1, p2_ok_exit, p2_prefix, p2_spacing_tail/p2_spacing
+    (chunk 13a); comment_read2/comment_loop2 (textual port of pass 1's,
+    offsets 600..624, exits 368/628) + p2_comment (chunk 13b)
+  - p2_byte_fall (384->440), p2_hi_value/p2_lo_value (440/472, nibble
+    VALUES via nibble_addi), p2_read2 (460..468, no EOF check) (chunk 14a);
+    p2_byte assembled -- token shape DERIVED from scan_ok by contradiction,
+    combine_nibbles + sb + out_mem extension via getElem?_append (chunk 14b)
+  - offBytes_b0..b3 (the i32 LE value lemmas: BitVec sub/srli/setWidth vs
+    Int emod 2^32 -- one omega each after toNat-ification), offBytes_len,
+    p2_undef_exit (exit_t1 at 700), p2_lbl_tail, p2_labelDef (labNow l
+    = none derived from scan_ok; labNow' = setLabel) (chunk 15a)
+  - getD_append, p2_ref_tail (384->524), p2_ref: slot ld + blt sign test ->
+    Undef exit (emit telescope collapse) / 4x(sb;srli) stores with
+    offBytes_b0..b3, 4-way out_mem case split (chunk 15b)
+  - p2_eof (bgeu at 368 -> Ok exit via p2_ok_exit) + pass2_correct
+    (chunk 16). PASS 2 IS DONE.
+  - offBytes_lt, emit1_props (joint scan/emit walk: emit stays <= m, bytes
+    < 256; .Low-state precondition hi < 16 like hex0's decodeS_bytes_lt),
+    coreSpec1_props, p1_entry (28/32), observe1, CORE1_REFINES (chunk 17).
+  THE CAMPAIGN TARGET IS PROVED (sorry-free, no native_decide);
+  Hex1.Refine is imported from Hex1.lean (full lake build green).
+  Remaining (separate effort): the Coq side -- RESUME-HEX1.md item "#7".
+  OLD plan notes below for reference: P2Inv,
   pass-2 lemmas (incl. offBytes value lemma vs sb/srli chain at 556..588),
   pass2_correct; observe1/coreSpec1 conversion; core1_refines.
   PROOF-STYLE GOTCHAS hit so far (beyond hex0's):
