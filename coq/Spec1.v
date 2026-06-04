@@ -104,12 +104,19 @@ Qed.
 
 (* The 4 little-endian bytes of the i32 relative offset [p - (pos + 4)]
    (label position [p], field position [pos]), reduced mod 2^32 (two's
-   complement truncation; exact for outputs < 2 GiB). *)
+   complement truncation; exact for outputs < 2 GiB).
+
+   The byte arithmetic is done in [Z] and only the final (<256) bytes are
+   converted to [nat]: the intermediate offset can be ~2^32, and a unary-
+   [nat] value that size is uncomputable ([vm_compute] in Certify1.v would
+   materialize 4e9 [S] constructors). Values are unchanged ([Z] div/mod on
+   non-negatives = [nat] div/mod). *)
 Definition offWord (p pos : nat) : nat :=
   Z.to_nat (((Z.of_nat p - (Z.of_nat pos + 4)) mod (2^32))%Z).
 Definition offBytes (p pos : nat) : list nat :=
-  let off := offWord p pos in
-  [off mod 256; off / 2^8 mod 256; off / 2^16 mod 256; off / 2^24 mod 256].
+  let off := ((Z.of_nat p - (Z.of_nat pos + 4)) mod (2^32))%Z in
+  [Z.to_nat (off mod 256)%Z; Z.to_nat (off / 2^8 mod 256)%Z;
+   Z.to_nat (off / 2^16 mod 256)%Z; Z.to_nat (off / 2^24 mod 256)%Z].
 
 (* Nat division/mod by large literals must never be unfolded by simpl/cbn:
    Nat.divmod recurses on the literal (2^24 deep) and overflows the stack. *)
