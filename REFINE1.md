@@ -24,9 +24,16 @@ but with THREE loops (init / pass1 / pass2) and the label table region.
     InitInv/Pass1Entry; init_iter/init_loop (chunk 3)
   - code_initOn1/in_initOn1, entry_block, init_phase:
     `runFuel 0 772 (initOn inp cap) = s' ∧ Pass1Entry s'` (chunk 4)
-  NEXT: P1Inv + pass-1 loop prefix (offsets 36..48, port hex0 loop_prefix)
-  + per-token iteration lemmas + pass1_correct; then P2Inv/pass2; exits;
-  offBytes value lemma; conversion; core1_refines.
+  - Result1, exit_zero/exit_t1 epilogues, P1Inv, p1_prefix (chunk 5)
+  - suffix_step, p1_spacing_tail, p1_spacing -- the first COMPLETE pass-1
+    iteration, validating the whole pattern (chunk 6)
+  NEXT (in order): p1_comment (inner loop, port hex0 comment_loop);
+  p1_labelDef ok/dup + eof exit; p1_ref ok/short + eof exit; p1_byte
+  ok/short + split/unknown/trailing exits (port hex0 high_parse/low_parse
+  chains, offsets 108..156 + 160..212 + 216..248 + 252..260); pass1_correct
+  (fuel induction on rest, base = EOF -> offset 360); then P2Start/P2Inv,
+  pass-2 lemmas (incl. offBytes value lemma vs sb/srli chain at 556..588),
+  pass2_correct; observe1/coreSpec1 conversion; core1_refines.
   PROOF-STYLE GOTCHAS hit so far (beyond hex0's):
   - `set ... with` is Mathlib — use `let x := e; have hx : x = e := rfl;
     try rw [← hx] at hu` (hex0 idiom).

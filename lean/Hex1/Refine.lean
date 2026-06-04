@@ -1305,4 +1305,201 @@ theorem p1_prefix (inp : List Nat) (cap : Nat) (c : Nat) (rest' : List Nat)
         hs2, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) h0, if_neg h28,
         hs1, Hex0.Refine.setPc_rget]
 
+/-! ## Pass-1 iteration: spacing tokens. -/
+
+/-- Suffix step: consuming the head advances the drop index. -/
+theorem suffix_step (inp : List Nat) (c : Nat) (rest' : List Nat)
+    (hsuf : inp.drop (inp.length - (c :: rest').length) = c :: rest') :
+    inp.drop (inp.length - rest'.length) = rest' := by
+  have hge : rest'.length + 1 ≤ inp.length := by
+    have h := congrArg List.length hsuf
+    simp only [List.length_drop, List.length_cons] at h; omega
+  have he : inp.length - rest'.length = (inp.length - (c :: rest').length) + 1 := by
+    simp only [List.length_cons]; omega
+  rw [he, ← List.drop_drop, hsuf]
+  rfl
+
+set_option maxRecDepth 8000 in
+set_option maxHeartbeats 1000000 in
+/-- The pass-1 spacing dispatch (from offset 52, `t2 = c ∈ {10,32,95}`):
+    the `li;beq` chain falls through `#`/`;` and branches back to the loop
+    head at the matching spacing char. Touches only `t3` and `pc`. -/
+theorem p1_spacing_tail (s4 : State) (c : Nat) (hcode : CodeLoaded1 s4)
+    (hpc : s4.pc = BitVec.ofNat 64 (Image1.coreAddr + 52))
+    (ht2 : s4.rget 7 = BitVec.ofNat 64 c)
+    (hc : c = 10 ∨ c = 32 ∨ c = 95) :
+    ∃ n s', runFuel 0 n s4 = s' ∧ 0 < n ∧
+      s'.pc = BitVec.ofNat 64 (Image1.coreAddr + 36) ∧ s'.mem = s4.mem ∧
+      (∀ i, i ≠ 28 → s'.rget i = s4.rget i) := by
+  -- block 1 (52): li t3,35; beq -- not taken (c ≠ 35)
+  have hne35 : (BitVec.ofNat 64 c : Word) ≠ BitVec.ofNat 64 35 := by
+    rcases hc with h | h | h <;> subst h <;> decide
+  have hb1 := li_beq_ne s4 52 35 c (BitVec.ofNat 13 276) hcode hpc ht2 dec_52 dec_56
+    (by decide) hne35 (by rw [coreBytes_len]; omega)
+  let v1 := (s4.rset 28 (BitVec.ofNat 64 35)).setPc (BitVec.ofNat 64 (Image1.coreAddr + 60))
+  have hv1 : v1 = (s4.rset 28 (BitVec.ofNat 64 35)).setPc
+      (BitVec.ofNat 64 (Image1.coreAddr + (52 + 8))) := rfl
+  try rw [← hv1] at hb1
+  have hc1 : CodeLoaded1 v1 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hcode)
+  have hpc1 : v1.pc = BitVec.ofNat 64 (Image1.coreAddr + 60) := rfl
+  have ht2v1 : v1.rget 7 = BitVec.ofNat 64 c := by
+    rw [hv1, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+        if_neg (by decide : (7:Nat) ≠ 28)]
+    exact ht2
+  -- block 2 (60): li t3,59; beq -- not taken (c ≠ 59)
+  have hne59 : (BitVec.ofNat 64 c : Word) ≠ BitVec.ofNat 64 59 := by
+    rcases hc with h | h | h <;> subst h <;> decide
+  have hb2 := li_beq_ne v1 60 59 c (BitVec.ofNat 13 268) hc1 hpc1 ht2v1 dec_60 dec_64
+    (by decide) hne59 (by rw [coreBytes_len]; omega)
+  let v2 := (v1.rset 28 (BitVec.ofNat 64 59)).setPc (BitVec.ofNat 64 (Image1.coreAddr + 68))
+  have hv2 : v2 = (v1.rset 28 (BitVec.ofNat 64 59)).setPc
+      (BitVec.ofNat 64 (Image1.coreAddr + (60 + 8))) := rfl
+  try rw [← hv2] at hb2
+  have hc2 : CodeLoaded1 v2 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hc1)
+  have hpc2 : v2.pc = BitVec.ofNat 64 (Image1.coreAddr + 68) := rfl
+  have ht2v2 : v2.rget 7 = BitVec.ofNat 64 c := by
+    rw [hv2, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+        if_neg (by decide : (7:Nat) ≠ 28)]
+    exact ht2v1
+  have frame12 : ∀ i, i ≠ 28 → v2.rget i = s4.rget i := by
+    intro i hi
+    rw [hv2, li_block_frame _ _ _ i hi, hv1, li_block_frame _ _ _ i hi]
+  have hmem2 : v2.mem = s4.mem := rfl
+  rcases hc with h10 | h32 | h95
+  · -- '\n': block 3 (68) taken to LOOP
+    subst h10
+    have hb3 := li_beq_eq v2 68 10 10 (BitVec.ofNat 13 8156)
+      (BitVec.ofNat 64 (Image1.coreAddr + 36)) hc2 hpc2 ht2v2 dec_68 dec_72
+      (by decide) rfl (by decide) (by rw [coreBytes_len]; omega)
+    refine ⟨6, (v2.rset 28 (BitVec.ofNat 64 10)).setPc
+        (BitVec.ofNat 64 (Image1.coreAddr + 36)), ?_, by omega, ?_, ?_, ?_⟩
+    · rw [show (6:Nat) = 2 + (2 + 2) from rfl, runFuel_add, hb1, runFuel_add, hb2, hb3]
+    · rfl
+    · rfl
+    · intro i hi
+      rw [li_block_frame _ _ _ i hi]
+      exact frame12 i hi
+  · -- ' ': block 3 (68) not taken, block 4 (76) taken
+    subst h32
+    have hb3 := li_beq_ne v2 68 10 32 (BitVec.ofNat 13 8156) hc2 hpc2 ht2v2 dec_68 dec_72
+      (by decide) (by decide) (by rw [coreBytes_len]; omega)
+    let v3 := (v2.rset 28 (BitVec.ofNat 64 10)).setPc (BitVec.ofNat 64 (Image1.coreAddr + 76))
+    have hv3 : v3 = (v2.rset 28 (BitVec.ofNat 64 10)).setPc
+        (BitVec.ofNat 64 (Image1.coreAddr + (68 + 8))) := rfl
+    try rw [← hv3] at hb3
+    have hc3 : CodeLoaded1 v3 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hc2)
+    have hpc3 : v3.pc = BitVec.ofNat 64 (Image1.coreAddr + 76) := rfl
+    have ht2v3 : v3.rget 7 = BitVec.ofNat 64 32 := by
+      rw [hv3, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+          if_neg (by decide : (7:Nat) ≠ 28)]
+      exact ht2v2
+    have hb4 := li_beq_eq v3 76 32 32 (BitVec.ofNat 13 8148)
+      (BitVec.ofNat 64 (Image1.coreAddr + 36)) hc3 hpc3 ht2v3 dec_76 dec_80
+      (by decide) rfl (by decide) (by rw [coreBytes_len]; omega)
+    refine ⟨8, (v3.rset 28 (BitVec.ofNat 64 32)).setPc
+        (BitVec.ofNat 64 (Image1.coreAddr + 36)), ?_, by omega, ?_, ?_, ?_⟩
+    · rw [show (8:Nat) = 2 + (2 + (2 + 2)) from rfl, runFuel_add, hb1, runFuel_add, hb2,
+          runFuel_add, hb3, hb4]
+    · rfl
+    · rfl
+    · intro i hi
+      rw [li_block_frame _ _ _ i hi, hv3, li_block_frame _ _ _ i hi]
+      exact frame12 i hi
+  · -- '_': blocks 3,4 not taken, block 5 (84) taken
+    subst h95
+    have hb3 := li_beq_ne v2 68 10 95 (BitVec.ofNat 13 8156) hc2 hpc2 ht2v2 dec_68 dec_72
+      (by decide) (by decide) (by rw [coreBytes_len]; omega)
+    let v3 := (v2.rset 28 (BitVec.ofNat 64 10)).setPc (BitVec.ofNat 64 (Image1.coreAddr + 76))
+    have hv3 : v3 = (v2.rset 28 (BitVec.ofNat 64 10)).setPc
+        (BitVec.ofNat 64 (Image1.coreAddr + (68 + 8))) := rfl
+    try rw [← hv3] at hb3
+    have hc3 : CodeLoaded1 v3 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hc2)
+    have hpc3 : v3.pc = BitVec.ofNat 64 (Image1.coreAddr + 76) := rfl
+    have ht2v3 : v3.rget 7 = BitVec.ofNat 64 95 := by
+      rw [hv3, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+          if_neg (by decide : (7:Nat) ≠ 28)]
+      exact ht2v2
+    have hb4 := li_beq_ne v3 76 32 95 (BitVec.ofNat 13 8148) hc3 hpc3 ht2v3 dec_76 dec_80
+      (by decide) (by decide) (by rw [coreBytes_len]; omega)
+    let v4 := (v3.rset 28 (BitVec.ofNat 64 32)).setPc (BitVec.ofNat 64 (Image1.coreAddr + 84))
+    have hv4 : v4 = (v3.rset 28 (BitVec.ofNat 64 32)).setPc
+        (BitVec.ofNat 64 (Image1.coreAddr + (76 + 8))) := rfl
+    try rw [← hv4] at hb4
+    have hc4 : CodeLoaded1 v4 := codeLoaded1_setPc _ _ (codeLoaded1_rset _ _ _ hc3)
+    have hpc4 : v4.pc = BitVec.ofNat 64 (Image1.coreAddr + 84) := rfl
+    have ht2v4 : v4.rget 7 = BitVec.ofNat 64 95 := by
+      rw [hv4, Hex0.Refine.setPc_rget, rset_rget _ _ _ _ (by decide) (by decide),
+          if_neg (by decide : (7:Nat) ≠ 28)]
+      exact ht2v3
+    have hb5 := li_beq_eq v4 84 95 95 (BitVec.ofNat 13 8140)
+      (BitVec.ofNat 64 (Image1.coreAddr + 36)) hc4 hpc4 ht2v4 dec_84 dec_88
+      (by decide) rfl (by decide) (by rw [coreBytes_len]; omega)
+    refine ⟨10, (v4.rset 28 (BitVec.ofNat 64 95)).setPc
+        (BitVec.ofNat 64 (Image1.coreAddr + 36)), ?_, by omega, ?_, ?_, ?_⟩
+    · rw [show (10:Nat) = 2 + (2 + (2 + (2 + 2))) from rfl, runFuel_add, hb1, runFuel_add,
+          hb2, runFuel_add, hb3, runFuel_add, hb4, hb5]
+    · rfl
+    · rfl
+    · intro i hi
+      rw [li_block_frame _ _ _ i hi, hv4, li_block_frame _ _ _ i hi, hv3,
+          li_block_frame _ _ _ i hi]
+      exact frame12 i hi
+
+set_option maxHeartbeats 1000000 in
+/-- A COMPLETE pass-1 iteration for a spacing token: prefix + dispatch,
+    rebuilding the invariant on the shorter suffix. -/
+theorem p1_spacing (inp : List Nat) (cap : Nat) (c : Nat) (rest' : List Nat)
+    (lab : Labels) (pos : Nat) (s : State)
+    (inv : P1Inv inp cap s lab pos (c :: rest'))
+    (hsp : Hex0.isSpace c = true) :
+    ∃ n s', 0 < n ∧ runFuel 0 n s = s' ∧ P1Inv inp cap s' lab pos rest' := by
+  have hc : c = 10 ∨ c = 32 ∨ c = 95 := by
+    simp only [Hex0.isSpace, Hex0.c_nl, Hex0.c_sp, Hex0.c_us, Bool.or_eq_true,
+      beq_iff_eq] at hsp
+    rcases hsp with (h | h) | h
+    · exact Or.inl h
+    · exact Or.inr (Or.inl h)
+    · exact Or.inr (Or.inr h)
+  obtain ⟨s4, hrun4, hpc4, ht2, hidx4, hmem4, hcode4, hframe4⟩ :=
+    p1_prefix inp cap c rest' lab pos s inv
+  obtain ⟨n, s', hrun', hn, hpc', hmem', hframe'⟩ :=
+    p1_spacing_tail s4 c hcode4 hpc4 ht2 hc
+  refine ⟨4 + n, s', by omega, ?_, ?_⟩
+  · rw [runFuel_add, hrun4, hrun']
+  have hmem : s'.mem = s.mem := by rw [hmem', hmem4]
+  have hreg : ∀ i, i ≠ 0 → i ≠ 5 → i ≠ 7 → i ≠ 28 → s'.rget i = s.rget i := by
+    intro i h0 h5 h7 h28
+    rw [hframe' i h28]
+    exact hframe4 i h0 h5 h7 h28
+  exact {
+    wf := inv.wf
+    at_loop := hpc'
+    code := by
+      intro i hi
+      rw [show s'.mem = s.mem from hmem]
+      exact inv.code i hi
+    a0 := by rw [hreg 10 (by decide) (by decide) (by decide) (by decide)]; exact inv.a0
+    a1 := by rw [hreg 11 (by decide) (by decide) (by decide) (by decide)]; exact inv.a1
+    a2 := by rw [hreg 12 (by decide) (by decide) (by decide) (by decide)]; exact inv.a2
+    a3 := by rw [hreg 13 (by decide) (by decide) (by decide) (by decide)]; exact inv.a3
+    a4 := by rw [hreg 14 (by decide) (by decide) (by decide) (by decide)]; exact inv.a4
+    ra0 := by rw [hreg 1 (by decide) (by decide) (by decide) (by decide)]; exact inv.ra0
+    in_mem := by
+      intro i hi
+      rw [show s'.mem = s.mem from hmem]
+      exact inv.in_mem i hi
+    idx := by rw [hframe' 5 (by decide), hidx4]
+    suffix := suffix_step inp c rest' inv.suffix
+    outidx := by rw [hreg 6 (by decide) (by decide) (by decide) (by decide)]; exact inv.outidx
+    pos_le := inv.pos_le
+    tbl := by
+      intro cc hcc k hk
+      rw [show s'.mem = s.mem from hmem]
+      exact inv.tbl cc hcc k hk
+    lab_le := inv.lab_le
+    spec := by
+      rw [← inv.spec]
+      rw [Hex1.scan1]
+      rw [if_neg (by simp [Hex0.space_not_comment hsp]), if_pos hsp] }
+
 end Hex1.Refine
