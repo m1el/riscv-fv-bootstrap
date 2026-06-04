@@ -30,8 +30,12 @@ but with THREE loops (init / pass1 / pass2) and the label table region.
   - bgeu_eq_taken, comment_read1, comment_loop1 (chunk 7)
   - P2Start structure + p1_comment: complete comment iteration, lands at
     loop head on drop q or P2Start at EOF (chunk 8)
+  - corePc_ne_zero, error_result1 (Result1 builder for empty-output error
+    exits, evaluates coreSpec1 by cases on Status), p1_colon_tail
+    (dispatch 52->264), p1_labelDef ok/dup/eof (chunk 9)
   NEXT (in order):
-  p1_labelDef ok/dup + eof exit; p1_ref ok/short + eof exit; p1_byte
+  p1_ref ok/short + eof exit (needs BitVec sub-of-ofNat value lemma +
+  scan1 monotonicity m >= pos -- see RESUME-HEX1.md item 2); p1_byte
   ok/short + split/unknown/trailing exits (port hex0 high_parse/low_parse
   chains, offsets 108..156 + 160..212 + 216..248 + 252..260); pass1_correct
   (fuel induction on rest, base = EOF -> offset 360); then P2Start/P2Inv,
