@@ -313,3 +313,427 @@ Proof. unfold wsub. apply wrap_small. Qed.
 (* logical shift right = division by 2^n *)
 Lemma wshr_div a n : 0 <= n -> wshr a n = a / 2 ^ n.
 Proof. intros hn. unfold wshr. apply Z.shiftr_div_pow2. exact hn. Qed.
+
+(** ** Reusable [li t3,K; branch t2,t3] blocks (ports of the hex0 Coq ones,
+    under [CodeLoaded1]). Each runs 2 steps, resolving the branch; clobbers
+    only t3 (x28) and pc. *)
+
+Lemma li1_beq_ne s off K c imm :
+  CodeLoaded1 s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length Image1.coreBytes) ->
+  s.(pc) = Image1.coreAddr + off ->
+  rget s 7 = c ->
+  decode (wordAt1 off) = Iaddi 28 0 K ->
+  decode (wordAt1 (off + 4)) = Ibeq 7 28 imm ->
+  0 <= K < 2 ^ 64 ->
+  c <> K ->
+  runUntil 0 2 s = setPc (rset s 28 K) (Image1.coreAddr + (off + 8)).
+Proof.
+  intros hc ho hb hpc h7 hli hbeq hK hne.
+  rewrite coreBytes1_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length Image1.coreBytes)) by (rewrite coreBytes1_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (Image1.coreAddr + (off + 4))).
+  { rewrite (step1_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero,
+      (wadd_id 0 K ltac:(lia)), Z.add_0_l, hpc,
+      (wadd_id (Image1.coreAddr + off) 4 ltac:(unfold Image1.coreAddr; lia)).
+    f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (Image1.coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded1 s1)
+    by (apply (CodeLoaded1_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = Image1.coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 7 ltac:(lia) ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)); reflexivity).
+  assert (hu2 : step s1 = setPc s1 (Image1.coreAddr + (off + 8))).
+  { rewrite (step1_beq s1 (off + 4) 7 28 imm hc1 ltac:(lia)
+              ltac:(rewrite coreBytes1_len; lia) hpc1 hbeq), h7s1, h28s1.
+    replace (c =? K) with false by (symmetry; apply Z.eqb_neq; exact hne).
+    rewrite hpc1, (wadd_id (Image1.coreAddr + (off + 4)) 4 ltac:(unfold Image1.coreAddr; lia)).
+    f_equal. lia. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; unfold Image1.coreAddr; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; unfold Image1.coreAddr; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2.
+  unfold s1. reflexivity.
+Qed.
+
+Lemma li1_beq_eq s off K c imm target :
+  CodeLoaded1 s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length Image1.coreBytes) ->
+  s.(pc) = Image1.coreAddr + off ->
+  rget s 7 = c ->
+  decode (wordAt1 off) = Iaddi 28 0 K ->
+  decode (wordAt1 (off + 4)) = Ibeq 7 28 imm ->
+  0 <= K < 2 ^ 64 ->
+  c = K ->
+  wadd (Image1.coreAddr + (off + 4)) imm = target ->
+  runUntil 0 2 s = setPc (rset s 28 K) target.
+Proof.
+  intros hc ho hb hpc h7 hli hbeq hK heq htgt.
+  rewrite coreBytes1_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length Image1.coreBytes)) by (rewrite coreBytes1_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (Image1.coreAddr + (off + 4))).
+  { rewrite (step1_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero,
+      (wadd_id 0 K ltac:(lia)), Z.add_0_l, hpc,
+      (wadd_id (Image1.coreAddr + off) 4 ltac:(unfold Image1.coreAddr; lia)).
+    f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (Image1.coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded1 s1)
+    by (apply (CodeLoaded1_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = Image1.coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 7 ltac:(lia) ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)); reflexivity).
+  assert (hu2 : step s1 = setPc s1 target).
+  { rewrite (step1_beq s1 (off + 4) 7 28 imm hc1 ltac:(lia)
+              ltac:(rewrite coreBytes1_len; lia) hpc1 hbeq), h7s1, h28s1.
+    replace (c =? K) with true by (symmetry; apply Z.eqb_eq; exact heq).
+    rewrite hpc1, htgt. reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; unfold Image1.coreAddr; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; unfold Image1.coreAddr; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2.
+  unfold s1. reflexivity.
+Qed.
+
+Lemma li1_blt_nt s off K c imm :
+  CodeLoaded1 s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length Image1.coreBytes) ->
+  s.(pc) = Image1.coreAddr + off ->
+  rget s 7 = c ->
+  decode (wordAt1 off) = Iaddi 28 0 K ->
+  decode (wordAt1 (off + 4)) = Iblt 7 28 imm ->
+  0 <= K < 2 ^ 63 -> 0 <= c < 2 ^ 63 ->
+  ~ c < K ->
+  runUntil 0 2 s = setPc (rset s 28 K) (Image1.coreAddr + (off + 8)).
+Proof.
+  intros hc ho hb hpc h7 hli hblt hK hc63 hge.
+  rewrite coreBytes1_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length Image1.coreBytes)) by (rewrite coreBytes1_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (Image1.coreAddr + (off + 4))).
+  { rewrite (step1_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero,
+      (wadd_id 0 K ltac:(lia)), Z.add_0_l, hpc,
+      (wadd_id (Image1.coreAddr + off) 4 ltac:(unfold Image1.coreAddr; lia)).
+    f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (Image1.coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded1 s1)
+    by (apply (CodeLoaded1_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = Image1.coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 7 ltac:(lia) ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)); reflexivity).
+  assert (hu2 : step s1 = setPc s1 (Image1.coreAddr + (off + 8))).
+  { rewrite (step1_blt s1 (off + 4) 7 28 imm hc1 ltac:(lia)
+              ltac:(rewrite coreBytes1_len; lia) hpc1 hblt), h7s1, h28s1.
+    rewrite (sltb_small c K ltac:(lia) ltac:(lia)).
+    replace (c <? K) with false by (symmetry; apply Z.ltb_ge; lia).
+    rewrite hpc1, (wadd_id (Image1.coreAddr + (off + 4)) 4 ltac:(unfold Image1.coreAddr; lia)).
+    f_equal. lia. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; unfold Image1.coreAddr; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; unfold Image1.coreAddr; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2.
+  unfold s1. reflexivity.
+Qed.
+
+Lemma li1_blt_t s off K c imm target :
+  CodeLoaded1 s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length Image1.coreBytes) ->
+  s.(pc) = Image1.coreAddr + off ->
+  rget s 7 = c ->
+  decode (wordAt1 off) = Iaddi 28 0 K ->
+  decode (wordAt1 (off + 4)) = Iblt 7 28 imm ->
+  0 <= K < 2 ^ 63 -> 0 <= c < 2 ^ 63 ->
+  c < K ->
+  wadd (Image1.coreAddr + (off + 4)) imm = target ->
+  runUntil 0 2 s = setPc (rset s 28 K) target.
+Proof.
+  intros hc ho hb hpc h7 hli hblt hK hc63 hlt htgt.
+  rewrite coreBytes1_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length Image1.coreBytes)) by (rewrite coreBytes1_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (Image1.coreAddr + (off + 4))).
+  { rewrite (step1_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero,
+      (wadd_id 0 K ltac:(lia)), Z.add_0_l, hpc,
+      (wadd_id (Image1.coreAddr + off) 4 ltac:(unfold Image1.coreAddr; lia)).
+    f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (Image1.coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded1 s1)
+    by (apply (CodeLoaded1_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = Image1.coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 7 ltac:(lia) ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)); reflexivity).
+  assert (hu2 : step s1 = setPc s1 target).
+  { rewrite (step1_blt s1 (off + 4) 7 28 imm hc1 ltac:(lia)
+              ltac:(rewrite coreBytes1_len; lia) hpc1 hblt), h7s1, h28s1.
+    rewrite (sltb_small c K ltac:(lia) ltac:(lia)).
+    replace (c <? K) with true by (symmetry; apply Z.ltb_lt; lia).
+    rewrite hpc1, htgt. reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; unfold Image1.coreAddr; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; unfold Image1.coreAddr; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2.
+  unfold s1. reflexivity.
+Qed.
+
+Lemma li1_bge_nt s off K c imm :
+  CodeLoaded1 s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length Image1.coreBytes) ->
+  s.(pc) = Image1.coreAddr + off ->
+  rget s 7 = c ->
+  decode (wordAt1 off) = Iaddi 28 0 K ->
+  decode (wordAt1 (off + 4)) = Ibge 7 28 imm ->
+  0 <= K < 2 ^ 63 -> 0 <= c < 2 ^ 63 ->
+  c < K ->
+  runUntil 0 2 s = setPc (rset s 28 K) (Image1.coreAddr + (off + 8)).
+Proof.
+  intros hc ho hb hpc h7 hli hbge hK hc63 hlt.
+  rewrite coreBytes1_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length Image1.coreBytes)) by (rewrite coreBytes1_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (Image1.coreAddr + (off + 4))).
+  { rewrite (step1_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero,
+      (wadd_id 0 K ltac:(lia)), Z.add_0_l, hpc,
+      (wadd_id (Image1.coreAddr + off) 4 ltac:(unfold Image1.coreAddr; lia)).
+    f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (Image1.coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded1 s1)
+    by (apply (CodeLoaded1_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = Image1.coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 7 ltac:(lia) ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)); reflexivity).
+  assert (hu2 : step s1 = setPc s1 (Image1.coreAddr + (off + 8))).
+  { rewrite (step1_bge s1 (off + 4) 7 28 imm hc1 ltac:(lia)
+              ltac:(rewrite coreBytes1_len; lia) hpc1 hbge), h7s1, h28s1.
+    rewrite (sltb_small c K ltac:(lia) ltac:(lia)).
+    replace (c <? K) with true by (symmetry; apply Z.ltb_lt; lia).
+    rewrite hpc1, (wadd_id (Image1.coreAddr + (off + 4)) 4 ltac:(unfold Image1.coreAddr; lia)).
+    f_equal. lia. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; unfold Image1.coreAddr; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; unfold Image1.coreAddr; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2.
+  unfold s1. reflexivity.
+Qed.
+
+Lemma li1_bge_t s off K c imm target :
+  CodeLoaded1 s -> 0 <= off -> off + 4 + 3 < Z.of_nat (length Image1.coreBytes) ->
+  s.(pc) = Image1.coreAddr + off ->
+  rget s 7 = c ->
+  decode (wordAt1 off) = Iaddi 28 0 K ->
+  decode (wordAt1 (off + 4)) = Ibge 7 28 imm ->
+  0 <= K < 2 ^ 63 -> 0 <= c < 2 ^ 63 ->
+  ~ c < K ->
+  wadd (Image1.coreAddr + (off + 4)) imm = target ->
+  runUntil 0 2 s = setPc (rset s 28 K) target.
+Proof.
+  intros hc ho hb hpc h7 hli hbge hK hc63 hge htgt.
+  rewrite coreBytes1_len in hb.
+  assert (ho1 : off + 3 < Z.of_nat (length Image1.coreBytes)) by (rewrite coreBytes1_len; lia).
+  assert (hu1 : step s = setPc (rset s 28 K) (Image1.coreAddr + (off + 4))).
+  { rewrite (step1_addi s off 28 0 K hc ho ho1 hpc hli), rget_zero,
+      (wadd_id 0 K ltac:(lia)), Z.add_0_l, hpc,
+      (wadd_id (Image1.coreAddr + off) 4 ltac:(unfold Image1.coreAddr; lia)).
+    f_equal. lia. }
+  set (s1 := setPc (rset s 28 K) (Image1.coreAddr + (off + 4))) in *.
+  assert (hc1 : CodeLoaded1 s1)
+    by (apply (CodeLoaded1_eqmem s); [unfold s1; rewrite setPc_mem, rset_mem; reflexivity| exact hc]).
+  assert (hpc1 : s1.(pc) = Image1.coreAddr + (off + 4)) by reflexivity.
+  assert (h7s1 : rget s1 7 = c) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 7 ltac:(lia) ltac:(lia)); exact h7).
+  assert (h28s1 : rget s1 28 = K) by (unfold s1; rewrite setPc_rget;
+    rewrite (rset_rget s 28 K 28 ltac:(lia) ltac:(lia)); reflexivity).
+  assert (hu2 : step s1 = setPc s1 target).
+  { rewrite (step1_bge s1 (off + 4) 7 28 imm hc1 ltac:(lia)
+              ltac:(rewrite coreBytes1_len; lia) hpc1 hbge), h7s1, h28s1.
+    rewrite (sltb_small c K ltac:(lia) ltac:(lia)).
+    replace (c <? K) with false by (symmetry; apply Z.ltb_ge; lia).
+    rewrite hpc1, htgt. reflexivity. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc; unfold Image1.coreAddr; lia).
+  assert (hp1 : s1.(pc) <> 0) by (rewrite hpc1; unfold Image1.coreAddr; lia).
+  rewrite (runUntil_S 1 s hp0), hu1, (runUntil_S 0 s1 hp1), hu2.
+  unfold s1. reflexivity.
+Qed.
+
+(** ** Well-formedness: the four regions, in address order
+    code [coreAddr,+724) < input [inputAddr,+len) <= out [outAddr,+cap)
+    <= lbl [lblAddr,+2048), with everything below 2^63 (signed compares on
+    table addresses; label positions sign-tested in slots). *)
+
+Record WellFormed1 (inp : list Z) (cap : Z) : Prop := {
+  cap_nonneg : 0 <= cap;
+  in_fits1   : Image1.inputAddr + Z.of_nat (length inp) <= Image1.outAddr;
+  out_fits1  : Image1.outAddr + cap <= Image1.lblAddr;
+  lbl_fits1  : Image1.lblAddr + 2048 < 2 ^ 63;
+  bytes_ok1  : forall b, In b inp -> 0 <= b < 256
+}.
+
+(* cap sits below 2^63 (the out region is below the lbl region) *)
+Lemma WellFormed1_cap63 inp cap : WellFormed1 inp cap -> cap < 2 ^ 63.
+Proof.
+  intros [Hc H1 H2 H3 H4]. unfold Image1.outAddr, Image1.lblAddr in *. lia.
+Qed.
+
+(** ** The label table encoding: undefined slot = all-ones (-1 as i64),
+    defined slot = the position (< 2^63, so the sign distinguishes them). *)
+
+Definition encodeSlot (o : option nat) : Z :=
+  match o with
+  | None => 2 ^ 64 - 1
+  | Some p => Z.of_nat p
+  end.
+
+(* the table region holds [lab]: slot c at lblAddr + 8c, little-endian *)
+Definition TableLoaded (s : State) (lab : Labels) : Prop :=
+  forall c, (c < 256)%nat -> forall k, 0 <= k < 8 ->
+    s.(mem) (Image1.lblAddr + 8 * Z.of_nat c + k)
+      = (encodeSlot (lab c) / 2 ^ (8 * k)) mod 256.
+
+Lemma encodeSlot_range : forall o,
+  (forall p, o = Some p -> Z.of_nat p < 2 ^ 63) ->
+  0 <= encodeSlot o < 2 ^ 64.
+Proof.
+  intros o hb. destruct o as [p|]; cbn.
+  - pose proof (hb p eq_refl). lia.
+  - lia.
+Qed.
+
+(* the sign test [bge slot,x0]: an undefined slot is negative ... *)
+Lemma encodeSlot_none_neg : sltb (encodeSlot None) 0 = true.
+Proof. reflexivity. Qed.
+
+(* ... and a defined slot (position < 2^63) is non-negative. *)
+Lemma encodeSlot_some_nonneg p : Z.of_nat p < 2 ^ 63 ->
+  sltb (encodeSlot (Some p)) 0 = false.
+Proof.
+  intros hp. cbn.
+  rewrite (sltb_small (Z.of_nat p) 0 ltac:(lia) ltac:(lia)).
+  apply Z.ltb_ge. lia.
+Qed.
+
+(** ** Slot addressing and table access. *)
+
+(* slli t3,t2,3 on a byte value: the slot offset 8c *)
+Lemma wshl3 c : 0 <= c < 256 -> wshl c 3 = 8 * c.
+Proof.
+  intros hc. unfold wshl. rewrite Z.shiftl_mul_pow2 by lia.
+  rewrite wrap_small; change (2 ^ 3) with 8; lia.
+Qed.
+
+(* ld t4,0(t3) at slot c reads the encoded slot *)
+Lemma loadWord_slot s lab c :
+  TableLoaded s lab -> (c < 256)%nat ->
+  0 <= encodeSlot (lab c) < 2 ^ 64 ->
+  loadWord s (Image1.lblAddr + 8 * Z.of_nat c) = encodeSlot (lab c).
+Proof.
+  intros ht hc hv. unfold loadWord.
+  pose proof (ht c hc 0 ltac:(lia)) as T0.
+  pose proof (ht c hc 1 ltac:(lia)) as T1.
+  pose proof (ht c hc 2 ltac:(lia)) as T2.
+  pose proof (ht c hc 3 ltac:(lia)) as T3.
+  pose proof (ht c hc 4 ltac:(lia)) as T4.
+  pose proof (ht c hc 5 ltac:(lia)) as T5.
+  pose proof (ht c hc 6 ltac:(lia)) as T6.
+  pose proof (ht c hc 7 ltac:(lia)) as T7.
+  replace (Image1.lblAddr + 8 * Z.of_nat c + 0)
+    with (Image1.lblAddr + 8 * Z.of_nat c) in T0 by lia.
+  rewrite T0, T1, T2, T3, T4, T5, T6, T7.
+  change (8 * 0) with 0. change (8 * 1) with 8. change (8 * 2) with 16.
+  change (8 * 3) with 24. change (8 * 4) with 32. change (8 * 5) with 40.
+  change (8 * 6) with 48. change (8 * 7) with 56.
+  rewrite Z.pow_0_r, Z.div_1_r.
+  apply digits8. exact hv.
+Qed.
+
+(* sd t1,0(t3) at slot c installs [setLabel lab c pos] *)
+Lemma storeWord_slot s lab c pos :
+  TableLoaded s lab -> (c < 256)%nat ->
+  TableLoaded (storeWord s (Image1.lblAddr + 8 * Z.of_nat c) (Z.of_nat pos))
+              (setLabel lab c pos).
+Proof.
+  intros ht hc c' hc' k hk.
+  unfold setLabel.
+  destruct (Nat.eqb_spec c' c) as [->|hne].
+  - (* the written slot: read back the stored bytes *)
+    replace (Image1.lblAddr + 8 * Z.of_nat c + k)
+      with ((Image1.lblAddr + 8 * Z.of_nat c) + k) by lia.
+    rewrite (storeWord_get _ _ _ k hk). reflexivity.
+  - (* another slot: untouched (the 8 written bytes are in slot c) *)
+    rewrite storeWord_frame.
+    + exact (ht c' hc' k hk).
+    + intros k' hk' heq.
+      assert (Z.of_nat c' <> Z.of_nat c) by lia.
+      lia.
+Qed.
+
+(* a byte store OUTSIDE the table region preserves TableLoaded *)
+Lemma tableLoaded_storeByte s lab a b :
+  TableLoaded s lab ->
+  (a < Image1.lblAddr \/ Image1.lblAddr + 2048 <= a) ->
+  TableLoaded (storeByte s a b) lab.
+Proof.
+  intros ht hout c hc k hk.
+  rewrite storeByte_mem. cbv beta.
+  replace (Image1.lblAddr + 8 * Z.of_nat c + k =? a) with false
+    by (symmetry; apply Z.eqb_neq; lia).
+  exact (ht c hc k hk).
+Qed.
+
+(* memory-equality transport (setPc/rset chains) *)
+Lemma tableLoaded_eqmem s t lab :
+  t.(mem) = s.(mem) -> TableLoaded s lab -> TableLoaded t lab.
+Proof. intros He H c hc k hk. rewrite He. exact (H c hc k hk). Qed.
+
+(** ** Region predicates and their preservation lemmas. *)
+
+Definition InputLoaded (s : State) (inp : list Z) : Prop :=
+  forall j, 0 <= j < Z.of_nat (length inp) ->
+    s.(mem) (Image1.inputAddr + j) = nth (Z.to_nat j) inp 0.
+
+Lemma inputLoaded_eqmem s t inp :
+  t.(mem) = s.(mem) -> InputLoaded s inp -> InputLoaded t inp.
+Proof. intros He H j Hj. rewrite He. exact (H j Hj). Qed.
+
+(* byte stores outside the code / input regions preserve them *)
+Lemma codeLoaded1_storeByte s a b :
+  CodeLoaded1 s ->
+  (a < Image1.coreAddr \/ Image1.coreAddr + 724 <= a) ->
+  CodeLoaded1 (storeByte s a b).
+Proof.
+  intros hc hout i hi. rewrite coreBytes1_len in hi.
+  rewrite storeByte_mem. cbv beta.
+  replace (Image1.coreAddr + i =? a) with false
+    by (symmetry; apply Z.eqb_neq; lia).
+  apply hc. rewrite coreBytes1_len. exact hi.
+Qed.
+
+Lemma inputLoaded_storeByte s a b inp :
+  InputLoaded s inp ->
+  (a < Image1.inputAddr \/ Image1.inputAddr + Z.of_nat (length inp) <= a) ->
+  InputLoaded (storeByte s a b) inp.
+Proof.
+  intros hin hout j hj.
+  rewrite storeByte_mem. cbv beta.
+  replace (Image1.inputAddr + j =? a) with false
+    by (symmetry; apply Z.eqb_neq; lia).
+  exact (hin j hj).
+Qed.
+
+(* word stores outside the code / input regions preserve them *)
+Lemma codeLoaded1_storeWord s a v :
+  CodeLoaded1 s ->
+  (a + 8 <= Image1.coreAddr \/ Image1.coreAddr + 724 <= a) ->
+  CodeLoaded1 (storeWord s a v).
+Proof.
+  intros hc hout i hi. rewrite coreBytes1_len in hi.
+  rewrite storeWord_frame by (intros k hk; lia).
+  apply hc. rewrite coreBytes1_len. exact hi.
+Qed.
+
+Lemma inputLoaded_storeWord s a v inp :
+  InputLoaded s inp ->
+  (a + 8 <= Image1.inputAddr \/ Image1.inputAddr + Z.of_nat (length inp) <= a) ->
+  InputLoaded (storeWord s a v) inp.
+Proof.
+  intros hin hout j hj.
+  rewrite storeWord_frame by (intros k hk; lia).
+  exact (hin j hj).
+Qed.
+
+(* a word store inside the table region also preserves code/input (the
+   regions are in address order; geometry from WellFormed1) *)
