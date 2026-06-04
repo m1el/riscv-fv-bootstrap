@@ -1,5 +1,53 @@
 # Refine1 — plan and progress for `core1_refines` (hex1 general refinement)
 
+## COQ PORT (coq/Refine1.v) — IN PROGRESS (2026-06-04)
+
+Chunk-by-chunk port of the (COMPLETE) Lean proof below, in hex0's
+coq/Refine.v idiom (Z model; step lemmas via `ltac:(vm_compute;
+reflexivity)` decode at concrete offsets — NO DecodeFacts needed; fixed
+fuel + runUntil_stab at the end). DONE so far (each committed):
+- chunk 1: engine — nthb1/wordAt1/CodeLoaded1/fetch_code1, 16 step1_*
+  lemmas, storeWord projections/mem-map/frame/get + digits8 +
+  loadWord_storeWord, wsub_id/wshr_div. Generic toolkit reused from
+  Hex0Coq.Refine (wrap_small/wadd_id/toS_small/sltb_small/runUntil_*/
+  rset_rget/li_block_frame/isSpace_cases...).
+- chunk 2: li1_{beq_ne,beq_eq,blt_nt,blt_t,bge_nt,bge_t}; WellFormed1
+  (+_cap63); encodeSlot/TableLoaded + sign tests; wshl3/loadWord_slot/
+  storeWord_slot/tableLoaded_storeByte/_eqmem; InputLoaded + code/input
+  × storeByte/storeWord preservation.
+- chunk 3: InitInv/Pass1Entry records; init_iter/init_loop;
+  code_initOn1/in_initOn1/entry_block/init_phase (772 steps).
+- chunk 4: rset_zero, Result1(+_pc), exit_zero/exit_t1, P1Inv (17
+  fields), p1_prefix (36..48 → 52), suffix_step1.
+- chunk 5: scan1_spacing, p1_spacing_tail (52..88), p1_spacing.
+
+Coq-port gotchas (beyond the Lean list at the bottom):
+- NEVER leave `_` holes in `rewrite (lemma _ _ ltac:(lia))` — evars make
+  lia fail ("Cannot find witness"); give explicit arguments.
+- `f_equal. lia.` breaks when f_equal closes everything → use
+  `f_equal; lia` (vacuously fine) and NEVER f_equal on `(a+72)+(-36) =
+  a+36` shapes (mismatched structure) — plain lia handles atom-linear.
+- `unfold Image1.xxx in *` does NOT reach inside defined predicates
+  (InputLoaded etc.) — specialize the hypothesis first, then unfold in
+  the result (see hbyteIn in p1_prefix).
+- `subst c` may pick a wrong-direction equation (ht2 : rget s4 7 = c) —
+  use `rewrite H` with the case-split equation instead.
+- ltac:() holes inside long `rewrite (step1_x ...), a, b` chains can
+  die with "No such goal" — pre-assert the side conditions (see hb3 in
+  exit_zero) and split the rewrite chain.
+- `cbn [LittleEndian.split_deprecated]`-style cbn-with-list does not
+  reduce nat-indexed fixpoints; use cbv [name] (RvCrossExec split8).
+
+NEXT (mirroring the Lean chunk order below): comment iteration
+(bgeu_eq_taken port at 332..356 / scan1 comment unfolds / comment_read1/
+comment_loop1 / P2Start / p1_comment), then labelDef (264..300, needs
+loadWord_slot/storeWord_slot + error_result1/corePc_ne_zero), ref
+(304..328 + scan1_pos_le/short_result1), byte path (108..260), p1_eof +
+pass1_correct, pass 2 (P2Inv, ~7 iteration lemmas + offBytes value
+lemmas — in Z these are MUCH lighter than the Lean BitVec versions),
+pass2_correct, conversion + core1_refines (mirror hex0 core_refines:
+fuel bound 772 + 50*|inp|·2 + slack <= 100000, |inp| <= 668).
+
 Target theorem (lean/Hex1/Refine.lean):
 ```
 core1_refines : ∀ inp cap, WellFormed1 inp cap →
