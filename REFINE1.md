@@ -33,9 +33,11 @@ but with THREE loops (init / pass1 / pass2) and the label table region.
   - corePc_ne_zero, error_result1 (Result1 builder for empty-output error
     exits, evaluates coreSpec1 by cases on Status), p1_colon_tail
     (dispatch 52->264), p1_labelDef ok/dup/eof (chunk 9)
+  - sub_ofNat, scan1_pos_le (monotonicity, induction on length bound),
+    decode1_m, short_result1 (Result1 builder for the Short exit),
+    p1_pct_tail (dispatch 52->304), p1_ref ok/short/eof (chunk 10)
   NEXT (in order):
-  p1_ref ok/short + eof exit (needs BitVec sub-of-ofNat value lemma +
-  scan1 monotonicity m >= pos -- see RESUME-HEX1.md item 2); p1_byte
+  p1_byte
   ok/short + split/unknown/trailing exits (port hex0 high_parse/low_parse
   chains, offsets 108..156 + 160..212 + 216..248 + 252..260); pass1_correct
   (fuel induction on rest, base = EOF -> offset 360); then P2Start/P2Inv,
