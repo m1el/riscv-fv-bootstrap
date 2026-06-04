@@ -4792,4 +4792,135 @@ theorem p1_byte (inp : List Nat) (cap : Nat) (c : Nat) (rest' : List Nat)
             · exact short_result1 f inp cap labf mres stf hfpc hfa0 hfa1 hscan_inp
                 (by omega)
 
+/-! ## Pass 1, assembled: the loop runs to a `Result1` or to pass-2 entry. -/
+
+set_option maxRecDepth 8000 in
+/-- EOF at the loop head: `bgeu` taken to pass-2 entry (offset 360), and the
+    scan is complete and Ok. -/
+theorem p1_eof (inp : List Nat) (cap : Nat) (lab : Labels) (pos : Nat) (s : State)
+    (inv : P1Inv inp cap s lab pos []) :
+    ∃ s', runFuel 0 1 s = s' ∧ P2Start inp cap s' lab pos := by
+  have h5' : s.rget 5 = BitVec.ofNat 64 inp.length := by
+    have h := inv.idx
+    simpa using h
+  have hbt := bgeu_eq_taken s 36 5 11 inp.length (BitVec.ofNat 13 324)
+    (BitVec.ofNat 64 (Image1.coreAddr + 360)) inv.code inv.at_loop h5' inv.a1 dec_36
+    (by rw [coreBytes_len]; omega) (by decide)
+  have hp0 : s.pc ≠ 0 := by rw [inv.at_loop]; exact corePc_ne_zero 36 (by omega)
+  refine ⟨s.setPc (BitVec.ofNat 64 (Image1.coreAddr + 360)),
+    by rw [runFuel_one s hp0, hbt], ?_⟩
+  exact {
+    wf := inv.wf
+    pc := rfl
+    code := codeLoaded1_setPc _ _ inv.code
+    a0 := by rw [Hex0.Refine.setPc_rget]; exact inv.a0
+    a1 := by rw [Hex0.Refine.setPc_rget]; exact inv.a1
+    a2 := by rw [Hex0.Refine.setPc_rget]; exact inv.a2
+    a3 := by rw [Hex0.Refine.setPc_rget]; exact inv.a3
+    a4 := by rw [Hex0.Refine.setPc_rget]; exact inv.a4
+    ra0 := by rw [Hex0.Refine.setPc_rget]; exact inv.ra0
+    in_mem := inputLoaded_setPc _ _ inp inv.in_mem
+    tbl := by
+      intro c hc k hk
+      rw [Hex0.Refine.setPc_mem]
+      exact inv.tbl c hc k hk
+    m_le := inv.pos_le
+    lab_le := inv.lab_le
+    scan_ok := by
+      rw [← inv.spec]
+      rw [Hex1.scan1] }
+
+set_option maxHeartbeats 1000000 in
+/-- Pass 1 runs to completion: from the loop invariant, the machine reaches a
+    halted `Result1` state (a pass-1 error) or pass-2 entry (clean scan).
+    Strong induction on a bound on the remaining suffix length. -/
+theorem pass1_correct : ∀ (n : Nat) (inp : List Nat) (cap : Nat) (rest : List Nat)
+    (lab : Labels) (pos : Nat) (s : State), rest.length ≤ n →
+    P1Inv inp cap s lab pos rest →
+    ∃ k s', runFuel 0 k s = s' ∧
+      (Result1 s' inp cap ∨ ∃ labF m, P2Start inp cap s' labF m) := by
+  intro n
+  induction n with
+  | zero =>
+    intro inp cap rest lab pos s hn inv
+    have hrest : rest = [] := by
+      cases rest with
+      | nil => rfl
+      | cons c r => simp only [List.length_cons] at hn; omega
+    subst hrest
+    obtain ⟨s', hrun, hp2⟩ := p1_eof inp cap lab pos s inv
+    exact ⟨1, s', hrun, Or.inr ⟨lab, pos, hp2⟩⟩
+  | succ n ih =>
+    intro inp cap rest lab pos s hn inv
+    cases rest with
+    | nil =>
+      obtain ⟨s', hrun, hp2⟩ := p1_eof inp cap lab pos s inv
+      exact ⟨1, s', hrun, Or.inr ⟨lab, pos, hp2⟩⟩
+    | cons c rest' =>
+      have hn' : rest'.length ≤ n := by
+        simp only [List.length_cons] at hn; omega
+      by_cases hcm : Hex0.isComment c = true
+      · -- comment token
+        obtain ⟨k1, s1, _, hrun1, hres⟩ := p1_comment inp cap c rest' lab pos s inv hcm
+        rcases hres with ⟨rest2, hlen2, hinv2⟩ | hp2
+        · have hlen2' : rest2.length ≤ n := by
+            simp only [List.length_cons] at hlen2; omega
+          obtain ⟨k2, s2, hrun2, hres2⟩ := ih inp cap rest2 lab pos s1 hlen2' hinv2
+          exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+        · exact ⟨k1, s1, hrun1, Or.inr ⟨lab, pos, hp2⟩⟩
+      · by_cases hsp : Hex0.isSpace c = true
+        · -- spacing token
+          obtain ⟨k1, s1, _, hrun1, hinv1⟩ := p1_spacing inp cap c rest' lab pos s inv hsp
+          obtain ⟨k2, s2, hrun2, hres2⟩ := ih inp cap rest' lab pos s1 hn' hinv1
+          exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+        · by_cases hcol : c = 58
+          · -- label definition
+            subst hcol
+            obtain ⟨k1, s1, _, hrun1, hres⟩ := p1_labelDef inp cap rest' lab pos s inv
+            rcases hres with ⟨l, rest2, heq, hinv2⟩ | hr1
+            · subst heq
+              have hlen2' : rest2.length ≤ n := by
+                simp only [List.length_cons] at hn; omega
+              obtain ⟨k2, s2, hrun2, hres2⟩ :=
+                ih inp cap rest2 (setLabel lab l pos) pos s1 hlen2' hinv2
+              exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+            · exact ⟨k1, s1, hrun1, Or.inl hr1⟩
+          · by_cases hpct : c = 37
+            · -- label reference
+              subst hpct
+              obtain ⟨k1, s1, _, hrun1, hres⟩ := p1_ref inp cap rest' lab pos s inv
+              rcases hres with ⟨l, rest2, heq, hinv2⟩ | hr1
+              · subst heq
+                have hlen2' : rest2.length ≤ n := by
+                  simp only [List.length_cons] at hn; omega
+                obtain ⟨k2, s2, hrun2, hres2⟩ :=
+                  ih inp cap rest2 lab (pos + 4) s1 hlen2' hinv2
+                exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+              · exact ⟨k1, s1, hrun1, Or.inl hr1⟩
+            · -- byte token
+              have hsc : Hex0.isComment c = false := by
+                cases h : Hex0.isComment c
+                · rfl
+                · exact absurd h hcm
+              have hss : Hex0.isSpace c = false := by
+                cases h : Hex0.isSpace c
+                · rfl
+                · exact absurd h hsp
+              have hncol : (c == Hex1.c_colon) = false := by
+                simp only [Hex1.c_colon, beq_eq_false_iff_ne]
+                exact hcol
+              have hnpct : (c == Hex1.c_pct) = false := by
+                simp only [Hex1.c_pct, beq_eq_false_iff_ne]
+                exact hpct
+              obtain ⟨k1, s1, _, hrun1, hres⟩ :=
+                p1_byte inp cap c rest' lab pos s inv hsc hss hncol hnpct
+              rcases hres with ⟨l, rest2, heq, hinv2⟩ | hr1
+              · subst heq
+                have hlen2' : rest2.length ≤ n := by
+                  simp only [List.length_cons] at hn; omega
+                obtain ⟨k2, s2, hrun2, hres2⟩ :=
+                  ih inp cap rest2 lab (pos + 1) s1 hlen2' hinv2
+                exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+              · exact ⟨k1, s1, hrun1, Or.inl hr1⟩
+
 end Hex1.Refine
