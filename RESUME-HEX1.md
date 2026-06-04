@@ -35,21 +35,17 @@ DONE and committed (everything green at HEAD):
   REFINE1.md "Files" for the chunk-by-chunk DONE list. 1830 lines green
   through chunk 7 (comment inner loop).
 
-## MID-FLIGHT: chunk 8 (P2Start + p1_comment)
+## MID-FLIGHT: none (chunks 8-11 landed; see REFINE1.md DONE list)
 
-`tools/refine1_chunk8_pending.py` is a WRITTEN-BUT-NOT-APPLIED append script
-(P2Start structure + the assembled p1_comment iteration). It has NOT been
-compiled. Next action:
+Pass-1 iteration lemmas are ALL proved: p1_spacing, p1_comment, p1_labelDef,
+p1_ref, p1_byte (+ the chain tails p1_colon_tail/p1_pct_tail/p1_fall_tail/
+p1_high_ok/p1_high_unk/p1_low_read/p1_stop_split/p1_stop_fall/p1_low_ok/
+p1_low_unk, the Result1 builders error_result1/short_result1, scan1_pos_le,
+sub_ofNat, decode1_m, corePc_ne_zero). Next: pass1_correct (item 4 below).
 
-```
-cd /var/data/bootstrap/lean
-python3 ../tools/refine1_chunk8_pending.py     # appends to Hex1/Refine.lean
-export PATH=~/.elan/bin:$PATH
-lake env lean Hex1/Refine.lean 2>&1 | grep -E '^Hex1.*error' -A4 | head -25
-```
-Iterate on errors (expect the usual: dangling `congr 1`-omegas, `rfl` vs
-`show` shapes, simp arg shapes). When green: `git add ... && git commit`,
-delete the pending script, update REFINE1.md DONE list.
+Build check: `cd lean && lake env lean Hex1/Refine.lean` (NOT lake build).
+Chunk workflow unchanged (python append scripts to /tmp, compile, commit
+per green chunk).
 
 ## The established chunk workflow (IMPORTANT)
 
