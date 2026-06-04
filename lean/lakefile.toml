@@ -1,5 +1,8 @@
 name = "hex0"
-defaultTargets = ["Hex0"]
+defaultTargets = ["Hex0", "Hex1"]
 
 [[lean_lib]]
 name = "Hex0"
+
+[[lean_lib]]
+name = "Hex1"

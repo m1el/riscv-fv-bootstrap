@@ -1,11 +1,13 @@
 /-
-  A minimal, executable RV64I model -- exactly the 12 instruction encodings
-  used by `bare/core.s`:
+  A minimal, executable RV64I model -- exactly the 16 instruction encodings
+  used by `bare/core.s` (hex0) and `bare/core1.s` (hex1):
 
-    ADDI ADD OR SLLI LBU SB BEQ BLT BGE BGEU JAL JALR
+    ADDI ADD OR SLLI LBU SB BEQ BLT BGE BGEU JAL JALR   (hex0's 12)
+    SUB SRLI LD SD                                       (added for hex1)
 
-  (li, mv collapse to ADDI; j = JAL x0; ret = JALR x0,ra,0). No LUI/AUIPC, no
-  other loads/stores -- this is the whole trusted ISA surface for the hex0 rung.
+  (li, mv collapse to ADDI; j = JAL x0; ret = JALR x0,ra,0; bgez/bltz are
+  BGE/BLT vs x0). No LUI/AUIPC -- this is the whole trusted ISA surface for
+  the hex0/hex1 rungs.
 
   Words/addresses are `BitVec 64`, memory is byte-addressed (`BitVec 64 -> BitVec 8`),
   instructions are decoded from little-endian 32-bit words. The model is
@@ -53,10 +55,14 @@ def fetch32 (s : State) : BitVec 32 :=
 inductive Instr where
   | addi (rd rs1 : Nat) (imm : BitVec 12)
   | add  (rd rs1 rs2 : Nat)
+  | sub  (rd rs1 rs2 : Nat)
   | or   (rd rs1 rs2 : Nat)
   | slli (rd rs1 : Nat) (shamt : Nat)
+  | srli (rd rs1 : Nat) (shamt : Nat)
   | lbu  (rd rs1 : Nat) (imm : BitVec 12)
+  | ld   (rd rs1 : Nat) (imm : BitVec 12)
   | sb   (rs1 rs2 : Nat) (imm : BitVec 12)
+  | sd   (rs1 rs2 : Nat) (imm : BitVec 12)
   | beq  (rs1 rs2 : Nat) (imm : BitVec 13)
   | blt  (rs1 rs2 : Nat) (imm : BitVec 13)
   | bge  (rs1 rs2 : Nat) (imm : BitVec 13)
@@ -90,6 +96,7 @@ def decode (w : BitVec 32) : Instr :=
       match funct3 with
       | 0x0 => .addi rd rs1 immI
       | 0x1 => if funct7 = 0 then .slli rd rs1 shamt else .unknown
+      | 0x5 => if funct7 = 0 then .srli rd rs1 shamt else .unknown
       | _   => .unknown
   | 0x33 => -- OP
       if funct7 = 0 then
@@ -97,14 +104,20 @@ def decode (w : BitVec 32) : Instr :=
         | 0x0 => .add rd rs1 rs2
         | 0x6 => .or  rd rs1 rs2
         | _   => .unknown
+      else if funct7 = 0x20 then
+        match funct3 with
+        | 0x0 => .sub rd rs1 rs2
+        | _   => .unknown
       else .unknown
   | 0x03 => -- LOAD
       match funct3 with
       | 0x4 => .lbu rd rs1 immI
+      | 0x3 => .ld  rd rs1 immI
       | _   => .unknown
   | 0x23 => -- STORE
       match funct3 with
       | 0x0 => .sb rs1 rs2 immS
+      | 0x3 => .sd rs1 rs2 immS
       | _   => .unknown
   | 0x63 => -- BRANCH
       match funct3 with
@@ -117,6 +130,24 @@ def decode (w : BitVec 32) : Instr :=
   | 0x67 => if funct3 = 0 then .jalr rd rs1 immI else .unknown
   | _    => .unknown
 
+/-- Load the little-endian 64-bit word at address `a`. -/
+def State.loadWord (s : State) (a : Word) : Word :=
+  let b (i : Nat) : Word := (s.mem (a + BitVec.ofNat 64 i)).setWidth 64
+  b 0 ||| (b 1 <<< 8) ||| (b 2 <<< 16) ||| (b 3 <<< 24) |||
+  (b 4 <<< 32) ||| (b 5 <<< 40) ||| (b 6 <<< 48) ||| (b 7 <<< 56)
+
+/-- Store the 64-bit word `v` at address `a`, little-endian (8 byte stores,
+    low byte first -- compositional for the proof side). -/
+def State.storeWord (s : State) (a : Word) (v : Word) : State :=
+  (((((((s.storeByte a (v.setWidth 8)
+    ).storeByte (a + 1) ((v >>> 8).setWidth 8)
+    ).storeByte (a + 2) ((v >>> 16).setWidth 8)
+    ).storeByte (a + 3) ((v >>> 24).setWidth 8)
+    ).storeByte (a + 4) ((v >>> 32).setWidth 8)
+    ).storeByte (a + 5) ((v >>> 40).setWidth 8)
+    ).storeByte (a + 6) ((v >>> 48).setWidth 8)
+    ).storeByte (a + 7) ((v >>> 56).setWidth 8)
+
 /-- Execute one instruction. Undecodable instructions leave the state stuck
     (pc unchanged), which the proof side treats as a non-final, non-advancing
     state. -/
@@ -125,14 +156,22 @@ def step (s : State) : State :=
   match decode (fetch32 s) with
   | .addi rd rs1 imm => (s.rset rd (s.rget rs1 + imm.signExtend 64)).setPc next
   | .add  rd rs1 rs2 => (s.rset rd (s.rget rs1 + s.rget rs2)).setPc next
+  | .sub  rd rs1 rs2 => (s.rset rd (s.rget rs1 - s.rget rs2)).setPc next
   | .or   rd rs1 rs2 => (s.rset rd (s.rget rs1 ||| s.rget rs2)).setPc next
   | .slli rd rs1 sh  => (s.rset rd (s.rget rs1 <<< sh)).setPc next
+  | .srli rd rs1 sh  => (s.rset rd (s.rget rs1 >>> sh)).setPc next
   | .lbu  rd rs1 imm =>
       let a := s.rget rs1 + imm.signExtend 64
       (s.rset rd ((s.loadByte a).setWidth 64)).setPc next
+  | .ld   rd rs1 imm =>
+      let a := s.rget rs1 + imm.signExtend 64
+      (s.rset rd (s.loadWord a)).setPc next
   | .sb   rs1 rs2 imm =>
       let a := s.rget rs1 + imm.signExtend 64
       (s.storeByte a ((s.rget rs2).setWidth 8)).setPc next
+  | .sd   rs1 rs2 imm =>
+      let a := s.rget rs1 + imm.signExtend 64
+      (s.storeWord a (s.rget rs2)).setPc next
   | .beq  rs1 rs2 imm =>
       s.setPc (if s.rget rs1 = s.rget rs2 then s.pc + imm.signExtend 64 else next)
   | .blt  rs1 rs2 imm =>
