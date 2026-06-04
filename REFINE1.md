@@ -14,7 +14,30 @@ but with THREE loops (init / pass1 / pass2) and the label table region.
   16 step lemmas, storeWord frame + per-byte gets, `assemble_bytes`.
 - `Hex1/DecodeFacts.lean` — DONE (auto-generated, tools/gen_decode1.py):
   `dec_<off>` for all 181 instructions + `coreBytes_len`.
-- `Hex1/Refine.lean` — IN PROGRESS (the main proof).
+- `Hex1/Refine.lean` — IN PROGRESS (the main proof). DONE so far:
+  - li_beq_ne/eq, li_blt_nt/t, li_bge_nt/t blocks; WellFormed1 (+cap63);
+    encodeSlot/TableLoaded + sign-test lemmas (chunk 1)
+  - shl3_ofNat/slot_addr, loadWord_slot, storeWord_slot,
+    tableLoaded_storeByte (chunk 2)
+  - Region predicates InputLoaded + preservation lemmas
+    (codeLoaded1/inputLoaded × setPc/rset/storeByte/storeWord);
+    InitInv/Pass1Entry; init_iter/init_loop (chunk 3)
+  - code_initOn1/in_initOn1, entry_block, init_phase:
+    `runFuel 0 772 (initOn inp cap) = s' ∧ Pass1Entry s'` (chunk 4)
+  NEXT: P1Inv + pass-1 loop prefix (offsets 36..48, port hex0 loop_prefix)
+  + per-token iteration lemmas + pass1_correct; then P2Inv/pass2; exits;
+  offBytes value lemma; conversion; core1_refines.
+  PROOF-STYLE GOTCHAS hit so far (beyond hex0's):
+  - `set ... with` is Mathlib — use `let x := e; have hx : x = e := rfl;
+    try rw [← hx] at hu` (hex0 idiom).
+  - Apply region lemmas through `codeLoaded1_setPc`-style wrappers; a bare
+    application against a let-bound state forces whole-State unification
+    (setPc vs storeWord chains) → whnf timeout.
+  - `congr 1 <;> omega` (robust whether congr closes or not); after branch
+    `rw [hslt]`, resolve pc with `rw [show s.pc + imm = target from by
+    rw [hpc]; decide]`, never `congr 1` on a deep state.
+  - decides on wordAt1/getD need maxRecDepth 8000; heavy haves need
+    maxHeartbeats 1000000.
 
 ## core1 offset map (from DecodeFacts; addresses = coreAddr+off, coreAddr=0x80000090)
 
