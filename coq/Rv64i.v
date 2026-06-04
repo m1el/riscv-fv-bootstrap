@@ -1,7 +1,9 @@
 (** * A minimal, executable RV64I model in Coq -- mirror of lean/Hex0/Rv64i.lean.
 
-    Same 12 instruction encodings used by bare/core.s:
-      ADDI ADD OR SLLI LBU SB BEQ BLT BGE BGEU JAL JALR
+    Exactly the 16 instruction encodings used by bare/core.s (hex0) and
+    bare/core1.s (hex1):
+      ADDI ADD OR SLLI LBU SB BEQ BLT BGE BGEU JAL JALR   (hex0's 12)
+      SUB SRLI LD SD                                       (added for hex1)
     64-bit words are [Z] kept in [0, 2^64); operations wrap explicitly. Memory
     is byte-addressed ([Z -> Z], bytes in [0,256)). The model computes under
     [vm_compute] so it can be run on the real binary bytes (see Validate.v). *)
@@ -16,6 +18,9 @@ Definition wrap (z : Z) : Z := z mod w64.
 Definition wadd (a b : Z) : Z := wrap (a + b).
 Definition wor  (a b : Z) : Z := Z.lor a b.
 Definition wshl (a : Z) (n : Z) : Z := wrap (Z.shiftl a n).
+Definition wsub (a b : Z) : Z := wrap (a - b).
+(* logical shift right; in-range arguments stay in range *)
+Definition wshr (a : Z) (n : Z) : Z := Z.shiftr a n.
 
 (* sign-extend a [k]-bit raw value to a (possibly negative) Z *)
 Definition sext (k raw : Z) : Z :=
@@ -53,13 +58,43 @@ Definition fetch32 (s : State) : Z :=
   let b3 := s.(mem) (s.(pc) + 3) in
   b0 + b1 * 256 + b2 * 65536 + b3 * 16777216.
 
+(** Load the little-endian 64-bit word at address [a] (8 byte reads,
+    mirror of lean Rv64i.State.loadWord). *)
+Definition loadWord (s : State) (a : Z) : Z :=
+  s.(mem) a
+  + s.(mem) (a + 1) * 2 ^ 8
+  + s.(mem) (a + 2) * 2 ^ 16
+  + s.(mem) (a + 3) * 2 ^ 24
+  + s.(mem) (a + 4) * 2 ^ 32
+  + s.(mem) (a + 5) * 2 ^ 40
+  + s.(mem) (a + 6) * 2 ^ 48
+  + s.(mem) (a + 7) * 2 ^ 56.
+
+(** Store the 64-bit word [v] at address [a], little-endian (8 byte stores,
+    low byte first -- compositional for the proof side; [storeByte] keeps
+    each byte in [0,256)). *)
+Definition storeWord (s : State) (a v : Z) : State :=
+  storeByte (storeByte (storeByte (storeByte (storeByte (storeByte (storeByte (storeByte
+    s a v)
+    (a + 1) (v / 2 ^ 8))
+    (a + 2) (v / 2 ^ 16))
+    (a + 3) (v / 2 ^ 24))
+    (a + 4) (v / 2 ^ 32))
+    (a + 5) (v / 2 ^ 40))
+    (a + 6) (v / 2 ^ 48))
+    (a + 7) (v / 2 ^ 56).
+
 Inductive Instr :=
   | Iaddi (rd rs1 : Z) (imm : Z)
   | Iadd  (rd rs1 rs2 : Z)
+  | Isub  (rd rs1 rs2 : Z)
   | Ior   (rd rs1 rs2 : Z)
   | Islli (rd rs1 : Z) (shamt : Z)
+  | Isrli (rd rs1 : Z) (shamt : Z)
   | Ilbu  (rd rs1 : Z) (imm : Z)
+  | Ild   (rd rs1 : Z) (imm : Z)
   | Isb   (rs1 rs2 : Z) (imm : Z)
+  | Isd   (rs1 rs2 : Z) (imm : Z)
   | Ibeq  (rs1 rs2 : Z) (imm : Z)
   | Iblt  (rs1 rs2 : Z) (imm : Z)
   | Ibge  (rs1 rs2 : Z) (imm : Z)
@@ -86,16 +121,21 @@ Definition decode (w : Z) : Instr :=
   if opcode =? 19 then            (* 0x13 OP-IMM *)
     if funct3 =? 0 then Iaddi rd rs1 immI
     else if funct3 =? 1 then (if funct7 =? 0 then Islli rd rs1 shamt else Iunknown)
+    else if funct3 =? 5 then (if funct7 =? 0 then Isrli rd rs1 shamt else Iunknown)
     else Iunknown
   else if opcode =? 51 then       (* 0x33 OP *)
     if funct7 =? 0 then
       (if funct3 =? 0 then Iadd rd rs1 rs2
        else if funct3 =? 6 then Ior rd rs1 rs2 else Iunknown)
+    else if funct7 =? 32 then
+      (if funct3 =? 0 then Isub rd rs1 rs2 else Iunknown)
     else Iunknown
   else if opcode =? 3 then        (* 0x03 LOAD *)
-    (if funct3 =? 4 then Ilbu rd rs1 immI else Iunknown)
+    (if funct3 =? 4 then Ilbu rd rs1 immI
+     else if funct3 =? 3 then Ild rd rs1 immI else Iunknown)
   else if opcode =? 35 then       (* 0x23 STORE *)
-    (if funct3 =? 0 then Isb rs1 rs2 immS else Iunknown)
+    (if funct3 =? 0 then Isb rs1 rs2 immS
+     else if funct3 =? 3 then Isd rs1 rs2 immS else Iunknown)
   else if opcode =? 99 then       (* 0x63 BRANCH *)
     (if funct3 =? 0 then Ibeq rs1 rs2 immB
      else if funct3 =? 4 then Iblt rs1 rs2 immB
@@ -112,12 +152,18 @@ Definition step (s : State) : State :=
   match decode (fetch32 s) with
   | Iaddi rd rs1 imm => setPc (rset s rd (wadd (rget s rs1) imm)) next
   | Iadd  rd rs1 rs2 => setPc (rset s rd (wadd (rget s rs1) (rget s rs2))) next
+  | Isub  rd rs1 rs2 => setPc (rset s rd (wsub (rget s rs1) (rget s rs2))) next
   | Ior   rd rs1 rs2 => setPc (rset s rd (wor (rget s rs1) (rget s rs2))) next
   | Islli rd rs1 sh  => setPc (rset s rd (wshl (rget s rs1) sh)) next
+  | Isrli rd rs1 sh  => setPc (rset s rd (wshr (rget s rs1) sh)) next
   | Ilbu  rd rs1 imm => let a := wadd (rget s rs1) imm in
                         setPc (rset s rd ((s.(mem) a) mod 256)) next
+  | Ild   rd rs1 imm => let a := wadd (rget s rs1) imm in
+                        setPc (rset s rd (loadWord s a)) next
   | Isb   rs1 rs2 imm => let a := wadd (rget s rs1) imm in
                          setPc (storeByte s a (rget s rs2)) next
+  | Isd   rs1 rs2 imm => let a := wadd (rget s rs1) imm in
+                         setPc (storeWord s a (rget s rs2)) next
   | Ibeq  rs1 rs2 imm => setPc s (if (rget s rs1) =? (rget s rs2) then wadd s.(pc) imm else next)
   | Iblt  rs1 rs2 imm => setPc s (if sltb (rget s rs1) (rget s rs2) then wadd s.(pc) imm else next)
   | Ibge  rs1 rs2 imm => setPc s (if sltb (rget s rs1) (rget s rs2) then next else wadd s.(pc) imm)

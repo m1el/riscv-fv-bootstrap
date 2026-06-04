@@ -5,9 +5,10 @@
     with the authoritative riscv-coq semantics (coq-riscv.0.0.5, the bedrock2 /
     compiler model, generated from the official Haskell riscv-semantics).
 
-    T1 ([decode_agrees]): whenever our decoder returns one of the 12 modelled
-    instructions, riscv-coq's [Decode.decode RV64I] returns the corresponding
-    instruction with identical operands -- for every 32-bit word.
+    T1 ([decode_agrees]): whenever our decoder returns one of the 16 modelled
+    instructions (hex0's 12 + SUB SRLI LD SD added for hex1), riscv-coq's
+    [Decode.decode RV64I] returns the corresponding instruction with identical
+    operands -- for every 32-bit word.
 
     T2 ([step_agrees], forward simulation): one of our [step]s corresponds to one
     riscv-coq instruction cycle, preserving a state-bridge relation. *)
@@ -139,10 +140,14 @@ Definition embed (i : Rv64i.Instr) : Instruction :=
   match i with
   | Iaddi rd rs1 imm => IInstruction (Addi rd rs1 imm)
   | Iadd  rd rs1 rs2 => IInstruction (Add  rd rs1 rs2)
+  | Isub  rd rs1 rs2 => IInstruction (Sub  rd rs1 rs2)
   | Ior   rd rs1 rs2 => IInstruction (Or   rd rs1 rs2)
   | Islli rd rs1 sh  => IInstruction (Slli rd rs1 sh)
+  | Isrli rd rs1 sh  => IInstruction (Srli rd rs1 sh)
   | Ilbu  rd rs1 imm => IInstruction (Lbu  rd rs1 imm)
+  | Ild   rd rs1 imm => I64Instruction (Ld rd rs1 imm)
   | Isb   rs1 rs2 imm=> IInstruction (Sb   rs1 rs2 imm)
+  | Isd   rs1 rs2 imm=> I64Instruction (Sd rs1 rs2 imm)
   | Ibeq  rs1 rs2 imm=> IInstruction (Beq  rs1 rs2 imm)
   | Iblt  rs1 rs2 imm=> IInstruction (Blt  rs1 rs2 imm)
   | Ibge  rs1 rs2 imm=> IInstruction (Bge  rs1 rs2 imm)
@@ -157,7 +162,7 @@ Definition embed (i : Rv64i.Instr) : Instruction :=
 Opaque bitSlice signExtend Z.shiftl Z.lor.
 
 (** Convert our [field]/[sext] operands to riscv-coq form and close by the
-    decode/encode bit-equality prover. Handles all 12 forms uniformly. *)
+    decode/encode bit-equality prover. Handles all 16 forms uniformly. *)
 Ltac finish w :=
   rewrite ?(sext_signExtend _) by (try lia; range_tac);
   rewrite !(f_bs w _ _) by lia;
@@ -227,6 +232,54 @@ Proof.
   intros w Hop Hf3.
   assert (H1: bitSlice w 0 7 = 35) by (rewrite (bs_f w 0 7 7) by lia; exact Hop).
   assert (H2: bitSlice w 12 15 = 0) by (rewrite (bs_f w 12 15 3) by lia; exact Hf3).
+  unfold decode. cbv zeta. rewrite H1, H2. cbn. unfold embed. finish w.
+Qed.
+
+(* --- the 4 encodings added for hex1 (core1.s): SUB SRLI LD SD --- *)
+
+Lemma decode_sub : forall w,
+  Rv64i.field w 0 7 = 51 -> Rv64i.field w 12 3 = 0 -> Rv64i.field w 25 7 = 32 ->
+  decode RV64I w = embed (Isub (Rv64i.field w 7 5) (Rv64i.field w 15 5) (Rv64i.field w 20 5)).
+Proof.
+  intros w Hop Hf3 Hf7.
+  assert (H1: bitSlice w 0 7 = 51) by (rewrite (bs_f w 0 7 7) by lia; exact Hop).
+  assert (H2: bitSlice w 12 15 = 0) by (rewrite (bs_f w 12 15 3) by lia; exact Hf3).
+  assert (H3: bitSlice w 25 32 = 32) by (rewrite (bs_f w 25 32 7) by lia; exact Hf7).
+  unfold decode. cbv zeta. rewrite H1, H2, H3. cbn. unfold embed. finish w.
+Qed.
+
+Lemma decode_srli : forall w, 0 <= w ->
+  Rv64i.field w 0 7 = 19 -> Rv64i.field w 12 3 = 5 -> Rv64i.field w 25 7 = 0 ->
+  decode RV64I w = embed (Isrli (Rv64i.field w 7 5) (Rv64i.field w 15 5) (Rv64i.field w 20 6)).
+Proof.
+  intros w Hw Hop Hf3 Hf7.
+  assert (Hb25 : Rv64i.field w 25 1 = 0) by (apply (field_sub0 w 25 7 25 1); lia).
+  assert (Hb26 : Rv64i.field w 26 6 = 0) by (apply (field_sub0 w 25 7 26 6); lia).
+  assert (H1: bitSlice w 0 7 = 19) by (rewrite (bs_f w 0 7 7) by lia; exact Hop).
+  assert (H2: bitSlice w 12 15 = 5) by (rewrite (bs_f w 12 15 3) by lia; exact Hf3).
+  assert (H3: bitSlice w 25 26 = 0) by (rewrite (bs_f w 25 26 1) by lia; exact Hb25).
+  assert (H4: bitSlice w 26 32 = 0) by (rewrite (bs_f w 26 32 6) by lia; exact Hb26).
+  unfold decode. cbv zeta. rewrite H1, H2, H3, H4. cbn. unfold embed. finish w.
+Qed.
+
+Lemma decode_ld : forall w,
+  Rv64i.field w 0 7 = 3 -> Rv64i.field w 12 3 = 3 ->
+  decode RV64I w = embed (Ild (Rv64i.field w 7 5) (Rv64i.field w 15 5) (Rv64i.sext 12 (Rv64i.field w 20 12))).
+Proof.
+  intros w Hop Hf3.
+  assert (H1: bitSlice w 0 7 = 3) by (rewrite (bs_f w 0 7 7) by lia; exact Hop).
+  assert (H2: bitSlice w 12 15 = 3) by (rewrite (bs_f w 12 15 3) by lia; exact Hf3).
+  unfold decode. cbv zeta. rewrite H1, H2. cbn. unfold embed. finish w.
+Qed.
+
+Lemma decode_sd : forall w,
+  Rv64i.field w 0 7 = 35 -> Rv64i.field w 12 3 = 3 ->
+  decode RV64I w = embed (Isd (Rv64i.field w 15 5) (Rv64i.field w 20 5)
+    (Rv64i.sext 12 (Z.lor (Z.shiftl (Rv64i.field w 25 7) 5) (Rv64i.field w 7 5)))).
+Proof.
+  intros w Hop Hf3.
+  assert (H1: bitSlice w 0 7 = 35) by (rewrite (bs_f w 0 7 7) by lia; exact Hop).
+  assert (H2: bitSlice w 12 15 = 3) by (rewrite (bs_f w 12 15 3) by lia; exact Hf3).
   unfold decode. cbv zeta. rewrite H1, H2. cbn. unfold embed. finish w.
 Qed.
 
@@ -300,7 +353,7 @@ Qed.
 (* T1: decode agreement, for every 32-bit word.                        *)
 (* ------------------------------------------------------------------ *)
 
-(** Whenever our decoder returns one of the 12 modelled instructions, riscv-coq's
+(** Whenever our decoder returns one of the 16 modelled instructions, riscv-coq's
     [decode RV64I] returns the corresponding instruction with identical operands. *)
 Theorem decode_agrees : forall w, 0 <= w < 2 ^ 32 ->
   forall i, Rv64i.decode w = i -> i <> Iunknown -> decode RV64I w = embed i.
@@ -316,7 +369,11 @@ Proof.
       * apply Z.eqb_eq in Ef1. destruct (f7 =? 0) eqn:Ef7.
         -- apply Z.eqb_eq in Ef7. apply decode_slli; (lia || assumption).
         -- exfalso; apply Hni; reflexivity.
-      * exfalso; apply Hni; reflexivity.
+      * destruct (f3 =? 5) eqn:Ef5.
+        -- apply Z.eqb_eq in Ef5. destruct (f7 =? 0) eqn:Ef7.
+           ++ apply Z.eqb_eq in Ef7. apply decode_srli; (lia || assumption).
+           ++ exfalso; apply Hni; reflexivity.
+        -- exfalso; apply Hni; reflexivity.
   - destruct (op =? 51) eqn:E51.
     + apply Z.eqb_eq in E51. destruct (f7 =? 0) eqn:Ef7.
       * apply Z.eqb_eq in Ef7. destruct (f3 =? 0) eqn:Ef0.
@@ -324,15 +381,23 @@ Proof.
         -- destruct (f3 =? 6) eqn:Ef6.
            ++ apply Z.eqb_eq in Ef6. apply decode_or; assumption.
            ++ exfalso; apply Hni; reflexivity.
-      * exfalso; apply Hni; reflexivity.
+      * destruct (f7 =? 32) eqn:Ef32.
+        -- apply Z.eqb_eq in Ef32. destruct (f3 =? 0) eqn:Ef0.
+           ++ apply Z.eqb_eq in Ef0. apply decode_sub; assumption.
+           ++ exfalso; apply Hni; reflexivity.
+        -- exfalso; apply Hni; reflexivity.
     + destruct (op =? 3) eqn:E3.
       * apply Z.eqb_eq in E3. destruct (f3 =? 4) eqn:Ef4.
         -- apply Z.eqb_eq in Ef4. apply decode_lbu; assumption.
-        -- exfalso; apply Hni; reflexivity.
+        -- destruct (f3 =? 3) eqn:Ef3.
+           ++ apply Z.eqb_eq in Ef3. apply decode_ld; assumption.
+           ++ exfalso; apply Hni; reflexivity.
       * destruct (op =? 35) eqn:E35.
         -- apply Z.eqb_eq in E35. destruct (f3 =? 0) eqn:Ef0.
            ++ apply Z.eqb_eq in Ef0. apply decode_sb; assumption.
-           ++ exfalso; apply Hni; reflexivity.
+           ++ destruct (f3 =? 3) eqn:Ef3.
+              ** apply Z.eqb_eq in Ef3. apply decode_sd; assumption.
+              ** exfalso; apply Hni; reflexivity.
         -- destruct (op =? 99) eqn:E99.
            ++ apply Z.eqb_eq in E99. destruct (f3 =? 0) eqn:Ef0.
               ** apply Z.eqb_eq in Ef0. apply decode_beq; assumption.
@@ -352,18 +417,18 @@ Proof.
                  --- exfalso; apply Hni; reflexivity.
 Qed.
 
-(** ** Reverse direction (the correspondence is faithful both ways on the 12
+(** ** Reverse direction (the correspondence is faithful both ways on the 16
     modelled forms).
 
     [embed] is injective on the modelled forms, so whenever riscv-coq decodes [w]
     to [embed j] AND our decoder also returns a modelled form ([decode w <> Iunknown]),
     the two outputs coincide ([decode w = j]).  Equivalently: our decoder never
-    *mis*classifies -- if it commits to one of the 12 forms, it commits to the SAME
+    *mis*classifies -- if it commits to one of the 16 forms, it commits to the SAME
     one riscv-coq does.
 
     The hypothesis [Rv64i.decode w <> Iunknown] is exactly the documented narrowing
     (CROSSCHECK.md §5): for the encodings our decoder *declines* (returns [Iunknown])
-    -- every instruction outside our 12 forms, and SLLI with [shamt >= 32] (where
+    -- every instruction outside our 16 forms, and SLLI/SRLI with [shamt >= 32] (where
     riscv-coq at RV64I still yields [Slli] but our decoder requires [funct7 = 0],
     i.e. bit 25 = shamt[5] = 0) -- no reverse claim is made.  On every [core] SLLI
     ([shamt in {0..4}]) the proviso holds, so the reverse agreement applies there. *)

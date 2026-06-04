@@ -15,11 +15,12 @@
       [ltu_of_Z], [jalr_target], ...) and range helpers;
     - the cycle finishers [finish_cycle] / [writeReg_cycle] / [setPC_cycle] /
       [noop_cycle] / [writeReg_setPC_cycle] / [store_cycle];
-    - the 12 per-instruction lemmas [exec_addi/add/or/slli/lbu/sb/beq/blt/bge/
-      bgeu/jal/jalr], each: fetch -> [run1] reduce -> [decode_agrees] (T1) ->
-      [ExecuteI] reduce via the bridges -> reassemble [Rrel];
+    - the 16 per-instruction lemmas [exec_addi/add/sub/or/slli/srli/lbu/ld/sb/sd/
+      beq/blt/bge/bgeu/jal/jalr], each: fetch -> [run1] reduce -> [decode_agrees]
+      (T1) -> [ExecuteI]/[ExecuteI64] reduce via the bridges -> reassemble [Rrel]
+      (LD/SD via the 8-byte memory bridge [load8_combine]/[store8_cycle]);
     - [step_agrees]: one [Rv64i.step] = one riscv-coq [run1] cycle, dispatching on
-      [decode (fetch32 s)] to the 12 [exec_*] under [Rrel] + [WFstep] (the §5
+      [decode (fetch32 s)] to the 16 [exec_*] under [Rrel] + [WFstep] (the §5
       alignment / data-domain side conditions, all true of the loaded [core]).
 
     Remaining for T2: the transport corollary [core_refines_riscv] (lift
@@ -27,7 +28,7 @@
 
 From Coq Require Import ZArith List Lia Bool. Import ListNotations.
 Require Import Hex0Coq.Rv64i Hex0Coq.RvCross Hex0Coq.RvCrossStep.
-Require Import riscv.Spec.Decode riscv.Spec.Machine riscv.Spec.Execute riscv.Spec.ExecuteI.
+Require Import riscv.Spec.Decode riscv.Spec.Machine riscv.Spec.Execute riscv.Spec.ExecuteI riscv.Spec.ExecuteI64.
 Require Import riscv.Utility.Utility riscv.Utility.MkMachineWidth riscv.Platform.Memory.
 Require Import riscv.Platform.RiscvMachine riscv.Platform.Minimal riscv.Platform.Run.
 Require Import riscv.Spec.Primitives.
@@ -120,6 +121,18 @@ Proof. intros w rd imm H. inv_decode H. auto. Qed.
 Lemma inv_jalr : forall w rd rs1 imm, Rv64i.decode w = Ijalr rd rs1 imm ->
   rd = Rv64i.field w 7 5 /\ rs1 = Rv64i.field w 15 5.
 Proof. intros w rd rs1 imm H. inv_decode H. auto. Qed.
+Lemma inv_sub : forall w rd rs1 rs2, Rv64i.decode w = Isub rd rs1 rs2 ->
+  rd = Rv64i.field w 7 5 /\ rs1 = Rv64i.field w 15 5 /\ rs2 = Rv64i.field w 20 5.
+Proof. intros w rd rs1 rs2 H. inv_decode H. auto. Qed.
+Lemma inv_srli : forall w rd rs1 sh, Rv64i.decode w = Isrli rd rs1 sh ->
+  rd = Rv64i.field w 7 5 /\ rs1 = Rv64i.field w 15 5 /\ sh = Rv64i.field w 20 6.
+Proof. intros w rd rs1 sh H. inv_decode H. auto. Qed.
+Lemma inv_ld : forall w rd rs1 imm, Rv64i.decode w = Ild rd rs1 imm ->
+  rd = Rv64i.field w 7 5 /\ rs1 = Rv64i.field w 15 5.
+Proof. intros w rd rs1 imm H. inv_decode H. auto. Qed.
+Lemma inv_sd : forall w rs1 rs2 imm, Rv64i.decode w = Isd rs1 rs2 imm ->
+  rs1 = Rv64i.field w 15 5 /\ rs2 = Rv64i.field w 20 5.
+Proof. intros w rs1 rs2 imm H. inv_decode H. auto. Qed.
 
 (* pure state-projection facts about our model's setters *)
 Lemma rget_rset_same : forall s i v, i <> 0 -> Rv64i.rget (Rv64i.rset s i v) i = v.
@@ -143,6 +156,23 @@ Lemma pc_storeByte : forall s a b, (Rv64i.storeByte s a b).(pc) = s.(pc).
 Proof. reflexivity. Qed.
 Lemma mem_storeByte_at : forall s a b x,
   (Rv64i.storeByte s a b).(mem) x = (if x =? a then b mod 256 else s.(mem) x).
+Proof. reflexivity. Qed.
+Lemma rget_storeWord : forall s a v r, Rv64i.rget (Rv64i.storeWord s a v) r = Rv64i.rget s r.
+Proof. intros. unfold Rv64i.storeWord. rewrite !rget_storeByte. reflexivity. Qed.
+Lemma pc_storeWord : forall s a v, (Rv64i.storeWord s a v).(pc) = s.(pc).
+Proof. reflexivity. Qed.
+(* the 8-byte little-endian store, byte by byte (outermost store last) *)
+Lemma mem_storeWord_at : forall s a v x,
+  (Rv64i.storeWord s a v).(mem) x =
+  (if x =? a + 7 then (v / 2 ^ 56) mod 256
+   else if x =? a + 6 then (v / 2 ^ 48) mod 256
+   else if x =? a + 5 then (v / 2 ^ 40) mod 256
+   else if x =? a + 4 then (v / 2 ^ 32) mod 256
+   else if x =? a + 3 then (v / 2 ^ 24) mod 256
+   else if x =? a + 2 then (v / 2 ^ 16) mod 256
+   else if x =? a + 1 then (v / 2 ^ 8) mod 256
+   else if x =? a then v mod 256
+   else s.(mem) x).
 Proof. reflexivity. Qed.
 
 Section Step.
@@ -261,6 +291,43 @@ Section Step.
     rewrite (word.unsigned_of_Z_nowrap a) by lia.
     rewrite (word.unsigned_of_Z_nowrap (Rv64i.wshl a sh)) by (apply wshl_range).
     unfold Rv64i.wshl, Rv64i.wrap, Rv64i.w64, word.wrap. reflexivity.
+  Qed.
+
+  (* --- bridges for the 4 hex1 additions (SUB SRLI LD SD) --- *)
+  Lemma wsub_range : forall a b, 0 <= Rv64i.wsub a b < 2 ^ 64.
+  Proof. intros. unfold Rv64i.wsub, Rv64i.wrap, Rv64i.w64. apply Z.mod_pos_bound. lia. Qed.
+  Lemma wsub_of_Z : forall a b,
+    word.of_Z (word:=word) (Rv64i.wsub a b) = word.sub (word.of_Z a) (word.of_Z b).
+  Proof.
+    intros. apply word.unsigned_inj.
+    rewrite word.unsigned_sub, !word.unsigned_of_Z.
+    unfold Rv64i.wsub, Rv64i.wrap, Rv64i.w64, word.wrap.
+    rewrite Zminus_mod_idemp_l, Zminus_mod_idemp_r.
+    rewrite Z.mod_mod by (apply Z.pow_nonzero; lia). reflexivity.
+  Qed.
+  Lemma wshr_range : forall a sh, 0 <= a < 2^64 -> 0 <= sh -> 0 <= Rv64i.wshr a sh < 2 ^ 64.
+  Proof.
+    intros a sh Ha Hsh. unfold Rv64i.wshr. rewrite Z.shiftr_div_pow2 by lia.
+    pose proof (Z.pow_pos_nonneg 2 sh ltac:(lia) ltac:(lia)).
+    split.
+    - apply Z.div_pos; lia.
+    - apply Z.le_lt_trans with a; [apply Z.div_le_upper_bound; nia | lia].
+  Qed.
+  Lemma wshr_of_Z : forall a sh, 0 <= a < 2^64 -> 0 <= sh < 64 ->
+    word.of_Z (word:=word) (Rv64i.wshr a sh) = word.sru (word.of_Z a) (word.of_Z sh).
+  Proof.
+    intros a sh Ha Hsh. apply word.unsigned_inj.
+    rewrite word.unsigned_sru_shamtZ by lia.
+    rewrite (word.unsigned_of_Z_nowrap a) by lia.
+    rewrite (word.unsigned_of_Z_nowrap (Rv64i.wshr a sh)) by (apply wshr_range; lia).
+    reflexivity.
+  Qed.
+  (* [int64ToReg] at width 64 sign-extends then re-wraps: a no-op under of_Z. *)
+  Lemma of_Z_sext64 : forall z, word.of_Z (word:=word) (signExtend 64 z) = word.of_Z z.
+  Proof.
+    intros. apply word.unsigned_inj. rewrite !word.unsigned_of_Z. unfold word.wrap.
+    with_strategy transparent [signExtend] unfold signExtend.
+    rewrite Zminus_mod_idemp_l. f_equal. lia.
   Qed.
 
   (* the common cycle finisher: from a machine [mset] whose registers/memory already
@@ -549,6 +616,263 @@ Section Step.
       rewrite word.unsigned_of_Z_nowrap by lia. rewrite Hpc. reflexivity.
   Qed.
 
+  (* ---------------------------------------------------------------- *)
+  (* 8-byte memory bridges (LD/SD): the riscv-coq loadDouble/storeDouble *)
+  (* vs our loadWord/storeWord. Mirrors the 4-byte fetch bridge.        *)
+  (* ---------------------------------------------------------------- *)
+
+  (** 8 mapped little-endian bytes combine to the value our [loadWord] reads. *)
+  Lemma load8_combine : forall (rm:Mem) (a:word) (f: Z -> Z),
+    word.unsigned a + 8 <= 2 ^ 64 ->
+    (forall i, 0 <= i < 8 -> map.get rm (word.add a (word.of_Z i)) = Some (byte.of_Z (f i))) ->
+    (forall i, 0 <= i < 8 -> 0 <= f i < 256) ->
+    exists bs, Memory.load_bytes 8 rm a = Some bs /\
+      LittleEndian.combine 8 bs
+        = f 0 + f 1 * 256 + f 2 * 65536 + f 3 * 16777216 + f 4 * 4294967296
+          + f 5 * 1099511627776 + f 6 * 281474976710656 + f 7 * 72057594037927936.
+  Proof.
+    intros rm a f Hnw Hget Hrange.
+    pose proof (Hget 0 ltac:(lia)) as G0. pose proof (Hget 1 ltac:(lia)) as G1.
+    pose proof (Hget 2 ltac:(lia)) as G2. pose proof (Hget 3 ltac:(lia)) as G3.
+    pose proof (Hget 4 ltac:(lia)) as G4. pose proof (Hget 5 ltac:(lia)) as G5.
+    pose proof (Hget 6 ltac:(lia)) as G6. pose proof (Hget 7 ltac:(lia)) as G7.
+    pose proof (Hrange 0 ltac:(lia)). pose proof (Hrange 1 ltac:(lia)).
+    pose proof (Hrange 2 ltac:(lia)). pose proof (Hrange 3 ltac:(lia)).
+    pose proof (Hrange 4 ltac:(lia)). pose proof (Hrange 5 ltac:(lia)).
+    pose proof (Hrange 6 ltac:(lia)). pose proof (Hrange 7 ltac:(lia)).
+    unfold Memory.load_bytes, Memory.footprint. cbn [HList.tuple.unfoldn].
+    replace (word.add a (word.of_Z 0)) with a in G0 by ZnWords.
+    replace (word.add (word.add a (word.of_Z 1)) (word.of_Z 1)) with (word.add a (word.of_Z 2)) in * by ZnWords.
+    replace (word.add (word.add a (word.of_Z 2)) (word.of_Z 1)) with (word.add a (word.of_Z 3)) in * by ZnWords.
+    replace (word.add (word.add a (word.of_Z 3)) (word.of_Z 1)) with (word.add a (word.of_Z 4)) in * by ZnWords.
+    replace (word.add (word.add a (word.of_Z 4)) (word.of_Z 1)) with (word.add a (word.of_Z 5)) in * by ZnWords.
+    replace (word.add (word.add a (word.of_Z 5)) (word.of_Z 1)) with (word.add a (word.of_Z 6)) in * by ZnWords.
+    replace (word.add (word.add a (word.of_Z 6)) (word.of_Z 1)) with (word.add a (word.of_Z 7)) in * by ZnWords.
+    unfold map.getmany_of_tuple. cbn [HList.tuple.map HList.tuple.option_all].
+    rewrite G0, G1, G2, G3, G4, G5, G6, G7.
+    eexists. split; [reflexivity|].
+    rewrite combine_eq. cbn [HList.tuple.to_list]. cbv [LittleEndianList.le_combine].
+    rewrite !byte_uoz by assumption.
+    change (Z.shiftl 0 8) with 0. rewrite Z.lor_0_r.
+    rewrite !Z.shiftl_mul_pow2 by lia. change (2 ^ 8) with 256.
+    rewrite (or_to_plus (f 6)) by (apply land_lo_hi; lia).
+    rewrite (or_to_plus (f 5)) by (apply land_lo_hi; lia).
+    rewrite (or_to_plus (f 4)) by (apply land_lo_hi; lia).
+    rewrite (or_to_plus (f 3)) by (apply land_lo_hi; lia).
+    rewrite (or_to_plus (f 2)) by (apply land_lo_hi; lia).
+    rewrite (or_to_plus (f 1)) by (apply land_lo_hi; lia).
+    rewrite (or_to_plus (f 0)) by (apply land_lo_hi; lia).
+    ring.
+  Qed.
+
+  (** connection to the model state: 8 in-domain data bytes at [of_Z az]
+      load successfully and combine to [Rv64i.loadWord s az]. *)
+  Lemma load8_conn : forall s (m:RMach) D az,
+    Rrel s m D -> 0 <= az -> az + 8 <= 2 ^ 64 ->
+    (forall i, 0 <= i < 8 -> D (word.add (word.of_Z az) (word.of_Z i))) ->
+    exists bs, Memory.load_bytes 8 m.(getMem) (word.of_Z az) = Some bs /\
+               LittleEndian.combine 8 bs = Rv64i.loadWord s az /\
+               0 <= Rv64i.loadWord s az < 2 ^ 64.
+  Proof.
+    intros s m D az HR Haz0 Hnw HD.
+    destruct HR as (HRA & HMA & HPA).
+    assert (Hai : forall i, 0 <= i < 8 ->
+              word.unsigned (word.add (word.of_Z (word:=word) az) (word.of_Z i)) = az + i)
+      by (intros; ZnWords).
+    assert (Hgi : forall i, 0 <= i < 8 ->
+              map.get m.(getMem) (word.add (word.of_Z az) (word.of_Z i))
+                = Some (byte.of_Z (s.(mem) (az + i)))).
+    { intros i Hi. destruct (HMA _ (HD i Hi)) as (Hg & _).
+      rewrite (Hai i Hi) in Hg. exact Hg. }
+    assert (Hri : forall i, 0 <= i < 8 -> 0 <= s.(mem) (az + i) < 256).
+    { intros i Hi. destruct (HMA _ (HD i Hi)) as (_ & Hr).
+      rewrite (Hai i Hi) in Hr. exact Hr. }
+    destruct (load8_combine m.(getMem) (word.of_Z az) (fun i => s.(mem) (az + i))
+                ltac:(rewrite word.unsigned_of_Z_nowrap by lia; lia) Hgi Hri)
+      as (bs & Hl & Hc).
+    cbv beta in Hc.
+    pose proof (Hri 0 ltac:(lia)). pose proof (Hri 1 ltac:(lia)).
+    pose proof (Hri 2 ltac:(lia)). pose proof (Hri 3 ltac:(lia)).
+    pose proof (Hri 4 ltac:(lia)). pose proof (Hri 5 ltac:(lia)).
+    pose proof (Hri 6 ltac:(lia)). pose proof (Hri 7 ltac:(lia)).
+    exists bs. split; [exact Hl|]. split.
+    - apply (eq_trans Hc). unfold Rv64i.loadWord.
+      replace (az + 0) with az by lia. lia.
+    - unfold Rv64i.loadWord. change (2 ^ 64) with 18446744073709551616.
+      pose proof (Hri 0 ltac:(lia)) as R0. replace (az + 0) with az in R0 by lia. lia.
+  Qed.
+
+  (* loadDouble on Minimal: reduce given a successful 8-byte read. *)
+  Lemma loadDouble_red : forall (m:RMach) (a:word) (bs : w64),
+    Memory.load_bytes 8 m.(getMem) a = Some bs ->
+    (Machine.loadDouble Spec.Machine.Execute a : OState RiscvMachine w64) m = (Some bs, m).
+  Proof.
+    intros m a bs H. unfold Machine.loadDouble, IsRiscvMachine, loadN, fail_if_None.
+    cbv [Bind Return OState_Monad get]. cbn [fst snd]. rewrite H. reflexivity.
+  Qed.
+  Lemma loadDouble_bind : forall (m:RMach) (a:word) (bs : w64) (k: w64 -> OState RiscvMachine unit),
+    Memory.load_bytes 8 m.(getMem) a = Some bs ->
+    Bind (Machine.loadDouble Spec.Machine.Execute a) k m = k bs m.
+  Proof. intros. apply (OState_bind_value _ k m _ (loadDouble_red m a bs H)). Qed.
+
+  Lemma regToInt64_of_Z : forall v, 0 <= v < 2 ^ 64 ->
+    regToInt64 (word.of_Z (word:=word) v) = LittleEndian.split 8 v.
+  Proof.
+    intros v Hv. cbn [regToInt64 MachineWidth_XLEN].
+    rewrite word.unsigned_of_Z_nowrap by lia. reflexivity.
+  Qed.
+
+  (* expose split's bytes as the [v / 2^(8k) mod 256] our storeWord stores
+     (byte.of_Z wraps mod 256). *)
+  Lemma split8_bytes : forall v,
+    LittleEndian.split 8 v = PrimitivePair.pair.mk (byte.of_Z v)
+      (PrimitivePair.pair.mk (byte.of_Z (v / 2 ^ 8))
+      (PrimitivePair.pair.mk (byte.of_Z (v / 2 ^ 16))
+      (PrimitivePair.pair.mk (byte.of_Z (v / 2 ^ 24))
+      (PrimitivePair.pair.mk (byte.of_Z (v / 2 ^ 32))
+      (PrimitivePair.pair.mk (byte.of_Z (v / 2 ^ 40))
+      (PrimitivePair.pair.mk (byte.of_Z (v / 2 ^ 48))
+      (PrimitivePair.pair.mk (byte.of_Z (v / 2 ^ 56)) tt))))))).
+  Proof.
+    intros. cbv [LittleEndian.split_deprecated].
+    rewrite !Z.shiftr_shiftr by lia.
+    rewrite !Z.shiftr_div_pow2 by lia.
+    reflexivity.
+  Qed.
+
+  (* storeDouble on Minimal: reduce given the 8 target bytes are mapped. *)
+  Lemma storeDouble_red : forall (m:RMach) (addr:word) (tup : w64) bs0,
+    Memory.load_bytes 8 m.(getMem) addr = Some bs0 ->
+    (Machine.storeDouble Spec.Machine.Execute addr tup : OState RiscvMachine unit) m
+      = (Some tt, withXAddrs (invalidateWrittenXAddrs 8 addr m.(getXAddrs))
+                    (withMem (Memory.unchecked_store_bytes 8 m.(getMem) addr tup) m)).
+  Proof.
+    intros m addr tup bs0 H.
+    unfold Machine.storeDouble, IsRiscvMachine, storeN, fail_if_None, update.
+    cbv [Bind Return OState_Monad get put]. cbn [fst snd].
+    unfold Memory.store_bytes. rewrite H. reflexivity.
+  Qed.
+
+  (* an 8-byte store: write [split 8 v] at [addr] (all 8 addresses mapped &
+     tracked), then pc += 4 -- lands [Rrel]-related to our [storeWord]. *)
+  Lemma store8_cycle : forall s (m:RMach) D (addr:word) az v,
+    RegAgree s m -> MemAgree s m D -> PcAgree s m ->
+    word.unsigned addr = az -> az + 8 <= 2 ^ 64 -> 0 <= v < 2 ^ 64 ->
+    (forall i, 0 <= i < 8 -> D (word.add addr (word.of_Z i))) ->
+    exists m',
+      (let (o, m3) := (Machine.storeDouble Spec.Machine.Execute addr
+                         (LittleEndian.split 8 v) : OState RiscvMachine unit) m in
+         match o with Some _ => endCycleNormal m3 | None => (None, m3) end) = (Some tt, m')
+      /\ Rrel (Rv64i.setPc (Rv64i.storeWord s az v) (Rv64i.wadd s.(pc) 4)) m' D.
+  Proof.
+    intros s m D addr az v HRA HMA HPA Haz Hnw Hv HD.
+    assert (Hai : forall i, 0 <= i < 8 ->
+              word.unsigned (word.add addr (word.of_Z i)) = az + i)
+      by (intros; ZnWords).
+    assert (Hgi : forall i, 0 <= i < 8 ->
+              map.get m.(getMem) (word.add addr (word.of_Z i))
+                = Some (byte.of_Z (s.(mem) (az + i)))).
+    { intros i Hi. destruct (HMA _ (HD i Hi)) as (Hg & _).
+      rewrite (Hai i Hi) in Hg. exact Hg. }
+    assert (Hri : forall i, 0 <= i < 8 -> 0 <= s.(mem) (az + i) < 256).
+    { intros i Hi. destruct (HMA _ (HD i Hi)) as (_ & Hr).
+      rewrite (Hai i Hi) in Hr. exact Hr. }
+    destruct (load8_combine m.(getMem) addr (fun i => s.(mem) (az + i))
+                ltac:(lia) Hgi Hri) as (bs0 & Hl & _).
+    pose proof (Hai 1 ltac:(lia)) as A1. pose proof (Hai 2 ltac:(lia)) as A2.
+    pose proof (Hai 3 ltac:(lia)) as A3. pose proof (Hai 4 ltac:(lia)) as A4.
+    pose proof (Hai 5 ltac:(lia)) as A5. pose proof (Hai 6 ltac:(lia)) as A6.
+    pose proof (Hai 7 ltac:(lia)) as A7.
+    pose proof HPA as (Hpc & Hnext).
+    rewrite (storeDouble_red m addr (LittleEndian.split 8 v) bs0 Hl). cbn match.
+    rewrite split8_bytes.
+    unfold Memory.unchecked_store_bytes, Memory.footprint.
+    cbn [HList.tuple.unfoldn map.putmany_of_tuple].
+    replace (word.add (word.add addr (word.of_Z 1)) (word.of_Z 1)) with (word.add addr (word.of_Z 2)) by ZnWords.
+    replace (word.add (word.add addr (word.of_Z 2)) (word.of_Z 1)) with (word.add addr (word.of_Z 3)) by ZnWords.
+    replace (word.add (word.add addr (word.of_Z 3)) (word.of_Z 1)) with (word.add addr (word.of_Z 4)) by ZnWords.
+    replace (word.add (word.add addr (word.of_Z 4)) (word.of_Z 1)) with (word.add addr (word.of_Z 5)) by ZnWords.
+    replace (word.add (word.add addr (word.of_Z 5)) (word.of_Z 1)) with (word.add addr (word.of_Z 6)) by ZnWords.
+    replace (word.add (word.add addr (word.of_Z 6)) (word.of_Z 1)) with (word.add addr (word.of_Z 7)) by ZnWords.
+    destruct m as [regs pc0 npc0 mem0 xa lg]. cbn [getMem getXAddrs withMem withXAddrs] in *.
+    cbn in Hpc, Hnext.
+    apply finish_cycle.
+    - (* RegAgree *)
+      unfold RegAgree; cbn [getRegs withMem withXAddrs]. intros r Hr.
+      rewrite rget_setPc, rget_storeWord. exact (HRA r Hr).
+    - (* MemAgree: 8-way case split on which stored byte (if any) [a] hits *)
+      unfold MemAgree; cbn [getMem withMem withXAddrs]. intros a Ha.
+      rewrite mem_setPc, mem_storeWord_at.
+      (* a = addr + k branches, k = 0..7, then the untouched branch *)
+      destruct (Z.eq_dec (word.unsigned a) az) as [E0|N0].
+      { assert (Ea : a = addr) by (apply word.unsigned_inj; lia).
+        subst a. rewrite map.get_put_same. rewrite E0.
+        repeat (rewrite (proj2 (Z.eqb_neq _ _)) by lia).
+        rewrite Z.eqb_refl, byte_of_Z_mod.
+        split; [reflexivity | apply Z.mod_pos_bound; lia]. }
+      rewrite map.get_put_diff
+        by (intro C; apply N0; rewrite C; lia).
+      destruct (Z.eq_dec (word.unsigned a) (az + 1)) as [E1|N1].
+      { assert (Ea : a = word.add addr (word.of_Z 1)) by (apply word.unsigned_inj; lia).
+        subst a. rewrite map.get_put_same. rewrite E1.
+        repeat (rewrite (proj2 (Z.eqb_neq _ _)) by lia).
+        rewrite Z.eqb_refl, byte_of_Z_mod.
+        split; [reflexivity | apply Z.mod_pos_bound; lia]. }
+      rewrite map.get_put_diff
+        by (intro C; apply N1; rewrite C; lia).
+      destruct (Z.eq_dec (word.unsigned a) (az + 2)) as [E2|N2].
+      { assert (Ea : a = word.add addr (word.of_Z 2)) by (apply word.unsigned_inj; lia).
+        subst a. rewrite map.get_put_same. rewrite E2.
+        repeat (rewrite (proj2 (Z.eqb_neq _ _)) by lia).
+        rewrite Z.eqb_refl, byte_of_Z_mod.
+        split; [reflexivity | apply Z.mod_pos_bound; lia]. }
+      rewrite map.get_put_diff
+        by (intro C; apply N2; rewrite C; lia).
+      destruct (Z.eq_dec (word.unsigned a) (az + 3)) as [E3|N3].
+      { assert (Ea : a = word.add addr (word.of_Z 3)) by (apply word.unsigned_inj; lia).
+        subst a. rewrite map.get_put_same. rewrite E3.
+        repeat (rewrite (proj2 (Z.eqb_neq _ _)) by lia).
+        rewrite Z.eqb_refl, byte_of_Z_mod.
+        split; [reflexivity | apply Z.mod_pos_bound; lia]. }
+      rewrite map.get_put_diff
+        by (intro C; apply N3; rewrite C; lia).
+      destruct (Z.eq_dec (word.unsigned a) (az + 4)) as [E4|N4].
+      { assert (Ea : a = word.add addr (word.of_Z 4)) by (apply word.unsigned_inj; lia).
+        subst a. rewrite map.get_put_same. rewrite E4.
+        repeat (rewrite (proj2 (Z.eqb_neq _ _)) by lia).
+        rewrite Z.eqb_refl, byte_of_Z_mod.
+        split; [reflexivity | apply Z.mod_pos_bound; lia]. }
+      rewrite map.get_put_diff
+        by (intro C; apply N4; rewrite C; lia).
+      destruct (Z.eq_dec (word.unsigned a) (az + 5)) as [E5|N5].
+      { assert (Ea : a = word.add addr (word.of_Z 5)) by (apply word.unsigned_inj; lia).
+        subst a. rewrite map.get_put_same. rewrite E5.
+        repeat (rewrite (proj2 (Z.eqb_neq _ _)) by lia).
+        rewrite Z.eqb_refl, byte_of_Z_mod.
+        split; [reflexivity | apply Z.mod_pos_bound; lia]. }
+      rewrite map.get_put_diff
+        by (intro C; apply N5; rewrite C; lia).
+      destruct (Z.eq_dec (word.unsigned a) (az + 6)) as [E6|N6].
+      { assert (Ea : a = word.add addr (word.of_Z 6)) by (apply word.unsigned_inj; lia).
+        subst a. rewrite map.get_put_same. rewrite E6.
+        repeat (rewrite (proj2 (Z.eqb_neq _ _)) by lia).
+        rewrite Z.eqb_refl, byte_of_Z_mod.
+        split; [reflexivity | apply Z.mod_pos_bound; lia]. }
+      rewrite map.get_put_diff
+        by (intro C; apply N6; rewrite C; lia).
+      destruct (Z.eq_dec (word.unsigned a) (az + 7)) as [E7|N7].
+      { assert (Ea : a = word.add addr (word.of_Z 7)) by (apply word.unsigned_inj; lia).
+        subst a. rewrite map.get_put_same. rewrite E7.
+        rewrite Z.eqb_refl, byte_of_Z_mod.
+        split; [reflexivity | apply Z.mod_pos_bound; lia]. }
+      rewrite map.get_put_diff
+        by (intro C; apply N7; rewrite C; lia).
+      repeat (rewrite (proj2 (Z.eqb_neq _ _)) by lia).
+      exact (HMA a Ha).
+    - cbn [getNextPc withMem withXAddrs]. rewrite Hnext, br_add, pc_setPc.
+      rewrite word.unsigned_of_Z_nowrap by lia. rewrite Hpc. reflexivity.
+  Qed.
+
   (* shared prologue: fetch, reduce run1, pin decode via T1, expose the ExecuteI body. *)
   Ltac exec_setup s m HR HWF Hdec ctor :=
     destruct (fetch_conn s m _ HR HWF) as (bs & Hload & Hcomb);
@@ -559,7 +883,7 @@ Section Step.
     rewrite (run1_fetch m bs (isXAddr4B_true _ _ Hx) Hload);
     replace (LittleEndian.combine 4 bs) with (Rv64i.fetch32 s) by (symmetry; exact Hcomb);
     rewrite (decode_agrees (Rv64i.fetch32 s) Hfr ctor Hdec ltac:(discriminate));
-    cbn [embed Execute.execute ExecuteI.execute].
+    cbn [embed Execute.execute ExecuteI.execute ExecuteI64.execute].
 
   Lemma exec_addi : forall s (m:RMach) D rd rs1 imm,
     Rrel s m D -> WFfetch s m D ->
@@ -593,6 +917,42 @@ Section Step.
     cbn [add MachineWidth_XLEN].
     rewrite <- (wadd_of_Z (rget s rs1) (rget s rs2)).
     apply writeReg_cycle; try assumption. apply wadd_range.
+  Qed.
+
+  Lemma exec_sub : forall s (m:RMach) D rd rs1 rs2,
+    Rrel s m D -> WFfetch s m D ->
+    Rv64i.decode (Rv64i.fetch32 s) = Isub rd rs1 rs2 ->
+    exists m', Run.run1 RV64I m = (Some tt, m') /\ Rrel (Rv64i.step s) m' D.
+  Proof.
+    intros s m D rd rs1 rs2 HR HWF Hdec.
+    pose proof (inv_sub _ _ _ _ Hdec) as (Erd & Ers1 & Ers2).
+    assert (Hrd: 0 <= rd < 32) by (rewrite Erd; apply field_range; lia).
+    assert (Hrs1: 0 <= rs1 < 32) by (rewrite Ers1; apply field_range; lia).
+    assert (Hrs2: 0 <= rs2 < 32) by (rewrite Ers2; apply field_range; lia).
+    exec_setup s m HR HWF Hdec (Isub rd rs1 rs2).
+    rewrite (getReg_bind s m rs1 _ HRA Hrs1).
+    rewrite (getReg_bind s m rs2 _ HRA Hrs2).
+    cbn [sub MachineWidth_XLEN].
+    rewrite <- (wsub_of_Z (rget s rs1) (rget s rs2)).
+    apply writeReg_cycle; try assumption. apply wsub_range.
+  Qed.
+
+  Lemma exec_srli : forall s (m:RMach) D rd rs1 sh,
+    Rrel s m D -> WFfetch s m D ->
+    Rv64i.decode (Rv64i.fetch32 s) = Isrli rd rs1 sh ->
+    exists m', Run.run1 RV64I m = (Some tt, m') /\ Rrel (Rv64i.step s) m' D.
+  Proof.
+    intros s m D rd rs1 sh HR HWF Hdec.
+    pose proof (inv_srli _ _ _ _ Hdec) as (Erd & Ers1 & Esh).
+    assert (Hrd: 0 <= rd < 32) by (rewrite Erd; apply field_range; lia).
+    assert (Hrs1: 0 <= rs1 < 32) by (rewrite Ers1; apply field_range; lia).
+    assert (Hsh: 0 <= sh < 64) by (rewrite Esh; apply field_range; lia).
+    exec_setup s m HR HWF Hdec (Isrli rd rs1 sh).
+    rewrite (getReg_bind s m rs1 _ HRA Hrs1).
+    cbn [srl MachineWidth_XLEN].
+    rewrite <- (wshr_of_Z (rget s rs1) sh) by (try (eapply rget_range; eassumption); lia).
+    apply writeReg_cycle; try assumption.
+    apply wshr_range; [eapply rget_range; eassumption | lia].
   Qed.
 
   Lemma exec_or : forall s (m:RMach) D rd rs1 rs2,
@@ -831,6 +1191,61 @@ Section Step.
     - exact Hget.
   Qed.
 
+  Lemma exec_ld : forall s (m:RMach) D rd rs1 imm,
+    Rrel s m D -> WFfetch s m D ->
+    Rv64i.decode (Rv64i.fetch32 s) = Ild rd rs1 imm ->
+    Rv64i.wadd (Rv64i.rget s rs1) imm + 8 <= 2 ^ 64 ->
+    (forall i, 0 <= i < 8 ->
+       D (word.add (word.of_Z (Rv64i.wadd (Rv64i.rget s rs1) imm)) (word.of_Z i))) ->
+    exists m', Run.run1 RV64I m = (Some tt, m') /\ Rrel (Rv64i.step s) m' D.
+  Proof.
+    intros s m D rd rs1 imm HR HWF Hdec Hnw8 HD8.
+    pose proof (inv_ld _ _ _ _ Hdec) as (Erd & Ers1).
+    assert (Hrd: 0 <= rd < 32) by (rewrite Erd; apply field_range; lia).
+    assert (Hrs1: 0 <= rs1 < 32) by (rewrite Ers1; apply field_range; lia).
+    pose proof (wadd_range (Rv64i.rget s rs1) imm) as Hazr.
+    destruct (load8_conn s m D (Rv64i.wadd (Rv64i.rget s rs1) imm) HR ltac:(lia) Hnw8 HD8)
+      as (bs8 & Hl & Hc & Hlwr).
+    exec_setup s m HR HWF Hdec (Ild rd rs1 imm).
+    rewrite (getReg_bind s m rs1 _ HRA Hrs1).
+    rewrite translate_bind.
+    cbn [add ZToReg MachineWidth_XLEN].
+    rewrite <- (wadd_of_Z (rget s rs1) imm).
+    rewrite (loadDouble_bind m _ bs8 _ Hl).
+    cbn [int64ToReg MachineWidth_XLEN].
+    rewrite of_Z_sext64.
+    setoid_rewrite Hc.
+    apply writeReg_cycle; assumption.
+  Qed.
+
+  Lemma exec_sd : forall s (m:RMach) D rs1 rs2 imm,
+    Rrel s m D -> WFfetch s m D ->
+    Rv64i.decode (Rv64i.fetch32 s) = Isd rs1 rs2 imm ->
+    Rv64i.wadd (Rv64i.rget s rs1) imm + 8 <= 2 ^ 64 ->
+    (forall i, 0 <= i < 8 ->
+       D (word.add (word.of_Z (Rv64i.wadd (Rv64i.rget s rs1) imm)) (word.of_Z i))) ->
+    exists m', Run.run1 RV64I m = (Some tt, m') /\ Rrel (Rv64i.step s) m' D.
+  Proof.
+    intros s m D rs1 rs2 imm HR HWF Hdec Hnw8 HD8.
+    pose proof (inv_sd _ _ _ _ Hdec) as (Ers1 & Ers2).
+    assert (Hrs1: 0 <= rs1 < 32) by (rewrite Ers1; apply field_range; lia).
+    assert (Hrs2: 0 <= rs2 < 32) by (rewrite Ers2; apply field_range; lia).
+    pose proof (wadd_range (Rv64i.rget s rs1) imm) as Hazr.
+    exec_setup s m HR HWF Hdec (Isd rs1 rs2 imm).
+    rewrite (getReg_bind s m rs1 _ HRA Hrs1).
+    rewrite translate_bind.
+    cbn [add ZToReg MachineWidth_XLEN].
+    rewrite <- (wadd_of_Z (rget s rs1) imm).
+    rewrite (getReg_bind s m rs2 _ HRA Hrs2).
+    rewrite (regToInt64_of_Z (rget s rs2) (rget_range s m rs2 HRA Hrs2)).
+    apply (store8_cycle s m D (word.of_Z (Rv64i.wadd (Rv64i.rget s rs1) imm))
+             (Rv64i.wadd (Rv64i.rget s rs1) imm) (rget s rs2) HRA HMA HPA).
+    - apply word.unsigned_of_Z_nowrap. apply wadd_range.
+    - exact Hnw8.
+    - eapply rget_range; eassumption.
+    - exact HD8.
+  Qed.
+
   (* ================================================================ *)
   (* step_agrees: one [Rv64i.step] matches one riscv-coq [run1] cycle. *)
   (* ================================================================ *)
@@ -850,7 +1265,15 @@ Section Step.
     /\ (forall rd a imm, Rv64i.decode (Rv64i.fetch32 s) = Ilbu rd a imm ->
           D (word.of_Z (Rv64i.wadd (Rv64i.rget s a) imm)))
     /\ (forall a b imm, Rv64i.decode (Rv64i.fetch32 s) = Isb a b imm ->
-          D (word.of_Z (Rv64i.wadd (Rv64i.rget s a) imm))).
+          D (word.of_Z (Rv64i.wadd (Rv64i.rget s a) imm)))
+    /\ (forall rd a imm, Rv64i.decode (Rv64i.fetch32 s) = Ild rd a imm ->
+          Rv64i.wadd (Rv64i.rget s a) imm + 8 <= 2 ^ 64 /\
+          (forall i, 0 <= i < 8 ->
+             D (word.add (word.of_Z (Rv64i.wadd (Rv64i.rget s a) imm)) (word.of_Z i))))
+    /\ (forall a b imm, Rv64i.decode (Rv64i.fetch32 s) = Isd a b imm ->
+          Rv64i.wadd (Rv64i.rget s a) imm + 8 <= 2 ^ 64 /\
+          (forall i, 0 <= i < 8 ->
+             D (word.add (word.of_Z (Rv64i.wadd (Rv64i.rget s a) imm)) (word.of_Z i)))).
 
   Theorem step_agrees : forall s (m:RMach) D,
     Rrel s m D -> WFstep s m D ->
@@ -858,16 +1281,23 @@ Section Step.
     exists m', Run.run1 RV64I m = (Some tt, m') /\ Rrel (Rv64i.step s) m' D.
   Proof.
     intros s m D HR HWF Hni.
-    destruct HWF as (Hf & Hbeq & Hblt & Hbge & Hbgeu & Hjal & Hjalr & Hlbu & Hsb).
+    destruct HWF as (Hf & Hbeq & Hblt & Hbge & Hbgeu & Hjal & Hjalr & Hlbu & Hsb & Hld & Hsd).
     destruct (Rv64i.decode (Rv64i.fetch32 s)) as
-      [rd rs1 imm|rd rs1 rs2|rd rs1 rs2|rd rs1 sh|rd rs1 imm|rs1 rs2 imm
-      |rs1 rs2 imm|rs1 rs2 imm|rs1 rs2 imm|rs1 rs2 imm|rd imm|rd rs1 imm|] eqn:Hdec.
+      [rd rs1 imm|rd rs1 rs2|rd rs1 rs2|rd rs1 rs2|rd rs1 sh|rd rs1 sh|rd rs1 imm|rd rs1 imm
+      |rs1 rs2 imm|rs1 rs2 imm|rs1 rs2 imm|rs1 rs2 imm|rs1 rs2 imm|rs1 rs2 imm
+      |rd imm|rd rs1 imm|] eqn:Hdec.
     - apply (exec_addi s m D rd rs1 imm HR Hf Hdec).
     - apply (exec_add s m D rd rs1 rs2 HR Hf Hdec).
+    - apply (exec_sub s m D rd rs1 rs2 HR Hf Hdec).
     - apply (exec_or s m D rd rs1 rs2 HR Hf Hdec).
     - apply (exec_slli s m D rd rs1 sh HR Hf Hdec).
+    - apply (exec_srli s m D rd rs1 sh HR Hf Hdec).
     - apply (exec_lbu s m D rd rs1 imm HR Hf Hdec (Hlbu _ _ _ eq_refl)).
+    - destruct (Hld _ _ _ eq_refl) as (Hnw8 & HD8).
+      apply (exec_ld s m D rd rs1 imm HR Hf Hdec Hnw8 HD8).
     - apply (exec_sb s m D rs1 rs2 imm HR Hf Hdec (Hsb _ _ _ eq_refl)).
+    - destruct (Hsd _ _ _ eq_refl) as (Hnw8 & HD8).
+      apply (exec_sd s m D rs1 rs2 imm HR Hf Hdec Hnw8 HD8).
     - apply (exec_beq s m D rs1 rs2 imm HR Hf Hdec (Hbeq _ _ _ eq_refl)).
     - apply (exec_blt s m D rs1 rs2 imm HR Hf Hdec (Hblt _ _ _ eq_refl)).
     - apply (exec_bge s m D rs1 rs2 imm HR Hf Hdec (Hbge _ _ _ eq_refl)).
