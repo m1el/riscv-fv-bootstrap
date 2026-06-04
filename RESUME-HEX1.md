@@ -1,5 +1,35 @@
 # RESUME — hex1 campaign handoff (written 2026-06-04, pre context-clear)
 
+## UPDATE 2026-06-04 (later session): Coq side largely DONE
+
+Committed and green (`make -j6` in coq/ passes):
+- **coq/Rv64i.v** extended to the 16-encoding ISA (+sub/srli/ld/sd,
+  loadWord/storeWord 8-byte LE) — commit 111c8f9.
+- **Cross-check extended to all 16**: RvCross.v (embed: Ld/Sd ↦
+  I64Instruction; decode_sub/srli/ld/sd; decode_agrees fwd+rev) and
+  RvCrossExec.v (wsub/wshr/of_Z_sext64 bridges; 8-byte memory bridge
+  load8_combine/load8_conn/loadDouble_red/split8_bytes/storeDouble_red/
+  store8_cycle; exec_sub/srli/ld/sd; WFstep +2 ld/sd clauses — appended
+  LAST so old destructs keep working; step_agrees 17-way). RvCrossRun.v
+  `core_refines_riscv` recompiled UNchanged.
+- **Harness1.v + Certify1.v** (commit 9053dba): vm_compute certification
+  of the deployed bytes — embedded 267-byte input (exact-value theorem
+  matches bare/run1.log) + 27-case battery; all 5 theorems "Closed under
+  the global context" (no axioms at all). Spec1.v offBytes redefined to
+  compute in Z (unary-nat 2^32 intermediate killed vm_compute); see the
+  coq-equations-gotchas memory (traps 3-4: also `repeat apply conj`, NOT
+  `repeat split`, before vm_compute).
+
+REMAINING: (1) **Refine1.v** — port lean/Hex1/Refine.lean to Coq following
+coq/Refine.v's idiom (Z model; fixed fuel 100000 + runUntil_stab; step
+lemmas via vm_compute decode at concrete offsets, no DecodeFacts needed;
+expect ~10k lines, multi-session — mirror the Lean chunk order: engine →
+WellFormed1/TableLoaded → init loop → pass1 → pass2/offBytes → conversion).
+(2) **TCB.md** hex1 section (ld/sd/sub/srli now cross-checked; trusted:
+shell1.s, gen_image1.py extraction, QEMU/HW gap as before).
+
+The original handoff (still-accurate background) follows.
+
 Read together with **REFINE1.md** (the Refine1 proof plan: offset map,
 architecture, gotchas — keep it updated as you go). This file is the
 session-state handoff: what is done, what is literally mid-flight, and the

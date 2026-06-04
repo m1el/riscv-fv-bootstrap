@@ -28,20 +28,27 @@ hex0 spec" to hold. Written CompCert-style: an explicit, enumerated boundary.
 
 ## Trusted (IN the TCB)
 
-1. **The ISA model is faithful to real RISC-V hardware.** (Task #7 — *partially
+1. **The ISA model is faithful to real RISC-V hardware.** (Task #7 — *largely
    discharged*.)
    - **Decode: PROVED (no longer trusted).** `coq/RvCross.v`'s `decode_agrees`
      shows our `Rv64i.decode` equals **riscv-coq**'s `Decode.decode RV64I`
-     (`coq-riscv.0.0.5`, the bedrock2/`compiler` reference semantics) on all 12
-     modelled forms, for every 32-bit word — `Admitted`-free, **zero axioms**
+     (`coq-riscv.0.0.5`, the bedrock2/`compiler` reference semantics) on all **16**
+     modelled forms (hex0's 12 + `sub srli ld sd` added for hex1), for every
+     32-bit word, in both directions — `Admitted`-free, **zero axioms**
      (`Print Assumptions` = *Closed under the global context*). Residual trust on
      the decode side is only that *riscv-coq* faithfully models the ISA — a large,
      externally-audited artifact.
-   - **Step/execute: still trusted (testing-backed).** Our `step` is justified
-     *empirically* (matches QEMU on the battery). Making it proof-grade is the
-     remaining half of task #7: a forward simulation of `step` against riscv-coq's
-     `Run.run1` (see `CROSSCHECK.md` §1 T2 / §6), plus the transport corollary
-     `core_refines_riscv`. Until then, "step = hardware" is testing-backed.
+   - **Step/execute: PROVED per-instruction, transport modulo factored
+     hypotheses.** `coq/RvCrossExec.v`'s `step_agrees` is a forward simulation of
+     our `step` against riscv-coq's `Run.run1` over the Minimal `OState` machine,
+     for all 16 forms (`ld`/`sd` via an 8-byte little-endian memory bridge), under
+     the state bridge `Rrel` + per-step side conditions `WFstep` (4-aligned
+     branch/jump targets, mapped data accesses — all true of the loaded cores).
+     `coq/RvCrossRun.v`'s `core_refines_riscv` lifts it over whole runs and
+     composes with `core_refines`. The *honest residual*, factored as explicit
+     hypotheses: (a) an `Rrel`-related riscv-coq init machine, (b) `RunWF` (the
+     side conditions hold along the run). Discharging those from the loaded-image
+     geometry is unfinished; plus riscv-coq fidelity itself, as above.
 
 2. **The trusted I/O shell** (`bare/shell.s`) — NOT proven (deliberately; see
    PREV_CTX §4). We trust that it:
@@ -85,3 +92,51 @@ hex0 spec" to hold. Written CompCert-style: an explicit, enumerated boundary.
   `WellFormed` makes this a precondition rather than a runtime check.
 - The proven `core` is correct for ALL `(ptr, len)`; sentinel-scanning for length
   is NOT in the proven core (it is the shell's job). See PREV_CTX §4.
+
+---
+
+# Trusted Computing Base (hex1 rung)
+
+hex1 = hex0 + label definitions (`:c`) / i32 little-endian relative references
+(`%c`). Same boundary shape as hex0; deltas only.
+
+## Proven (NOT in the TCB)
+
+- **The hex1 spec** (`lean/Hex1/Spec.lean`, `coq/Spec1.v`) — two-pass
+  `scan1`/`emit1`/`coreSpec1`, mirrored across systems; the Lean spec is proved
+  ≅ HEX1.md's BNF (`lean/Hex1/Grammar.lean`: lexer sound+complete ⇒ grammar
+  total + deterministic), and the Coq `Grammar1.v` mirrors those theorems
+  (`functional_extensionality_dep` only).
+- **General refinement (Lean)** — `core1_refines : ∀ inp cap, WellFormed1 inp
+  cap → ∃ fuel, observe1 inp cap fuel = coreSpec1 inp cap`
+  (`lean/Hex1/Refine.lean`, sorry-free, no `native_decide`): all three loops
+  (init / pass 1 / pass 2), the label table region, and the i32 offset-byte
+  arithmetic are kernel-checked.
+- **Concrete certification, both systems** — the deployed `core1` bytes
+  (724-byte image, `bare/hex1.elf`) compute `coreSpec1` on the embedded
+  267-byte input (exact output value pinned to the QEMU log) and a 27-case
+  battery covering every status code and offset shape. Lean:
+  `Hex1/Certify.lean` (`native_decide`). Coq: `Certify1.v` (`vm_compute`,
+  **zero axioms** — *Closed under the global context*).
+- **The 4 new ISA encodings are cross-checked.** `sub srli ld sd` are covered
+  by the same `decode_agrees`/`step_agrees` theorems as hex0's 12 (see item 1
+  above) — including the 8-byte `ld`/`sd` memory bridge. The label table is
+  read/written exclusively through these proved-faithful forms.
+
+## Trusted (IN the TCB) — deltas vs hex0
+
+1. **The Coq general refinement is not yet ported.** `Refine1.v`
+   (`core1_refines` in Coq) is pending; until it lands, the ∀-inputs theorem
+   for hex1 rests on the Lean kernel alone (hex0 has it in both systems).
+2. **The trusted I/O shell** is `bare/shell1.s` (a0..a4 convention: adds
+   a4 = label-table scratch pointer; must point at 2048 writable bytes
+   disjoint from code/input/output).
+3. **Extraction**: `tools/gen_image1.py` (and `tools/gen_decode1.py` for the
+   Lean DecodeFacts) faithfully transcribe `bare/hex1.elf` into
+   `Image1.{v,lean}`/`Hex1/DecodeFacts.lean`.
+4. **The grammar transcription gap**: `Hex1/Grammar.lean`'s inductive grammar
+   vs HEX1.md's prose BNF — same eyeball-auditable human-reading gap as hex0
+   item 7.
+5. Items 3–6 of the hex0 list (QEMU image load, assembler/linker, proof
+   kernels incl. the Lean-`native_decide`-vs-Coq-`vm_compute` contrast,
+   `pc = 0` halt convention) carry over unchanged.
