@@ -28,10 +28,9 @@ but with THREE loops (init / pass1 / pass2) and the label table region.
   - suffix_step, p1_spacing_tail, p1_spacing -- the first COMPLETE pass-1
     iteration, validating the whole pattern (chunk 6)
   - bgeu_eq_taken, comment_read1, comment_loop1 (chunk 7)
-  NEXT (in order): P2Start structure + p1_comment (combine prefix +
-  dispatch 52/56 ('#' beq taken ->332; ';' via 60/64) + comment_loop1 +
-  P1Inv rebuild on drop q / P2Start at EOF; spec side via scan1 comment
-  unfold + skipComment relation, mirroring hex0 loop_comment);
+  - P2Start structure + p1_comment: complete comment iteration, lands at
+    loop head on drop q or P2Start at EOF (chunk 8)
+  NEXT (in order):
   p1_labelDef ok/dup + eof exit; p1_ref ok/short + eof exit; p1_byte
   ok/short + split/unknown/trailing exits (port hex0 high_parse/low_parse
   chains, offsets 108..156 + 160..212 + 216..248 + 252..260); pass1_correct
