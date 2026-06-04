@@ -41,3 +41,7 @@ elan-init.sh
 *.log
 lean-toolchain-install.log
 sessions/openrouter_models.json
+hex1
+tools/hex1_drv
+tools/core1_drv
+tools/__pycache__/

@@ -1,0 +1,5 @@
+# hex1 bare smoke test: bytes, comments, labels, fwd+back references
+48 65 6C 6C 6F 0A   ; "Hello\n"
+:H                  ; H -> position 6
+%H                  ; back ref:  6 - (6+4)  = -4 -> FC FF FF FF
+%E :E               ; fwd ref:  14 - (10+4) =  0 -> 00 00 00 00
