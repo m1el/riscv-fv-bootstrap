@@ -8150,4 +8150,135 @@ theorem p2_ref (inp : List Nat) (cap : Nat) (rest' : List Nat)
                 hrest, h]
             simp }
 
+/-! ## Pass 2, assembled: the emit loop runs to a `Result1`. -/
+
+set_option maxRecDepth 8000 in
+/-- EOF at the pass-2 loop head: `bgeu` taken to the Ok exit (628); the emit
+    telescope collapses to `(emitted, .Ok)`. -/
+theorem p2_eof (inp : List Nat) (cap : Nat) (labF labNow : Labels) (m : Nat)
+    (emitted : List Nat) (s : State)
+    (inv : P2Inv inp cap s labF labNow m emitted []) :
+    ∃ k s', runFuel 0 k s = s' ∧ Result1 s' inp cap := by
+  have h5' : s.rget 5 = BitVec.ofNat 64 inp.length := by
+    have h := inv.idx
+    simpa using h
+  have hbt := bgeu_eq_taken s 368 5 11 inp.length (BitVec.ofNat 13 260)
+    (BitVec.ofNat 64 (Image1.coreAddr + 628)) inv.code inv.at_loop h5' inv.a1 dec_368
+    (by rw [coreBytes_len]; omega) (by decide)
+  have hp0 : s.pc ≠ 0 := by rw [inv.at_loop]; exact corePc_ne_zero 368 (by omega)
+  let sE := s.setPc (BitVec.ofNat 64 (Image1.coreAddr + 628))
+  have hsE : sE = s.setPc (BitVec.ofNat 64 (Image1.coreAddr + 628)) := rfl
+  try rw [← hsE] at hbt
+  have hrunE : runFuel 0 1 s = sE := by rw [runFuel_one s hp0, hbt]
+  have hem_done : Hex1.emit1 .High labF emitted.length [] = ([], .Ok) := by
+    rw [Hex1.emit1]
+  have hemit_whole : Hex1.emit1 .High labF 0 inp = (emitted, .Ok) := by
+    have h := inv.spec
+    rw [hem_done] at h
+    simpa using h
+  obtain ⟨f, hrunf, hres⟩ := p2_ok_exit inp cap labF m emitted sE rfl
+    (codeLoaded1_setPc _ _ inv.code)
+    (by rw [hsE, Hex0.Refine.setPc_rget]; exact inv.ra0)
+    (by rw [hsE, Hex0.Refine.setPc_rget]; exact inv.outidx)
+    (by
+      intro j hj
+      rw [hsE, Hex0.Refine.setPc_mem]
+      exact inv.out_mem j hj)
+    inv.scan_inp inv.m_le hemit_whole
+  exact ⟨1 + 3, f, by rw [runFuel_add, hrunE, hrunf], hres⟩
+
+set_option maxHeartbeats 1000000 in
+/-- Pass 2 runs to completion: from the loop invariant, the machine reaches a
+    halted `Result1` state (Ok, or Undef at an unbound reference).
+    Strong induction on a bound on the remaining suffix length. -/
+theorem pass2_correct : ∀ (n : Nat) (inp : List Nat) (cap : Nat) (rest : List Nat)
+    (labF labNow : Labels) (m : Nat) (emitted : List Nat) (s : State),
+    rest.length ≤ n →
+    P2Inv inp cap s labF labNow m emitted rest →
+    ∃ k s', runFuel 0 k s = s' ∧ Result1 s' inp cap := by
+  intro n
+  induction n with
+  | zero =>
+    intro inp cap rest labF labNow m emitted s hn inv
+    have hrest : rest = [] := by
+      cases rest with
+      | nil => rfl
+      | cons c r => simp only [List.length_cons] at hn; omega
+    subst hrest
+    exact p2_eof inp cap labF labNow m emitted s inv
+  | succ n ih =>
+    intro inp cap rest labF labNow m emitted s hn inv
+    cases rest with
+    | nil => exact p2_eof inp cap labF labNow m emitted s inv
+    | cons c rest' =>
+      have hn' : rest'.length ≤ n := by
+        simp only [List.length_cons] at hn; omega
+      by_cases hcm : Hex0.isComment c = true
+      · -- comment token
+        obtain ⟨k1, s1, _, hrun1, hres⟩ :=
+          p2_comment inp cap c rest' labF labNow m emitted s inv hcm
+        rcases hres with ⟨rest2, hlen2, hinv2⟩ | hr1
+        · have hlen2' : rest2.length ≤ n := by
+            simp only [List.length_cons] at hlen2; omega
+          obtain ⟨k2, s2, hrun2, hres2⟩ :=
+            ih inp cap rest2 labF labNow m emitted s1 hlen2' hinv2
+          exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+        · exact ⟨k1, s1, hrun1, hr1⟩
+      · by_cases hsp : Hex0.isSpace c = true
+        · -- spacing token
+          obtain ⟨k1, s1, _, hrun1, hinv1⟩ :=
+            p2_spacing inp cap c rest' labF labNow m emitted s inv hsp
+          obtain ⟨k2, s2, hrun2, hres2⟩ :=
+            ih inp cap rest' labF labNow m emitted s1 hn' hinv1
+          exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+        · by_cases hcol : c = 58
+          · -- label definition (skip)
+            subst hcol
+            obtain ⟨k1, s1, l, rest2, heq, _, hrun1, hinv1⟩ :=
+              p2_labelDef inp cap rest' labF labNow m emitted s inv
+            subst heq
+            have hlen2' : rest2.length ≤ n := by
+              simp only [List.length_cons] at hn; omega
+            obtain ⟨k2, s2, hrun2, hres2⟩ :=
+              ih inp cap rest2 labF (setLabel labNow l emitted.length) m emitted s1
+                hlen2' hinv1
+            exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+          · by_cases hpct : c = 37
+            · -- label reference
+              subst hpct
+              obtain ⟨k1, s1, _, hrun1, hres⟩ :=
+                p2_ref inp cap rest' labF labNow m emitted s inv
+              rcases hres with ⟨l, rest2, heq, p, hinv1⟩ | hr1
+              · subst heq
+                have hlen2' : rest2.length ≤ n := by
+                  simp only [List.length_cons] at hn; omega
+                obtain ⟨k2, s2, hrun2, hres2⟩ :=
+                  ih inp cap rest2 labF labNow m
+                    (emitted ++ Hex1.offBytes p emitted.length) s1 hlen2' hinv1
+                exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+              · exact ⟨k1, s1, hrun1, hr1⟩
+            · -- byte token
+              have hncol : (c == Hex1.c_colon) = false := by
+                simp only [Hex1.c_colon, beq_eq_false_iff_ne]
+                exact hcol
+              have hnpct : (c == Hex1.c_pct) = false := by
+                simp only [Hex1.c_pct, beq_eq_false_iff_ne]
+                exact hpct
+              have hsc : Hex0.isComment c = false := by
+                cases h : Hex0.isComment c
+                · rfl
+                · exact absurd h hcm
+              have hss : Hex0.isSpace c = false := by
+                cases h : Hex0.isSpace c
+                · rfl
+                · exact absurd h hsp
+              obtain ⟨k1, s1, l, rest2, b, heq, _, hrun1, hinv1⟩ :=
+                p2_byte inp cap c rest' labF labNow m emitted s inv hsc hss hncol hnpct
+              subst heq
+              have hlen2' : rest2.length ≤ n := by
+                simp only [List.length_cons] at hn; omega
+              obtain ⟨k2, s2, hrun2, hres2⟩ :=
+                ih inp cap rest2 labF labNow m (emitted ++ [b]) s1 hlen2' hinv1
+              exact ⟨k1 + k2, s2, by rw [runFuel_add, hrun1, hrun2], hres2⟩
+
 end Hex1.Refine
