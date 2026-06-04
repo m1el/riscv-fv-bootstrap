@@ -360,4 +360,105 @@ theorem encodeSlot_some_nonneg (p : Nat) (hp : p < 2 ^ 63) :
   rw [slt_ofNat p 0 hp (by omega)]
   simp
 
+/-! ## Slot addressing and table access. -/
+
+/-- `slli t3,t2,3` on a label byte: shifting is multiplication by 8. -/
+theorem shl3_ofNat (c : Nat) (hc : c < 256) :
+    (BitVec.ofNat 64 c) <<< 3 = BitVec.ofNat 64 (8 * c) := by
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_shiftLeft, BitVec.toNat_ofNat, BitVec.toNat_ofNat,
+      Nat.mod_eq_of_lt (by omega : c < 2 ^ 64), Nat.shiftLeft_eq]
+  omega
+
+/-- The machine's slot address `(c <<< 3) + a4` is `lblAddr + 8c`. -/
+theorem slot_addr (c : Nat) (hc : c < 256) :
+    (BitVec.ofNat 64 c) <<< 3 + BitVec.ofNat 64 Image1.lblAddr
+      = BitVec.ofNat 64 (Image1.lblAddr + 8 * c) := by
+  rw [shl3_ofNat c hc, addr_ofNat_succ]
+  congr 1
+  omega
+
+/-- Under `TableLoaded`, `loadWord` at slot `c` returns the encoded slot. -/
+theorem loadWord_slot (s : State) (lab : Labels) (c : Nat) (hc : c < 256)
+    (htbl : TableLoaded s lab) :
+    s.loadWord (BitVec.ofNat 64 (Image1.lblAddr + 8 * c)) = encodeSlot (lab c) := by
+  unfold State.loadWord
+  have addr : ∀ k : Nat, BitVec.ofNat 64 (Image1.lblAddr + 8 * c) + BitVec.ofNat 64 k
+      = BitVec.ofNat 64 (Image1.lblAddr + 8 * c + k) := fun k => addr_ofNat_succ _ _
+  have rd : ∀ k : Nat, k < 8 →
+      s.mem (BitVec.ofNat 64 (Image1.lblAddr + 8 * c) + BitVec.ofNat 64 k)
+        = ((encodeSlot (lab c)) >>> (8 * k)).setWidth 8 := by
+    intro k hk; rw [addr k]; exact htbl c hc k hk
+  have rd0 : s.mem (BitVec.ofNat 64 (Image1.lblAddr + 8 * c))
+      = (encodeSlot (lab c)).setWidth 8 := by
+    have h := htbl c hc 0 (by omega)
+    simpa using h
+  have rd1 := rd 1 (by omega)
+  have rd2 := rd 2 (by omega); have rd3 := rd 3 (by omega)
+  have rd4 := rd 4 (by omega); have rd5 := rd 5 (by omega)
+  have rd6 := rd 6 (by omega); have rd7 := rd 7 (by omega)
+  simp only [show (8 * 1 : Nat) = 8 from rfl,
+    show (8 * 2 : Nat) = 16 from rfl, show (8 * 3 : Nat) = 24 from rfl,
+    show (8 * 4 : Nat) = 32 from rfl, show (8 * 5 : Nat) = 40 from rfl,
+    show (8 * 6 : Nat) = 48 from rfl, show (8 * 7 : Nat) = 56 from rfl,
+    show BitVec.ofNat 64 1 = (1 : Word) from rfl,
+    show BitVec.ofNat 64 2 = (2 : Word) from rfl, show BitVec.ofNat 64 3 = (3 : Word) from rfl,
+    show BitVec.ofNat 64 4 = (4 : Word) from rfl, show BitVec.ofNat 64 5 = (5 : Word) from rfl,
+    show BitVec.ofNat 64 6 = (6 : Word) from rfl, show BitVec.ofNat 64 7 = (7 : Word) from rfl]
+    at rd1 rd2 rd3 rd4 rd5 rd6 rd7
+  rw [rd0, rd1, rd2, rd3, rd4, rd5, rd6, rd7]
+  exact assemble_bytes (encodeSlot (lab c))
+
+/-- `sd` at slot `c` updates the table to `setLabel lab c p`
+    (writing `encodeSlot (some p) = ofNat p`). -/
+theorem storeWord_slot (s : State) (lab : Labels) (c p : Nat) (hc : c < 256)
+    (htbl : TableLoaded s lab) (hlbl : Image1.lblAddr + 2048 < 2 ^ 63) :
+    TableLoaded (s.storeWord (BitVec.ofNat 64 (Image1.lblAddr + 8 * c)) (BitVec.ofNat 64 p))
+      (setLabel lab c p) := by
+  intro c' hc' k hk
+  by_cases hcc : c' = c
+  · -- the written slot: per-byte storeWord_get
+    subst hcc
+    have he : encodeSlot (setLabel lab c' p c') = BitVec.ofNat 64 p := by
+      unfold setLabel encodeSlot; simp
+    rw [he]
+    have addr : BitVec.ofNat 64 (Image1.lblAddr + 8 * c' + k)
+        = BitVec.ofNat 64 (Image1.lblAddr + 8 * c') + BitVec.ofNat 64 k :=
+      (addr_ofNat_succ _ _).symm
+    rw [addr]
+    rcases (by omega : k = 0 ∨ k = 1 ∨ k = 2 ∨ k = 3 ∨ k = 4 ∨ k = 5 ∨ k = 6 ∨ k = 7) with
+      h | h | h | h | h | h | h | h <;> subst h
+    · simpa using storeWord_get0 s _ (BitVec.ofNat 64 p)
+    · simpa using storeWord_get1 s _ (BitVec.ofNat 64 p)
+    · simpa using storeWord_get2 s _ (BitVec.ofNat 64 p)
+    · simpa using storeWord_get3 s _ (BitVec.ofNat 64 p)
+    · simpa using storeWord_get4 s _ (BitVec.ofNat 64 p)
+    · simpa using storeWord_get5 s _ (BitVec.ofNat 64 p)
+    · simpa using storeWord_get6 s _ (BitVec.ofNat 64 p)
+    · simpa using storeWord_get7 s _ (BitVec.ofNat 64 p)
+  · -- another slot: frame + unchanged encoding
+    have he : encodeSlot (setLabel lab c p c') = encodeSlot (lab c') := by
+      unfold setLabel; rw [if_neg hcc]
+    rw [he]
+    rw [storeWord_frame s _ _ _ (by
+      intro k2 hk2
+      rw [addr_ofNat_succ]
+      refine ofNat_ne _ _ ?_ ?_ ?_
+      · simp only [Image1.lblAddr] at hlbl ⊢; omega
+      · simp only [Image1.lblAddr] at hlbl ⊢; omega
+      · omega)]
+    exact htbl c' hc' k hk
+
+/-- A byte store elsewhere (the output region in pass 2) leaves the table
+    intact. -/
+theorem tableLoaded_storeByte (s : State) (lab : Labels) (a : Word) (b : Byte)
+    (htbl : TableLoaded s lab)
+    (hdisj : ∀ c k, c < 256 → k < 8 → a ≠ BitVec.ofNat 64 (Image1.lblAddr + 8 * c + k)) :
+    TableLoaded (s.storeByte a b) lab := by
+  intro c hc k hk
+  rw [storeByte_mem]
+  simp only []
+  rw [if_neg (fun he => hdisj c k hc hk he.symm)]
+  exact htbl c hc k hk
+
 end Hex1.Refine

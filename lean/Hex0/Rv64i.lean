@@ -132,9 +132,14 @@ def decode (w : BitVec 32) : Instr :=
 
 /-- Load the little-endian 64-bit word at address `a`. -/
 def State.loadWord (s : State) (a : Word) : Word :=
-  let b (i : Nat) : Word := (s.mem (a + BitVec.ofNat 64 i)).setWidth 64
-  b 0 ||| (b 1 <<< 8) ||| (b 2 <<< 16) ||| (b 3 <<< 24) |||
-  (b 4 <<< 32) ||| (b 5 <<< 40) ||| (b 6 <<< 48) ||| (b 7 <<< 56)
+  (s.mem a).setWidth 64 |||
+  ((s.mem (a + 1)).setWidth 64) <<< 8 |||
+  ((s.mem (a + 2)).setWidth 64) <<< 16 |||
+  ((s.mem (a + 3)).setWidth 64) <<< 24 |||
+  ((s.mem (a + 4)).setWidth 64) <<< 32 |||
+  ((s.mem (a + 5)).setWidth 64) <<< 40 |||
+  ((s.mem (a + 6)).setWidth 64) <<< 48 |||
+  ((s.mem (a + 7)).setWidth 64) <<< 56
 
 /-- Store the 64-bit word `v` at address `a`, little-endian (8 byte stores,
     low byte first -- compositional for the proof side). -/
