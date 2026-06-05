@@ -1,0 +1,4 @@
+# Survives coq_makefile regeneration (the generated Makefile -includes this).
+# Route all compilation through the memory-capped wrapper (16 GiB ulimit -v);
+# see coqc-capped and the REFINE1.md gotcha list for why.
+COQC = $(shell pwd)/coqc-capped

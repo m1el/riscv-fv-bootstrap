@@ -1,0 +1,7 @@
+#!/bin/sh
+# Cap coqc at 16 GiB virtual memory so a runaway proof (e.g. divergent
+# conversion unfolding a wf fixpoint -- see REFINE1.md gotchas) dies with
+# "Fatal error: out of memory" instead of OOM-killing the whole tmux
+# scope (systemd OOMPolicy=stop took 3 sessions down at 128 GB).
+ulimit -v 16777216
+exec coqc "$@"
