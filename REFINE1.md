@@ -37,6 +37,16 @@ Coq-port gotchas (beyond the Lean list at the bottom):
   exit_zero) and split the rewrite chain.
 - `cbn [LittleEndian.split_deprecated]`-style cbn-with-list does not
   reduce nat-indexed fixpoints; use cbv [name] (RvCrossExec split8).
+- NEVER `simp scan1 in heq` when an induction hypothesis (IHn) is in
+  context: simp's trailing eauto pass tries `apply IHn`, and unifying
+  the evar goal `scan1 ?st ?lab ?pos ?l = ...` against heq's stuck
+  `if`/`match` forces conversion to unfold the wf-recursion fixpoint
+  (`by wf (length l) lt`) divergently — ~0.5 GB/s until OOM (killed
+  three tmux sessions at 128 GB before diagnosis). Use
+  `autorewrite with scan1 in heq` instead — identical rewriting, no
+  eauto pass (0.7s). Goal-position `simp scan1` is fine.
+  Bonus: `destruct (cond) eqn:E` DOES substitute+reduce cond inside
+  hypotheses too, so no `rewrite E in heq` is needed after it.
 
 NEXT (mirroring the Lean chunk order below): comment iteration
 (bgeu_eq_taken port at 332..356 / scan1 comment unfolds / comment_read1/
