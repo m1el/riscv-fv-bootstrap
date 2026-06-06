@@ -7522,3 +7522,141 @@ Proof.
               (runUntil_add 1 3), (runUntil_one sM3 hpM3), hu7.
       fold sX. rewrite hrunE. exact hres.
 Qed.
+
+(* Pass-2 EOF: bgeu taken at 368 (t0 = a1 = |inp|) -> Ok exit 628; the
+   emit telescope collapses via emit1 [] = ([], Ok1), and scan_ok on []
+   pins labF = labNow, m = |emitted|. 1 + 3 steps to a Result1. *)
+Lemma p2_eof : forall inp cap labF labNow m emitted s,
+  P2Inv inp cap s labF labNow m emitted [] ->
+  Result1 (runUntil 0 (1 + 3) s) inp cap.
+Proof.
+  intros inp cap labF labNow m emitted s inv.
+  destruct inv as [hwf hpc0 hcode ha0 ha1 ha2 ha3 ha4 hra hinm hidx hsuf houtidx
+                   houtmem htbl hmle hlable hscaninp hscanok hspec].
+  (* scan_ok on []: labF = labNow, m = |emitted| *)
+  assert (hsc := hscanok).
+  change (zin (@nil Z)) with (@nil nat) in hsc.
+  rewrite scan1_nil in hsc.
+  assert (hlab : labF = labNow) by (inversion hsc; reflexivity).
+  assert (hm : m = length emitted) by (inversion hsc; reflexivity).
+  subst labF m.
+  (* bgeu t0,a1 taken at 368 -> 628 *)
+  assert (h5' : rget s 5 = Z.of_nat (length inp))
+    by (rewrite hidx; simpl length; lia).
+  assert (hbt : step s = setPc s (Image1.coreAddr + 628)).
+  { apply (bgeu1_eq_taken s 368 5 11 (Z.of_nat (length inp)) 260 _ hcode ltac:(lia)
+      ltac:(rewrite coreBytes1_len; lia) hpc0 h5' ha1 ltac:(vm_compute; reflexivity)).
+    rewrite (wadd_id (Image1.coreAddr + 368) 260 ltac:(unfold Image1.coreAddr; lia)).
+    lia. }
+  assert (hp0 : s.(pc) <> 0) by (rewrite hpc0; unfold Image1.coreAddr; lia).
+  (* telescope collapse *)
+  assert (hemit : emit1 High1 labNow 0 (zin inp) = (emitted, Ok1)).
+  { rewrite hspec. change (zin (@nil Z)) with (@nil nat).
+    rewrite emit1_nil. cbn [fst snd]. rewrite app_nil_r. reflexivity. }
+  set (s1 := setPc s (Image1.coreAddr + 628)).
+  assert (hpc1 : s1.(pc) = Image1.coreAddr + 628) by apply setPc_pc.
+  assert (hcode1 : CodeLoaded1 s1)
+    by (apply (CodeLoaded1_eqmem s); [reflexivity| exact hcode]).
+  assert (hra1 : rget s1 1 = 0) by (unfold s1; rewrite setPc_rget; exact hra).
+  assert (h61 : rget s1 6 = Z.of_nat (length emitted))
+    by (unfold s1; rewrite setPc_rget; exact houtidx).
+  assert (hlen1 : Z.of_nat (length emitted) < 2 ^ 63)
+    by (pose proof (WellFormed1_cap63 _ _ hwf); lia).
+  assert (hout1 : readMem s1.(mem) Image1.outAddr (length emitted) = emitted)
+    by (unfold s1; rewrite setPc_mem; exact houtmem).
+  destruct (p2_ok_exit inp cap labNow (length emitted) emitted s1 hpc1 hcode1
+              hra1 h61 hlen1 hout1 hscaninp hmle hemit) as (f & hrunE & hres).
+  rewrite (runUntil_add 1 3), (runUntil_one s hp0), hbt. fold s1.
+  rewrite hrunE. exact hres.
+Qed.
+
+(* One pass-2 iteration: consume >= 1 char in <= 50 steps/char preserving
+   P2Inv (labF, m fixed; labNow/emitted may change), or halt in a Result1.
+   The invalid-char branch is vacuous: scan_ok rules it out. *)
+Theorem p2_iteration : forall inp cap rest labF labNow m emitted s,
+  rest <> [] -> P2Inv inp cap s labF labNow m emitted rest ->
+  exists k,
+    (exists rest2 labNow2 emitted2, (length rest2 < length rest)%nat /\
+        (k <= 50 * (length rest - length rest2))%nat /\
+        P2Inv inp cap (runUntil 0 k s) labF labNow2 m emitted2 rest2)
+    \/ ((k <= 50 * length rest)%nat /\ Result1 (runUntil 0 k s) inp cap).
+Proof.
+  intros inp cap rest labF labNow m emitted s hne inv.
+  destruct rest as [|c rest']; [exfalso; apply hne; reflexivity|].
+  pose proof inv as inv0.
+  destruct inv0 as [hwf _ _ _ _ _ _ _ _ _ _ hsuf _ _ _ _ _ _ hscanok _].
+  assert (HinC : In c inp).
+  { rewrite <- (firstn_skipn (length inp - length (c :: rest')) inp).
+    apply in_or_app. right. rewrite hsuf. left; reflexivity. }
+  assert (hcr : 0 <= c < 256) by (apply (bytes_ok1 _ _ hwf); exact HinC).
+  destruct (isComment (Z.to_nat c)) eqn:Ecm.
+  - (* comment *)
+    destruct (p2_comment inp cap c rest' labF labNow m emitted s Ecm inv)
+      as (k & [ (rest2 & hlt & hk & inv2) | (hk & hres) ]).
+    + exists k. left. exists rest2. exists labNow. exists emitted. tauto.
+    + exists k. right. tauto.
+  - destruct (isSpace (Z.to_nat c)) eqn:Esp.
+    + (* spacing *)
+      destruct (p2_spacing inp cap c rest' labF labNow m emitted s Esp inv)
+        as (k & hk & inv2).
+      exists k. left. exists rest'. exists labNow. exists emitted.
+      split; [simpl length; lia| split; [simpl length; lia| exact inv2]].
+    + destruct (Z.eq_dec c 58) as [-> |hcol].
+      * (* label definition: skip *)
+        destruct (p2_labelDef inp cap rest' labF labNow m emitted s inv)
+          as (k & [ (rest2 & labNow2 & hlt & hk & inv2) | (hk & hres) ]).
+        -- exists k. left. exists rest2. exists labNow2. exists emitted. tauto.
+        -- exists k. right. tauto.
+      * destruct (Z.eq_dec c 37) as [-> |hpct].
+        -- (* label reference: 4 offset bytes *)
+           destruct (p2_ref inp cap rest' labF labNow m emitted s inv)
+             as (k & [ (rest2 & emitted2 & hlt & hk & inv2) | (hk & hres) ]).
+           ++ exists k. left. exists rest2. exists labNow. exists emitted2. tauto.
+           ++ exists k. right. tauto.
+        -- assert (hncol : (Z.to_nat c =? c_colon)%nat = false)
+             by (apply Nat.eqb_neq; unfold c_colon; lia).
+           assert (hnpct : (Z.to_nat c =? c_pct)%nat = false)
+             by (apply Nat.eqb_neq; unfold c_pct; lia).
+           destruct (nibble (Z.to_nat c)) as [hi|] eqn:En.
+           ++ (* hex byte *)
+              destruct (p2_byte inp cap c hi rest' labF labNow m emitted s En inv)
+                as (k & [ (rest2 & emitted2 & hlt & hk & inv2) | (hk & hres) ]).
+              ** exists k. left. exists rest2. exists labNow. exists emitted2. tauto.
+              ** exists k. right. tauto.
+           ++ (* invalid char: contradicts the residual scan *)
+              exfalso.
+              assert (hscan' : scan1 High1 labNow (length emitted)
+                                 (zin (c :: rest'))
+                               = (labNow, length emitted, Unknown1)).
+              { change (zin (c :: rest')) with (Z.to_nat c :: zin rest').
+                apply scan1_high_unk; assumption. }
+              rewrite hscan' in hscanok. inversion hscanok.
+Qed.
+
+(* Pass 2 runs to completion within 50*|rest|+4 steps, always a Result1.
+   Strong induction on the suffix bound, mirroring pass1_correct. *)
+Theorem pass2_correct : forall n inp cap rest labF labNow m emitted s,
+  (length rest <= n)%nat ->
+  P2Inv inp cap s labF labNow m emitted rest ->
+  exists k, (k <= 50 * length rest + 4)%nat /\
+    Result1 (runUntil 0 k s) inp cap.
+Proof.
+  intros n. induction n as [|n IH];
+    intros inp cap rest labF labNow m emitted s hn inv.
+  - assert (hr : rest = []) by (destruct rest; [reflexivity| simpl in hn; lia]).
+    subst rest.
+    exists (1 + 3)%nat. split; [simpl; lia|].
+    exact (p2_eof inp cap labF labNow m emitted s inv).
+  - destruct rest as [|c rest'].
+    + exists (1 + 3)%nat. split; [simpl; lia|].
+      exact (p2_eof inp cap labF labNow m emitted s inv).
+    + destruct (p2_iteration inp cap (c :: rest') labF labNow m emitted s
+                  ltac:(discriminate) inv)
+        as (k1 & [ (rest2 & labNow2 & emitted2 & hlt & hk1 & inv2) | (hk1 & hres) ]).
+      * destruct (IH inp cap rest2 labF labNow2 m emitted2 (runUntil 0 k1 s)
+                    ltac:(simpl length in *; lia) inv2)
+          as (k2 & hk2 & hres2).
+        exists (k1 + k2)%nat. split; [simpl length in *; lia|].
+        rewrite runUntil_add. exact hres2.
+      * exists k1. split; [simpl length in *; lia| exact hres].
+Qed.
