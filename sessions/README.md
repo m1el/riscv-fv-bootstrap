@@ -1,6 +1,6 @@
 # Agent sessions for `/var/data/bootstrap`
 
-Collected **9 Claude Code** session(s) and **5 Codex** session(s) whose working directory is this project.
+Collected **17 Claude Code** session(s) and **5 Codex** session(s) whose working directory is this project.
 
 Per-session transcripts, summaries, and token costs live under `claude/` and `codex/`. Each file has a header (model, turns, token cost), a summary (first request + final response), and the full transcript (long tool outputs truncated). Personal name, email, and OS username are redacted.
 
@@ -8,15 +8,15 @@ Per-session transcripts, summaries, and token costs live under `claude/` and `co
 
 | Agent | Sessions | Output tokens | Cost (USD) |
 |---|--:|--:|--:|
-| Claude Code | 9 | 3,107,426 | **$478.77** |
+| Claude Code | 17 | 4,975,826 | **$738.74** |
 | Codex | 5 | 39,258 | **$4.16** |
-| **All** | **14** | **3,146,684** | **$482.93** |
+| **All** | **22** | **5,015,084** | **$742.90** |
 
 ## Aggregate time
 
 | Agent | Wall-clock | Model gen | Tool exec | Active | Waiting for user |
 |---|--:|--:|--:|--:|--:|
-| Claude Code | 21h18m | 11h05m | 41m05s | 11h46m | 9h32m |
+| Claude Code | 46h53m | 18h31m | 5h54m | 24h26m | 22h26m |
 | Codex | 29m36s | 17m05s | 1m13s | 18m18s | 11m17s |
 
 > Each section's time is attributed by what it is: `👤 User`→waiting-for-user, `🤖 Assistant`→model generation, `🛠️ Tool result`→tool execution; the three tile the session so they sum to wall-clock. Per-call exec times are matched (`tool_use`↔`tool_result`) and shown inline on each call line. Codex event timestamps are batch-flushed, so its splits are approximate.
@@ -41,7 +41,15 @@ Per-session transcripts, summaries, and token costs live under `claude/` and `co
 | 6 | 2026-06-02 21:59 | claude-opus-4-8 | 11/158 | 164 | 1h11m | 2h05m | $30.99 | this is a project about formally verifying a boots | [`claude/2026-06-02_21-59_4e5d3a7efb80.md`](claude/2026-06-02_21-59_4e5d3a7efb80.md) |
 | 7 | 2026-06-03 00:05 | claude-opus-4-8 | 9/205 | 202 | 1h14m | 2h09m | $43.18 | read @RESUME.md and cotinue work | [`claude/2026-06-03_00-05_8f08846d9a92.md`](claude/2026-06-03_00-05_8f08846d9a92.md) |
 | 8 | 2026-06-03 02:40 | claude-opus-4-8 | 1/132 | 152 | 38m15s | 38m15s | $16.95 | there's a few things that needed to be fixed in th | [`claude/2026-06-03_02-40_22c92cdfa670.md`](claude/2026-06-03_02-40_22c92cdfa670.md) |
-| 9 | 2026-06-03 03:41 | claude-opus-4-8 | 20/159 | 148 | 55m55s | 2h04m | $24.03 | this project contains a formal proof of a program  | [`claude/2026-06-03_03-41_86d5d0a1eeda.md`](claude/2026-06-03_03-41_86d5d0a1eeda.md) |
+| 9 | 2026-06-03 03:41 | claude-opus-4-8 | 22/165 | 153 | 58m25s | 2h31m | $25.40 | this project contains a formal proof of a program  | [`claude/2026-06-03_03-41_86d5d0a1eeda.md`](claude/2026-06-03_03-41_86d5d0a1eeda.md) |
+| 10 | 2026-06-04 11:38 | claude-opus-4-8 | 6/209 | 231 | 3h03m | 3h54m | $51.28 | now let's move to hex1. first, write a spec for it | [`claude/2026-06-04_11-38_c56c2984d7d8.md`](claude/2026-06-04_11-38_c56c2984d7d8.md) |
+| 11 | 2026-06-04 15:40 | claude-opus-4-8 | 4/298 | 299 | 1h55m | 1h55m | $88.19 | Resume work from @resume-hex.md | [`claude/2026-06-04_15-40_cd030025898d.md`](claude/2026-06-04_15-40_cd030025898d.md) |
+| 12 | 2026-06-04 19:17 | claude-opus-4-8 | 3/253 | 257 | 2h01m | 2h02m | $51.01 | Continue work from resume-hex1.md | [`claude/2026-06-04_19-17_3be2b2d8d1ae.md`](claude/2026-06-04_19-17_3be2b2d8d1ae.md) |
+| 13 | 2026-06-05 18:07 | claude-opus-4-8 | 2/6 | 6 | 4m55s | 6m38s | $0.33 | what's the status of formal verification for hex1  | [`claude/2026-06-05_18-07_02c09b924681.md`](claude/2026-06-05_18-07_02c09b924681.md) |
+| 14 | 2026-06-05 18:16 | claude-opus-4-8 | 1/20 | 24 | 4m30s | 4m30s | $1.68 | continue working on coq proof for hex1 from this r | [`claude/2026-06-05_18-16_f6a48e687b3e.md`](claude/2026-06-05_18-16_f6a48e687b3e.md) |
+| 15 | 2026-06-05 18:22 | claude-opus-4-8 | 9/202 | 207 | 4h20m | 15h27m | $42.61 | why did the previous session die in tmux? | [`claude/2026-06-05_18-22_7e091e1f2ce2.md`](claude/2026-06-05_18-22_7e091e1f2ce2.md) |
+| 16 | 2026-06-06 09:49 | claude-opus-4-8 | 10/200 | 203 | 1h07m | 1h35m | $23.36 | Resume working on coq proof of hex1, there’s an in | [`claude/2026-06-06_09-49_cde231aebe61.md`](claude/2026-06-06_09-49_cde231aebe61.md) |
+| 17 | 2026-06-06 12:09 | claude-opus-4-8 | 3/4 | 5 | 20.1s | 1m16s | $0.14 | Regenerate sessions folder. Compare implementation | [`claude/2026-06-06_12-09_d532b0cae75d.md`](claude/2026-06-06_12-09_d532b0cae75d.md) |
 
 ## Codex sessions
 
