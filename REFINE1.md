@@ -38,13 +38,20 @@ fuel + runUntil_stab at the end). DONE so far (each committed):
 - chunk 11: p1_unk, p1_eof (36 -> P2Start), p1_iteration (per-token
   dispatch), pass1_correct (induction; Result1 or P2Start within
   50*|rest|+1 steps). PASS 1 DONE.
+- chunk 12a/12b (committed as such): P2Inv, p1_entry/p2_entry,
+  emit_result1, p2 exits, p2_prefix, p2_spacing, p2_comment.
+- chunk 13a/13b: p2_colon_tail/p2_pct_tail, p2_labelDef, p2_byte.
+- chunk 14: off_byte_agree/offBytes_len + p2_ref ('%l' emit iteration:
+  slot ld, blt sign test -> Undef exit 700 / 4x(sb;srli) offset bytes,
+  19-state chain, out_mem 4-way extension). LANDED ONLY AFTER the lia
+  blowup investigation -- see the clia gotcha below; p2_ref compiles
+  171s/1.0GB with clia vs OOM-at-16GiB with bare lia.
 
-NEXT: pass 2 (port Lean chunks 13-16: P2Inv, p2_entry (360..364 ->
-P2Inv labF [] inp), emit_result1/p2_ok_exit, p2_prefix, p2_spacing,
-p2_comment, p2_byte (nibble VALUES via the 440..512 arithmetic),
-p2_labelDef (516..520), p2_ref (524..596, offBytes_b0..b3 in Z --
-much lighter than Lean's BitVec), p2_eof, pass2_correct), then
-init_phase glue + core1_refines (fixed fuel + runUntil_stab).
+NEXT: p2_eof (bgeu taken at 368 -> Ok exit 628 via p2_ok_exit),
+p2_iteration dispatch + pass2_correct (mirror pass1_correct induction),
+then init_phase glue + core1_refines (fixed fuel + runUntil_stab),
+TCB.md hex1 section.  Use clia (see gotcha below) for any lia inside
+chain-heavy proofs.
 
 Coq-port gotchas (beyond the Lean list at the bottom):
 - NEVER leave `_` holes in `rewrite (lemma _ _ ltac:(lia))` — evars make
@@ -62,6 +69,24 @@ Coq-port gotchas (beyond the Lean list at the bottom):
   exit_zero) and split the rewrite chain.
 - `cbn [LittleEndian.split_deprecated]`-style cbn-with-list does not
   reduce nat-indexed fixpoints; use cbv [name] (RvCrossExec split8).
+- THE BIG ONE (lia/OOM, cost 1 session + ~60 Oom*.v experiments): in a
+  proof carrying a long `set`-bound State chain (p2_ref: 19 states +
+  ~150 hyps about them), EVERY bare `lia`/`ltac:(lia)` call
+  zify-preprocesses the whole context: ~10-100s AND up to ~GBs PER CALL
+  (p2_ref died at the 16 GiB ulimit; a single trivial lia after the
+  chain = 114s/8GB).  The `.lia.cache` file masks it on REcompiles
+  (cache hits are cheap) while growing to 100s of MB — so incremental
+  chunk builds looked fine and a cold rebuild blows up.  `clearbody` on
+  the states does NOT help (X4: still OOM); `Unset Lia Cache` does NOT
+  help (X1: still OOM).  What works: clear the State-related hypotheses
+  before lia.  Refine1.v now defines `Ltac clia` (clears every hyp
+  mentioning step/runUntil/setPc/rset/storeByte/rget/mem/pc/scan1/
+  emit1/..., clears the State vars, then unfolds the Image1 address
+  constants so in_fits1/out_fits1/lbl_fits1 connect with literals, then
+  lia).  Use clia for EVERY lia site inside chain-heavy proofs (p2_ref
+  does, 329 sites); keep plain lia elsewhere.  Result: p2_ref
+  171s/1.0GB cold.  Delete a bloated coq/.lia.cache after experiments
+  with bare lia; it only caches pain.
 - NEVER `simp scan1 in heq` when an induction hypothesis (IHn) is in
   context: simp's trailing eauto pass tries `apply IHn`, and unifying
   the evar goal `scan1 ?st ?lab ?pos ?l = ...` against heq's stuck

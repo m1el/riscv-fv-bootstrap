@@ -6781,3 +6781,744 @@ Proof.
       replace (S (length emitted)) with (length emitted + 1)%nat by lia.
       rewrite <- app_assoc. reflexivity.
 Qed.
+
+(* The low 32 bits of the 64-bit wrapped offset agree with the spec's
+   32-bit truncation, byte by byte. *)
+Lemma off_byte_agree x sh : sh = 0 \/ sh = 8 \/ sh = 16 \/ sh = 24 ->
+  ((x mod 2 ^ 64) / 2 ^ sh) mod 256 = ((x mod 2 ^ 32) / 2 ^ sh) mod 256.
+Proof.
+  intros hsh.
+  assert (hb : x mod 2 ^ 32 = (x mod 2 ^ 64) mod 2 ^ 32).
+  { apply Znumtheory.Zmod_div_mod; [lia| lia|].
+    exists (2 ^ 32). reflexivity. }
+  set (a := x mod 2 ^ 64) in *.
+  assert (ha : 0 <= a < 2 ^ 64) by (apply Z.mod_pos_bound; lia).
+  rewrite hb.
+  rewrite (Z.div_mod a (2 ^ 32)) at 1 by lia.
+  destruct hsh as [h|[h|[h|h]]]; subst sh.
+  - change (2 ^ 0) with 1. rewrite !Z.div_1_r.
+    replace (2 ^ 32 * (a / 2 ^ 32) + a mod 2 ^ 32)
+      with (a mod 2 ^ 32 + (2 ^ 24 * (a / 2 ^ 32)) * 256) by ring.
+    apply Z_mod_plus_full.
+  - replace (2 ^ 32 * (a / 2 ^ 32) + a mod 2 ^ 32)
+      with ((2 ^ 24 * (a / 2 ^ 32)) * 2 ^ 8 + a mod 2 ^ 32) by ring.
+    rewrite (Z.div_add_l (2 ^ 24 * (a / 2 ^ 32)) (2 ^ 8) (a mod 2 ^ 32) ltac:(lia)).
+    replace (2 ^ 24 * (a / 2 ^ 32) + a mod 2 ^ 32 / 2 ^ 8)
+      with (a mod 2 ^ 32 / 2 ^ 8 + (2 ^ 16 * (a / 2 ^ 32)) * 256) by ring.
+    apply Z_mod_plus_full.
+  - replace (2 ^ 32 * (a / 2 ^ 32) + a mod 2 ^ 32)
+      with ((2 ^ 16 * (a / 2 ^ 32)) * 2 ^ 16 + a mod 2 ^ 32) by ring.
+    rewrite (Z.div_add_l (2 ^ 16 * (a / 2 ^ 32)) (2 ^ 16) (a mod 2 ^ 32) ltac:(lia)).
+    replace (2 ^ 16 * (a / 2 ^ 32) + a mod 2 ^ 32 / 2 ^ 16)
+      with (a mod 2 ^ 32 / 2 ^ 16 + (2 ^ 8 * (a / 2 ^ 32)) * 256) by ring.
+    apply Z_mod_plus_full.
+  - replace (2 ^ 32 * (a / 2 ^ 32) + a mod 2 ^ 32)
+      with ((2 ^ 8 * (a / 2 ^ 32)) * 2 ^ 24 + a mod 2 ^ 32) by ring.
+    rewrite (Z.div_add_l (2 ^ 8 * (a / 2 ^ 32)) (2 ^ 24) (a mod 2 ^ 32) ltac:(lia)).
+    replace (2 ^ 8 * (a / 2 ^ 32) + a mod 2 ^ 32 / 2 ^ 24)
+      with (a mod 2 ^ 32 / 2 ^ 24 + (a / 2 ^ 32) * 256) by ring.
+    apply Z_mod_plus_full.
+Qed.
+
+Lemma offBytes_len p pos : length (offBytes p pos) = 4%nat.
+Proof. reflexivity. Qed.
+
+(* lia wrapper for proofs carrying a long set-bound State chain: a bare lia
+   zify-preprocesses the whole context (OOM at 16 GiB).  Drop every
+   State-related hypothesis, then unfold the Image1 address constants so
+   symbolic bounds (in_fits1 etc.) connect with literal addresses. *)
+Ltac clia :=
+  repeat match goal with
+  | H : context [step] |- _ => clear H
+  | H : context [runUntil] |- _ => clear H
+  | H : context [setPc] |- _ => clear H
+  | H : context [rset] |- _ => clear H
+  | H : context [storeByte] |- _ => clear H
+  | H : context [storeWord] |- _ => clear H
+  | H : context [rget] |- _ => clear H
+  | H : context [CodeLoaded1] |- _ => clear H
+  | H : context [TableLoaded] |- _ => clear H
+  | H : context [InputLoaded] |- _ => clear H
+  | H : context [readMem] |- _ => clear H
+  | H : context [mem] |- _ => clear H
+  | H : context [pc] |- _ => clear H
+  | H : context [scan1] |- _ => clear H
+  | H : context [emit1] |- _ => clear H
+  | H : context [WellFormed1] |- _ => clear H
+  | H : context [nth] |- _ => clear H
+  | H : context [skipn] |- _ => clear H
+  | H : context [In] |- _ => clear H
+  end;
+  repeat match goal with x : State |- _ => clear x end;
+  unfold Image1.inputAddr, Image1.outAddr, Image1.lblAddr, Image1.coreAddr
+    in *;
+  lia.
+
+
+(* A COMPLETE pass-2 iteration for a label reference ('%l'): read the label
+   byte, load the slot, sign-test. Undefined -> Undef exit 700 (Result1);
+   defined at p -> 4 little-endian offset bytes via sb/srli (= offBytes),
+   t1 += 4, back to the loop head. *)
+Lemma p2_ref : forall inp cap rest' labF labNow m emitted s,
+  P2Inv inp cap s labF labNow m emitted (37 :: rest') ->
+  exists k,
+    (exists rest2 emitted2, (length rest2 < length ((37:Z) :: rest'))%nat /\
+        (k <= 50 * (length ((37:Z) :: rest') - length rest2))%nat /\
+        P2Inv inp cap (runUntil 0 k s) labF labNow m emitted2 rest2)
+    \/ ((k <= 50 * length ((37:Z) :: rest'))%nat /\ Result1 (runUntil 0 k s) inp cap).
+Proof.
+  intros inp cap rest' labF labNow m emitted s inv. pose proof inv as inv0.
+  destruct (p2_prefix inp cap 37 rest' labF labNow m emitted s inv)
+    as (s4 & hrun4 & hpc4 & ht2 & hcr & ht0 & hmem4 & hcode4 & hother4).
+  destruct (p2_pct_tail s4 hcode4 hpc4 ht2)
+    as (sL & hrunT & hpcL & hmemL & hcodeL & hothL).
+  destruct inv as [hwf hpc0 hcode ha0 ha1 ha2 ha3 ha4 hra hinm hidx hsuf houtidx
+                   houtmem htbl hmle hlable hscaninp hscanok hspec].
+  pose proof (WellFormed1_cap63 _ _ hwf) as hcap63.
+  pose proof (in_fits1 _ _ hwf) as hinf. pose proof (out_fits1 _ _ hwf) as houtf.
+  pose proof (lbl_fits1 _ _ hwf) as hlblf. pose proof (cap_nonneg _ _ hwf) as hcap0.
+  set (idx1 := (length inp - length rest')%nat) in *.
+  assert (hge : (length rest' + 1 <= length inp)%nat).
+  { pose proof (f_equal (@length Z) hsuf) as Hl. rewrite length_skipn in Hl.
+    simpl length in Hl. clia. }
+  assert (hsufx : skipn idx1 inp = rest')
+    by (apply (suffix_step1 inp 37 rest'); exact hsuf).
+  (* the residual scan forces a label byte to exist *)
+  assert (hscanP : scan1 Pct1 labNow (length emitted) (zin rest') = (labF, m, Ok1)).
+  { rewrite <- hscanok.
+    change (zin (37 :: rest')) with (37%nat :: zin rest').
+    rewrite scan1_pct. reflexivity. }
+  destruct rest' as [|l rest''].
+  - exfalso. rewrite scan1_pct_nil in hscanP. inversion hscanP.
+  - set (l' := Z.to_nat l) in *.
+    assert (hbnd1 : (length rest'' < length ((37:Z) :: l :: rest''))%nat)
+      by (simpl length; clia).
+    assert (hbnd2 : ((4 + 14) + (6 + 13) <= 50 * (length ((37:Z) :: l :: rest'')
+                       - length rest''))%nat)
+      by (simpl length; clia).
+    change (zin (l :: rest'')) with (l' :: zin rest'') in hscanP.
+    rewrite scan1_pct_cons in hscanP.
+    assert (hposlt : (length emitted + 4 <= m)%nat)
+      by (exact (scan1_pos_le (zin rest'') High1 labNow (length emitted + 4)
+                   labF m Ok1 hscanP)).
+    assert (hidxlt : (idx1 < length inp)%nat) by (unfold idx1; simpl length in *; clia).
+    assert (Hl : nth idx1 inp 0 = l).
+    { transitivity (nth 0 (skipn idx1 inp) 0).
+      - rewrite nth_skipn. f_equal. clia.
+      - rewrite hsufx. reflexivity. }
+    assert (HinL : In l inp).
+    { rewrite <- (firstn_skipn idx1 inp). apply in_or_app. right.
+      rewrite hsufx. left; reflexivity. }
+    assert (Hlr : 0 <= l < 256) by (apply (bytes_ok1 _ _ hwf); exact HinL).
+    assert (hl' : Z.of_nat l' = l) by (unfold l'; apply Z2Nat.id; clia).
+    assert (hl256 : (l' < 256)%nat) by (unfold l'; clia).
+    assert (h5L : rget sL 5 = Z.of_nat idx1).
+    { rewrite (hothL 5 ltac:(clia)), ht0. unfold idx1. clia. }
+    assert (hothLS : forall i, i <> 0 -> i <> 5 -> i <> 7 -> i <> 28 ->
+              rget sL i = rget s i).
+    { intros i h0 h5 h7 h28.
+      rewrite (hothL i h28), (hother4 i h0 h5 h7 h28). reflexivity. }
+    assert (hmemLS : sL.(mem) = s.(mem)) by (rewrite hmemL; exact hmem4).
+    unfold Image1.inputAddr, Image1.outAddr, Image1.lblAddr, Image1.coreAddr in *.
+    (* read the label byte (524..532) *)
+    assert (ha0L : rget sL 10 = 2147484516).
+    { rewrite (hothLS 10 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)). exact ha0. }
+    assert (haddr : wadd (rget sL 10) (rget sL 5) = 2147484516 + Z.of_nat idx1).
+    { rewrite ha0L, h5L. apply wadd_id. clia. }
+    assert (hu1 : step sL = setPc (rset sL 28 (2147484516 + Z.of_nat idx1)) (2147483792 + 528)).
+    { rewrite (step1_add sL 524 28 10 5 hcodeL ltac:(clia) ltac:(rewrite coreBytes1_len; clia)
+        hpcL ltac:(vm_compute; reflexivity)), haddr, hpcL.
+      unfold Image1.coreAddr.
+      rewrite (wadd_id (2147483792 + 524) 4 ltac:(clia)). f_equal; clia. }
+    set (sR1 := setPc (rset sL 28 (2147484516 + Z.of_nat idx1)) (2147483792 + 528)) in *.
+    assert (hmemR1 : sR1.(mem) = s.(mem))
+      by (unfold sR1; rewrite setPc_mem, rset_mem; exact hmemLS).
+    assert (hcR1 : CodeLoaded1 sR1) by (apply (CodeLoaded1_eqmem s); [exact hmemR1| exact hcode]).
+    assert (hpcR1 : sR1.(pc) = 2147483792 + 528) by reflexivity.
+    assert (hr28R1 : rget sR1 28 = 2147484516 + Z.of_nat idx1).
+    { unfold sR1. rewrite setPc_rget, (rset_rget sL 28 _ 28 ltac:(clia) ltac:(clia)),
+        Z.eqb_refl. reflexivity. }
+    assert (hbyteIn : s.(mem) (2147484516 + Z.of_nat idx1) = nth idx1 inp 0).
+    { pose proof (hinm (Z.of_nat idx1) ltac:(clia)) as h.
+      unfold Image1.inputAddr in h. rewrite Nat2Z.id in h. exact h. }
+    assert (hbyte : sR1.(mem) (wadd (rget sR1 28) 0) mod 256 = l).
+    { rewrite hr28R1, (wadd_id (2147484516 + Z.of_nat idx1) 0 ltac:(clia)), Z.add_0_r,
+        hmemR1, hbyteIn, Hl. apply Z.mod_small. exact Hlr. }
+    assert (hu2 : step sR1 = setPc (rset sR1 7 l) (2147483792 + 532)).
+    { rewrite (step1_lbu sR1 528 7 28 0 hcR1 ltac:(clia) ltac:(rewrite coreBytes1_len; clia)
+        hpcR1 ltac:(vm_compute; reflexivity)), hbyte, hpcR1,
+        (wadd_id (2147483792 + 528) 4 ltac:(clia)). f_equal; clia. }
+    set (sR2 := setPc (rset sR1 7 l) (2147483792 + 532)) in *.
+    assert (hmemR2 : sR2.(mem) = s.(mem))
+      by (unfold sR2; rewrite setPc_mem, rset_mem; exact hmemR1).
+    assert (hcR2 : CodeLoaded1 sR2) by (apply (CodeLoaded1_eqmem s); [exact hmemR2| exact hcode]).
+    assert (hpcR2 : sR2.(pc) = 2147483792 + 532) by reflexivity.
+    assert (hr5R2 : rget sR2 5 = Z.of_nat idx1).
+    { unfold sR2. rewrite setPc_rget, (rset_rget sR1 7 l 5 ltac:(clia) ltac:(clia)).
+      replace (5 =? 7) with false by reflexivity.
+      unfold sR1. rewrite setPc_rget, (rset_rget sL 28 _ 5 ltac:(clia) ltac:(clia)).
+      replace (5 =? 28) with false by reflexivity. exact h5L. }
+    assert (hu3 : step sR2 = setPc (rset sR2 5 (Z.of_nat idx1 + 1)) (2147483792 + 536)).
+    { rewrite (step1_addi sR2 532 5 5 1 hcR2 ltac:(clia) ltac:(rewrite coreBytes1_len; clia)
+        hpcR2 ltac:(vm_compute; reflexivity)), hr5R2,
+        (wadd_id (Z.of_nat idx1) 1 ltac:(clia)), hpcR2,
+        (wadd_id (2147483792 + 532) 4 ltac:(clia)). f_equal; clia. }
+    set (sR3 := setPc (rset sR2 5 (Z.of_nat idx1 + 1)) (2147483792 + 536)) in *.
+    assert (hmemR3 : sR3.(mem) = s.(mem))
+      by (unfold sR3; rewrite setPc_mem, rset_mem; exact hmemR2).
+    assert (hcR3 : CodeLoaded1 sR3) by (apply (CodeLoaded1_eqmem s); [exact hmemR3| exact hcode]).
+    assert (hpcR3 : sR3.(pc) = 2147483792 + 536) by reflexivity.
+    assert (h7R3 : rget sR3 7 = l).
+    { unfold sR3. rewrite setPc_rget, (rset_rget sR2 5 _ 7 ltac:(clia) ltac:(clia)).
+      replace (7 =? 5) with false by reflexivity.
+      unfold sR2. rewrite setPc_rget, (rset_rget sR1 7 l 7 ltac:(clia) ltac:(clia)),
+        Z.eqb_refl. reflexivity. }
+    assert (hothR : forall i, i <> 0 -> i <> 5 -> i <> 7 -> i <> 28 ->
+              rget sR3 i = rget s i).
+    { intros i h0 h5 h7 h28.
+      unfold sR3. rewrite setPc_rget, (rset_rget sR2 5 _ i ltac:(clia) h0).
+      replace (i =? 5) with false by (symmetry; apply Z.eqb_neq; exact h5).
+      unfold sR2. rewrite setPc_rget, (rset_rget sR1 7 l i ltac:(clia) h0).
+      replace (i =? 7) with false by (symmetry; apply Z.eqb_neq; exact h7).
+      unfold sR1. rewrite setPc_rget, (rset_rget sL 28 _ i ltac:(clia) h0).
+      replace (i =? 28) with false by (symmetry; apply Z.eqb_neq; exact h28).
+      exact (hothLS i h0 h5 h7 h28). }
+    (* slot address (536..544) *)
+    assert (hu4 : step sR3 = setPc (rset sR3 28 (8 * l)) (2147483792 + 540)).
+    { rewrite (step1_slli sR3 536 28 7 3 hcR3 ltac:(clia) ltac:(rewrite coreBytes1_len; clia)
+        hpcR3 ltac:(vm_compute; reflexivity)), h7R3, (wshl3 l Hlr), hpcR3,
+        (wadd_id (2147483792 + 536) 4 ltac:(clia)). f_equal; clia. }
+    set (sM1 := setPc (rset sR3 28 (8 * l)) (2147483792 + 540)) in *.
+    assert (hmemM1 : sM1.(mem) = s.(mem))
+      by (unfold sM1; rewrite setPc_mem, rset_mem; exact hmemR3).
+    assert (hcM1 : CodeLoaded1 sM1) by (apply (CodeLoaded1_eqmem s); [exact hmemM1| exact hcode]).
+    assert (hpcM1 : sM1.(pc) = 2147483792 + 540) by reflexivity.
+    assert (hr28M1 : rget sM1 28 = 8 * l).
+    { unfold sM1. rewrite setPc_rget, (rset_rget sR3 28 _ 28 ltac:(clia) ltac:(clia)),
+        Z.eqb_refl. reflexivity. }
+    assert (ha4M1 : rget sM1 14 = 2147489280).
+    { unfold sM1. rewrite setPc_rget, (rset_rget sR3 28 _ 14 ltac:(clia) ltac:(clia)).
+      replace (14 =? 28) with false by reflexivity.
+      rewrite (hothR 14 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)). exact ha4. }
+    assert (hslot : wadd (rget sM1 28) (rget sM1 14) = 2147489280 + 8 * Z.of_nat l').
+    { rewrite hr28M1, ha4M1, (wadd_id (8 * l) 2147489280 ltac:(clia)).
+      rewrite hl'. clia. }
+    assert (hu5 : step sM1 = setPc (rset sM1 28 (2147489280 + 8 * Z.of_nat l'))
+                                   (2147483792 + 544)).
+    { rewrite (step1_add sM1 540 28 28 14 hcM1 ltac:(clia) ltac:(rewrite coreBytes1_len; clia)
+        hpcM1 ltac:(vm_compute; reflexivity)), hslot, hpcM1,
+        (wadd_id (2147483792 + 540) 4 ltac:(clia)). f_equal; clia. }
+    set (sM2 := setPc (rset sM1 28 (2147489280 + 8 * Z.of_nat l')) (2147483792 + 544)) in *.
+    assert (hmemM2 : sM2.(mem) = s.(mem))
+      by (unfold sM2; rewrite setPc_mem, rset_mem; exact hmemM1).
+    assert (hcM2 : CodeLoaded1 sM2) by (apply (CodeLoaded1_eqmem s); [exact hmemM2| exact hcode]).
+    assert (hpcM2 : sM2.(pc) = 2147483792 + 544) by reflexivity.
+    assert (hr28M2 : rget sM2 28 = 2147489280 + 8 * Z.of_nat l').
+    { unfold sM2. rewrite setPc_rget, (rset_rget sM1 28 _ 28 ltac:(clia) ltac:(clia)),
+        Z.eqb_refl. reflexivity. }
+    assert (hslotrange : 0 <= encodeSlot (labF l') < 2 ^ 64).
+    { destruct (labF l') as [p|] eqn:Elab0; cbn.
+      - pose proof (hlable l' p Elab0). clia.
+      - clia. }
+    assert (htblM2 : TableLoaded sM2 labF)
+      by (apply (tableLoaded_eqmem s); [exact hmemM2| exact htbl]).
+    assert (hldval : loadWord sM2 (wadd (rget sM2 28) 0) = encodeSlot (labF l')).
+    { rewrite hr28M2, (wadd_id (2147489280 + 8 * Z.of_nat l') 0 ltac:(clia)), Z.add_0_r.
+      pose proof (loadWord_slot sM2 labF l' htblM2 hl256 hslotrange) as h.
+      unfold Image1.lblAddr in h. exact h. }
+    assert (hu6 : step sM2 = setPc (rset sM2 29 (encodeSlot (labF l'))) (2147483792 + 548)).
+    { rewrite (step1_ld sM2 544 29 28 0 hcM2 ltac:(clia) ltac:(rewrite coreBytes1_len; clia)
+        hpcM2 ltac:(vm_compute; reflexivity)), hldval, hpcM2,
+        (wadd_id (2147483792 + 544) 4 ltac:(clia)). f_equal; clia. }
+    set (sM3 := setPc (rset sM2 29 (encodeSlot (labF l'))) (2147483792 + 548)) in *.
+    assert (hmemM3 : sM3.(mem) = s.(mem))
+      by (unfold sM3; rewrite setPc_mem, rset_mem; exact hmemM2).
+    assert (hcM3 : CodeLoaded1 sM3) by (apply (CodeLoaded1_eqmem s); [exact hmemM3| exact hcode]).
+    assert (hpcM3 : sM3.(pc) = 2147483792 + 548) by reflexivity.
+    assert (hr29M3 : rget sM3 29 = encodeSlot (labF l')).
+    { unfold sM3. rewrite setPc_rget, (rset_rget sM2 29 _ 29 ltac:(clia) ltac:(clia)),
+        Z.eqb_refl. reflexivity. }
+    assert (hothM : forall i, i <> 0 -> i <> 5 -> i <> 7 -> i <> 28 -> i <> 29 ->
+              rget sM3 i = rget s i).
+    { intros i h0 h5 h7 h28 h29.
+      unfold sM3. rewrite setPc_rget, (rset_rget sM2 29 _ i ltac:(clia) h0).
+      replace (i =? 29) with false by (symmetry; apply Z.eqb_neq; exact h29).
+      unfold sM2. rewrite setPc_rget, (rset_rget sM1 28 _ i ltac:(clia) h0).
+      replace (i =? 28) with false by (symmetry; apply Z.eqb_neq; exact h28).
+      unfold sM1. rewrite setPc_rget, (rset_rget sR3 28 _ i ltac:(clia) h0).
+      replace (i =? 28) with false by (symmetry; apply Z.eqb_neq; exact h28).
+      exact (hothR i h0 h5 h7 h28). }
+    assert (hpL0 : sL.(pc) <> 0) by (rewrite hpcL; clia).
+    assert (hpR1 : sR1.(pc) <> 0) by (rewrite hpcR1; clia).
+    assert (hpR2 : sR2.(pc) <> 0) by (rewrite hpcR2; clia).
+    assert (hpR3 : sR3.(pc) <> 0) by (rewrite hpcR3; clia).
+    assert (hpM1 : sM1.(pc) <> 0) by (rewrite hpcM1; clia).
+    assert (hpM2 : sM2.(pc) <> 0) by (rewrite hpcM2; clia).
+    assert (hpM3 : sM3.(pc) <> 0) by (rewrite hpcM3; clia).
+    assert (hrun6 : runUntil 0 6 sL = sM3).
+    { rewrite (runUntil_S 5 sL hpL0), hu1, (runUntil_S 4 sR1 hpR1), hu2,
+              (runUntil_S 3 sR2 hpR2), hu3, (runUntil_S 2 sR3 hpR3), hu4,
+              (runUntil_S 1 sM1 hpM1), hu5, (runUntil_S 0 sM2 hpM2), hu6. reflexivity. }
+    (* spec side: the emit either resolves or stops Undef *)
+    destruct (labF l') as [p|] eqn:Elab.
+    + (* defined at p: 4 offset bytes *)
+      assert (hp63 : Z.of_nat p < 2 ^ 63).
+      { pose proof (hlable l' p Elab). clia. }
+      assert (hslt : sltb (rget sM3 29) (rget sM3 0) = false).
+      { rewrite hr29M3, rget_zero. exact (encodeSlot_some_nonneg p hp63). }
+      assert (hu7 : step sM3 = setPc sM3 (2147483792 + 552)).
+      { rewrite (step1_blt sM3 548 29 0 152 hcM3 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcM3 ltac:(vm_compute; reflexivity)), hslt.
+        cbn match. rewrite hpcM3, (wadd_id (2147483792 + 548) 4 ltac:(clia)).
+        f_equal; clia. }
+      set (sN0 := setPc sM3 (2147483792 + 552)) in *.
+      assert (hmemN0 : sN0.(mem) = s.(mem)) by (unfold sN0; rewrite setPc_mem; exact hmemM3).
+      assert (hcN0 : CodeLoaded1 sN0) by (apply (CodeLoaded1_eqmem s); [exact hmemN0| exact hcode]).
+      assert (hpcN0 : sN0.(pc) = 2147483792 + 552) by reflexivity.
+      assert (h6N0 : rget sN0 6 = Z.of_nat (length emitted)).
+      { unfold sN0. rewrite setPc_rget.
+        rewrite (hothM 6 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)).
+        exact houtidx. }
+      (* 552: addi t5,t1,4 *)
+      assert (hu8 : step sN0 = setPc (rset sN0 30 (Z.of_nat (length emitted) + 4))
+                                     (2147483792 + 556)).
+      { rewrite (step1_addi sN0 552 30 6 4 hcN0 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcN0 ltac:(vm_compute; reflexivity)), h6N0,
+          (wadd_id (Z.of_nat (length emitted)) 4 ltac:(clia)), hpcN0,
+          (wadd_id (2147483792 + 552) 4 ltac:(clia)). f_equal; clia. }
+      set (sN1 := setPc (rset sN0 30 (Z.of_nat (length emitted) + 4)) (2147483792 + 556)) in *.
+      assert (hmemN1 : sN1.(mem) = s.(mem))
+        by (unfold sN1; rewrite setPc_mem, rset_mem; exact hmemN0).
+      assert (hcN1 : CodeLoaded1 sN1) by (apply (CodeLoaded1_eqmem s); [exact hmemN1| exact hcode]).
+      assert (hpcN1 : sN1.(pc) = 2147483792 + 556) by reflexivity.
+      set (S4 := Z.of_nat (length emitted) + 4) in *.
+      set (V := wsub (Z.of_nat p) S4) in *.
+      assert (hr29N1 : rget sN1 29 = Z.of_nat p).
+      { unfold sN1. rewrite setPc_rget, (rset_rget sN0 30 _ 29 ltac:(clia) ltac:(clia)).
+        replace (29 =? 30) with false by reflexivity.
+        unfold sN0. rewrite setPc_rget. rewrite hr29M3. reflexivity. }
+      assert (hr30N1 : rget sN1 30 = S4).
+      { unfold sN1. rewrite setPc_rget, (rset_rget sN0 30 _ 30 ltac:(clia) ltac:(clia)),
+          Z.eqb_refl. reflexivity. }
+      (* 556: sub t4,t4,t5 *)
+      assert (hu9 : step sN1 = setPc (rset sN1 29 V) (2147483792 + 560)).
+      { rewrite (step1_sub sN1 556 29 29 30 hcN1 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcN1 ltac:(vm_compute; reflexivity)),
+          hr29N1, hr30N1, hpcN1, (wadd_id (2147483792 + 556) 4 ltac:(clia)).
+        f_equal; clia. }
+      set (sN2 := setPc (rset sN1 29 V) (2147483792 + 560)) in *.
+      assert (hmemN2 : sN2.(mem) = s.(mem))
+        by (unfold sN2; rewrite setPc_mem, rset_mem; exact hmemN1).
+      assert (hcN2 : CodeLoaded1 sN2) by (apply (CodeLoaded1_eqmem s); [exact hmemN2| exact hcode]).
+      assert (hpcN2 : sN2.(pc) = 2147483792 + 560) by reflexivity.
+      assert (h12N2 : rget sN2 12 = 2147485184).
+      { unfold sN2. rewrite setPc_rget, (rset_rget sN1 29 _ 12 ltac:(clia) ltac:(clia)).
+        replace (12 =? 29) with false by reflexivity.
+        unfold sN1. rewrite setPc_rget, (rset_rget sN0 30 _ 12 ltac:(clia) ltac:(clia)).
+        replace (12 =? 30) with false by reflexivity.
+        unfold sN0. rewrite setPc_rget.
+        rewrite (hothM 12 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)).
+        exact ha2. }
+      assert (h6N2 : rget sN2 6 = Z.of_nat (length emitted)).
+      { unfold sN2. rewrite setPc_rget, (rset_rget sN1 29 _ 6 ltac:(clia) ltac:(clia)).
+        replace (6 =? 29) with false by reflexivity.
+        unfold sN1. rewrite setPc_rget, (rset_rget sN0 30 _ 6 ltac:(clia) ltac:(clia)).
+        replace (6 =? 30) with false by reflexivity. exact h6N0. }
+      set (A := 2147485184 + Z.of_nat (length emitted)) in *.
+      (* 560: add t3,a2,t1 *)
+      assert (hu10 : step sN2 = setPc (rset sN2 28 A) (2147483792 + 564)).
+      { rewrite (step1_add sN2 560 28 12 6 hcN2 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcN2 ltac:(vm_compute; reflexivity)),
+          h12N2, h6N2, (wadd_id 2147485184 (Z.of_nat (length emitted)) ltac:(clia)),
+          hpcN2, (wadd_id (2147483792 + 560) 4 ltac:(clia)).
+        f_equal; clia. }
+      set (sN3 := setPc (rset sN2 28 A) (2147483792 + 564)) in *.
+      assert (hmemN3 : sN3.(mem) = s.(mem))
+        by (unfold sN3; rewrite setPc_mem, rset_mem; exact hmemN2).
+      assert (hcN3 : CodeLoaded1 sN3) by (apply (CodeLoaded1_eqmem s); [exact hmemN3| exact hcode]).
+      assert (hpcN3 : sN3.(pc) = 2147483792 + 564) by reflexivity.
+      assert (hVr : 0 <= V < 2 ^ 64).
+      { unfold V, wsub, wrap, w64. apply Z.mod_pos_bound. clia. }
+      (* the 4 sb/srli stores (564..588) *)
+      assert (hr28N3 : rget sN3 28 = A).
+      { unfold sN3. rewrite setPc_rget, (rset_rget sN2 28 _ 28 ltac:(clia) ltac:(clia)),
+          Z.eqb_refl. reflexivity. }
+      assert (hr29N3 : rget sN3 29 = V).
+      { unfold sN3. rewrite setPc_rget, (rset_rget sN2 28 _ 29 ltac:(clia) ltac:(clia)).
+        replace (29 =? 28) with false by reflexivity.
+        unfold sN2. rewrite setPc_rget, (rset_rget sN1 29 _ 29 ltac:(clia) ltac:(clia)),
+          Z.eqb_refl. reflexivity. }
+      assert (hu11 : step sN3 = setPc (storeByte sN3 A V) (2147483792 + 568)).
+      { rewrite (step1_sb sN3 564 28 29 0 hcN3 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcN3 ltac:(vm_compute; reflexivity)),
+          hr28N3, hr29N3, (wadd_id A 0 ltac:(unfold A; clia)), Z.add_0_r,
+          hpcN3, (wadd_id (2147483792 + 564) 4 ltac:(clia)). f_equal; clia. }
+      set (sP1 := setPc (storeByte sN3 A V) (2147483792 + 568)) in *.
+      assert (hcP1 : CodeLoaded1 sP1).
+      { apply (CodeLoaded1_eqmem (storeByte sN3 A V)); [reflexivity|].
+        apply codeLoaded1_storeByte;
+          [apply (CodeLoaded1_eqmem s); [exact hmemN3| exact hcode]|].
+        unfold Image1.coreAddr, A. clia. }
+      assert (hpcP1 : sP1.(pc) = 2147483792 + 568) by reflexivity.
+      assert (hr29P1 : rget sP1 29 = V).
+      { unfold sP1. rewrite setPc_rget, storeByte_rget. exact hr29N3. }
+      assert (hu12 : step sP1 = setPc (rset sP1 29 (V / 2 ^ 8)) (2147483792 + 572)).
+      { rewrite (step1_srli sP1 568 29 29 8 hcP1 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcP1 ltac:(vm_compute; reflexivity)),
+          hr29P1, (wshr_div V 8 ltac:(clia)), hpcP1,
+          (wadd_id (2147483792 + 568) 4 ltac:(clia)). f_equal; clia. }
+      set (sQ1 := setPc (rset sP1 29 (V / 2 ^ 8)) (2147483792 + 572)) in *.
+      assert (hcQ1 : CodeLoaded1 sQ1)
+        by (apply (CodeLoaded1_eqmem sP1); [unfold sQ1; rewrite setPc_mem, rset_mem; reflexivity| exact hcP1]).
+      assert (hpcQ1 : sQ1.(pc) = 2147483792 + 572) by reflexivity.
+      assert (hr28Q1 : rget sQ1 28 = A).
+      { unfold sQ1. rewrite setPc_rget, (rset_rget sP1 29 _ 28 ltac:(clia) ltac:(clia)).
+        replace (28 =? 29) with false by reflexivity.
+        unfold sP1. rewrite setPc_rget, storeByte_rget. exact hr28N3. }
+      assert (hr29Q1 : rget sQ1 29 = V / 2 ^ 8).
+      { unfold sQ1. rewrite setPc_rget, (rset_rget sP1 29 _ 29 ltac:(clia) ltac:(clia)),
+          Z.eqb_refl. reflexivity. }
+      assert (hu13 : step sQ1 = setPc (storeByte sQ1 (A + 1) (V / 2 ^ 8)) (2147483792 + 576)).
+      { rewrite (step1_sb sQ1 572 28 29 1 hcQ1 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcQ1 ltac:(vm_compute; reflexivity)),
+          hr28Q1, hr29Q1, (wadd_id A 1 ltac:(unfold A; clia)),
+          hpcQ1, (wadd_id (2147483792 + 572) 4 ltac:(clia)). f_equal; clia. }
+      set (sP2 := setPc (storeByte sQ1 (A + 1) (V / 2 ^ 8)) (2147483792 + 576)) in *.
+      assert (hcP2 : CodeLoaded1 sP2).
+      { apply (CodeLoaded1_eqmem (storeByte sQ1 (A + 1) (V / 2 ^ 8))); [reflexivity|].
+        apply codeLoaded1_storeByte; [exact hcQ1|].
+        unfold Image1.coreAddr, A. clia. }
+      assert (hpcP2 : sP2.(pc) = 2147483792 + 576) by reflexivity.
+      assert (hr29P2 : rget sP2 29 = V / 2 ^ 8).
+      { unfold sP2. rewrite setPc_rget, storeByte_rget. exact hr29Q1. }
+      assert (hu14 : step sP2 = setPc (rset sP2 29 (V / 2 ^ 16)) (2147483792 + 580)).
+      { rewrite (step1_srli sP2 576 29 29 8 hcP2 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcP2 ltac:(vm_compute; reflexivity)),
+          hr29P2, (wshr_div (V / 2 ^ 8) 8 ltac:(clia)), hpcP2,
+          (wadd_id (2147483792 + 576) 4 ltac:(clia)).
+        rewrite Z.div_div by clia. f_equal; clia. }
+      set (sQ2 := setPc (rset sP2 29 (V / 2 ^ 16)) (2147483792 + 580)) in *.
+      assert (hcQ2 : CodeLoaded1 sQ2)
+        by (apply (CodeLoaded1_eqmem sP2); [unfold sQ2; rewrite setPc_mem, rset_mem; reflexivity| exact hcP2]).
+      assert (hpcQ2 : sQ2.(pc) = 2147483792 + 580) by reflexivity.
+      assert (hr28Q2 : rget sQ2 28 = A).
+      { unfold sQ2. rewrite setPc_rget, (rset_rget sP2 29 _ 28 ltac:(clia) ltac:(clia)).
+        replace (28 =? 29) with false by reflexivity.
+        unfold sP2. rewrite setPc_rget, storeByte_rget. exact hr28Q1. }
+      assert (hr29Q2 : rget sQ2 29 = V / 2 ^ 16).
+      { unfold sQ2. rewrite setPc_rget, (rset_rget sP2 29 _ 29 ltac:(clia) ltac:(clia)),
+          Z.eqb_refl. reflexivity. }
+      assert (hu15 : step sQ2 = setPc (storeByte sQ2 (A + 2) (V / 2 ^ 16)) (2147483792 + 584)).
+      { rewrite (step1_sb sQ2 580 28 29 2 hcQ2 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcQ2 ltac:(vm_compute; reflexivity)),
+          hr28Q2, hr29Q2, (wadd_id A 2 ltac:(unfold A; clia)),
+          hpcQ2, (wadd_id (2147483792 + 580) 4 ltac:(clia)). f_equal; clia. }
+      set (sP3 := setPc (storeByte sQ2 (A + 2) (V / 2 ^ 16)) (2147483792 + 584)) in *.
+      assert (hcP3 : CodeLoaded1 sP3).
+      { apply (CodeLoaded1_eqmem (storeByte sQ2 (A + 2) (V / 2 ^ 16))); [reflexivity|].
+        apply codeLoaded1_storeByte; [exact hcQ2|].
+        unfold Image1.coreAddr, A. clia. }
+      assert (hpcP3 : sP3.(pc) = 2147483792 + 584) by reflexivity.
+      assert (hr29P3 : rget sP3 29 = V / 2 ^ 16).
+      { unfold sP3. rewrite setPc_rget, storeByte_rget. exact hr29Q2. }
+      assert (hu16 : step sP3 = setPc (rset sP3 29 (V / 2 ^ 24)) (2147483792 + 588)).
+      { rewrite (step1_srli sP3 584 29 29 8 hcP3 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcP3 ltac:(vm_compute; reflexivity)),
+          hr29P3, (wshr_div (V / 2 ^ 16) 8 ltac:(clia)), hpcP3,
+          (wadd_id (2147483792 + 584) 4 ltac:(clia)).
+        rewrite Z.div_div by clia. f_equal; clia. }
+      set (sQ3 := setPc (rset sP3 29 (V / 2 ^ 24)) (2147483792 + 588)) in *.
+      assert (hcQ3 : CodeLoaded1 sQ3)
+        by (apply (CodeLoaded1_eqmem sP3); [unfold sQ3; rewrite setPc_mem, rset_mem; reflexivity| exact hcP3]).
+      assert (hpcQ3 : sQ3.(pc) = 2147483792 + 588) by reflexivity.
+      assert (hr28Q3 : rget sQ3 28 = A).
+      { unfold sQ3. rewrite setPc_rget, (rset_rget sP3 29 _ 28 ltac:(clia) ltac:(clia)).
+        replace (28 =? 29) with false by reflexivity.
+        unfold sP3. rewrite setPc_rget, storeByte_rget. exact hr28Q2. }
+      assert (hr29Q3 : rget sQ3 29 = V / 2 ^ 24).
+      { unfold sQ3. rewrite setPc_rget, (rset_rget sP3 29 _ 29 ltac:(clia) ltac:(clia)),
+          Z.eqb_refl. reflexivity. }
+      assert (hu17 : step sQ3 = setPc (storeByte sQ3 (A + 3) (V / 2 ^ 24)) (2147483792 + 592)).
+      { rewrite (step1_sb sQ3 588 28 29 3 hcQ3 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcQ3 ltac:(vm_compute; reflexivity)),
+          hr28Q3, hr29Q3, (wadd_id A 3 ltac:(unfold A; clia)),
+          hpcQ3, (wadd_id (2147483792 + 588) 4 ltac:(clia)). f_equal; clia. }
+      set (sP4 := setPc (storeByte sQ3 (A + 3) (V / 2 ^ 24)) (2147483792 + 592)) in *.
+      assert (hcP4 : CodeLoaded1 sP4).
+      { apply (CodeLoaded1_eqmem (storeByte sQ3 (A + 3) (V / 2 ^ 24))); [reflexivity|].
+        apply codeLoaded1_storeByte; [exact hcQ3|].
+        unfold Image1.coreAddr, A. clia. }
+      assert (hpcP4 : sP4.(pc) = 2147483792 + 592) by reflexivity.
+      assert (h6P4 : rget sP4 6 = Z.of_nat (length emitted)).
+      { unfold sP4. rewrite setPc_rget, storeByte_rget.
+        unfold sQ3. rewrite setPc_rget, (rset_rget sP3 29 _ 6 ltac:(clia) ltac:(clia)).
+        replace (6 =? 29) with false by reflexivity.
+        unfold sP3. rewrite setPc_rget, storeByte_rget.
+        unfold sQ2. rewrite setPc_rget, (rset_rget sP2 29 _ 6 ltac:(clia) ltac:(clia)).
+        replace (6 =? 29) with false by reflexivity.
+        unfold sP2. rewrite setPc_rget, storeByte_rget.
+        unfold sQ1. rewrite setPc_rget, (rset_rget sP1 29 _ 6 ltac:(clia) ltac:(clia)).
+        replace (6 =? 29) with false by reflexivity.
+        unfold sP1. rewrite setPc_rget, storeByte_rget.
+        unfold sN3. rewrite setPc_rget, (rset_rget sN2 28 _ 6 ltac:(clia) ltac:(clia)).
+        replace (6 =? 28) with false by reflexivity. exact h6N2. }
+      (* 592: addi t1,t1,4; 596: jal back *)
+      assert (hu18 : step sP4 = setPc (rset sP4 6 S4) (2147483792 + 596)).
+      { rewrite (step1_addi sP4 592 6 6 4 hcP4 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcP4 ltac:(vm_compute; reflexivity)), h6P4,
+          (wadd_id (Z.of_nat (length emitted)) 4 ltac:(clia)), hpcP4,
+          (wadd_id (2147483792 + 592) 4 ltac:(clia)). f_equal; clia. }
+      set (sN4 := setPc (rset sP4 6 S4) (2147483792 + 596)) in *.
+      assert (hcN4 : CodeLoaded1 sN4)
+        by (apply (CodeLoaded1_eqmem sP4); [unfold sN4; rewrite setPc_mem, rset_mem; reflexivity| exact hcP4]).
+      assert (hpcN4 : sN4.(pc) = 2147483792 + 596) by reflexivity.
+      assert (hu19 : step sN4 = setPc sN4 (2147483792 + 368)).
+      { rewrite (step1_jal sN4 596 0 (-228) hcN4 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcN4 ltac:(vm_compute; reflexivity)),
+          rset_zero, hpcN4, (wadd_id (2147483792 + 596) (-228) ltac:(clia)).
+        f_equal; clia. }
+      set (sF := setPc sN4 (2147483792 + 368)) in *.
+      assert (hpN0 : sN0.(pc) <> 0) by (rewrite hpcN0; clia).
+      assert (hpN1 : sN1.(pc) <> 0) by (rewrite hpcN1; clia).
+      assert (hpN2 : sN2.(pc) <> 0) by (rewrite hpcN2; clia).
+      assert (hpN3 : sN3.(pc) <> 0) by (rewrite hpcN3; clia).
+      assert (hpP1 : sP1.(pc) <> 0) by (rewrite hpcP1; clia).
+      assert (hpQ1 : sQ1.(pc) <> 0) by (rewrite hpcQ1; clia).
+      assert (hpP2 : sP2.(pc) <> 0) by (rewrite hpcP2; clia).
+      assert (hpQ2 : sQ2.(pc) <> 0) by (rewrite hpcQ2; clia).
+      assert (hpP3 : sP3.(pc) <> 0) by (rewrite hpcP3; clia).
+      assert (hpQ3 : sQ3.(pc) <> 0) by (rewrite hpcQ3; clia).
+      assert (hpP4 : sP4.(pc) <> 0) by (rewrite hpcP4; clia).
+      assert (hpN4 : sN4.(pc) <> 0) by (rewrite hpcN4; clia).
+      assert (hrunF : runUntil 0 ((4 + 14) + (6 + 13)) s = sF).
+      { rewrite (runUntil_add (4 + 14) (6 + 13)), (runUntil_add 4 14), hrun4, hrunT,
+                (runUntil_add 6 13), hrun6.
+        rewrite (runUntil_S 12 sM3 hpM3), hu7, (runUntil_S 11 sN0 hpN0), hu8,
+                (runUntil_S 10 sN1 hpN1), hu9, (runUntil_S 9 sN2 hpN2), hu10,
+                (runUntil_S 8 sN3 hpN3), hu11.
+        fold sP1.
+        rewrite (runUntil_S 7 sP1 hpP1), hu12, (runUntil_S 6 sQ1 hpQ1), hu13.
+        fold sP2.
+        rewrite (runUntil_S 5 sP2 hpP2), hu14, (runUntil_S 4 sQ2 hpQ2), hu15.
+        fold sP3.
+        rewrite (runUntil_S 3 sP3 hpP3), hu16, (runUntil_S 2 sQ3 hpQ3), hu17.
+        fold sP4.
+        rewrite (runUntil_S 1 sP4 hpP4), hu18, (runUntil_S 0 sN4 hpN4), hu19.
+        reflexivity. }
+      (* the final memory, pointwise *)
+      assert (hmemFx : forall x, sF.(mem) x
+                = if x =? A + 3 then (V / 2 ^ 24) mod 256
+                  else if x =? A + 2 then (V / 2 ^ 16) mod 256
+                  else if x =? A + 1 then (V / 2 ^ 8) mod 256
+                  else if x =? A then V mod 256
+                  else s.(mem) x).
+      { intros x.
+        unfold sF. rewrite setPc_mem. unfold sN4. rewrite setPc_mem, rset_mem.
+        unfold sP4. rewrite setPc_mem, storeByte_mem. cbv beta.
+        destruct (x =? A + 3); [reflexivity|].
+        unfold sQ3. rewrite setPc_mem, rset_mem.
+        unfold sP3. rewrite setPc_mem, storeByte_mem. cbv beta.
+        destruct (x =? A + 2); [reflexivity|].
+        unfold sQ2. rewrite setPc_mem, rset_mem.
+        unfold sP2. rewrite setPc_mem, storeByte_mem. cbv beta.
+        destruct (x =? A + 1); [reflexivity|].
+        unfold sQ1. rewrite setPc_mem, rset_mem.
+        unfold sP1. rewrite setPc_mem, storeByte_mem. cbv beta.
+        destruct (x =? A); [reflexivity|].
+        exact (f_equal (fun mm => mm x) hmemN3). }
+      assert (hA_eq : A = 2147485184 + Z.of_nat (length emitted)) by reflexivity.
+      assert (hframe_out : forall x, x < A \/ A + 4 <= x -> sF.(mem) x = s.(mem) x).
+      { intros x hx. rewrite (hmemFx x).
+        replace (x =? A + 3) with false by (symmetry; apply Z.eqb_neq; clia).
+        replace (x =? A + 2) with false by (symmetry; apply Z.eqb_neq; clia).
+        replace (x =? A + 1) with false by (symmetry; apply Z.eqb_neq; clia).
+        replace (x =? A) with false by (symmetry; apply Z.eqb_neq; clia).
+        reflexivity. }
+      set (off := (Z.of_nat p - S4) mod 2 ^ 32) in *.
+      assert (hoffr : 0 <= off < 2 ^ 32) by (apply Z.mod_pos_bound; clia).
+      assert (hVoff : forall sh, sh = 0 \/ sh = 8 \/ sh = 16 \/ sh = 24 ->
+                (V / 2 ^ sh) mod 256 = (off / 2 ^ sh) mod 256).
+      { intros sh hsh. unfold V, wsub, wrap, w64, off.
+        apply (off_byte_agree (Z.of_nat p - S4) sh hsh). }
+      assert (hOB : offBytes p (length emitted)
+               = (Z.to_nat (off mod 256) :: Z.to_nat (off / 2 ^ 8 mod 256)
+                  :: Z.to_nat (off / 2 ^ 16 mod 256) :: Z.to_nat (off / 2 ^ 24 mod 256)
+                  :: nil)).
+      { unfold offBytes, off, S4. reflexivity. }
+      clearbody V off.
+      exists ((4 + 14) + (6 + 13))%nat. left.
+      exists rest''. exists (emitted ++ offBytes p (length emitted)).
+      rewrite hrunF.
+      assert (hlen2 : length (emitted ++ offBytes p (length emitted))
+                      = (length emitted + 4)%nat)
+        by (rewrite length_app, offBytes_len; clia).
+      assert (hothF : forall i, i <> 0 -> i <> 5 -> i <> 6 -> i <> 7 -> i <> 28 ->
+                i <> 29 -> i <> 30 -> rget sF i = rget s i).
+      { intros i h0 h5 h6 h7 h28 h29 h30.
+        unfold sF. rewrite setPc_rget.
+        unfold sN4. rewrite setPc_rget, (rset_rget sP4 6 _ i ltac:(clia) h0).
+        replace (i =? 6) with false by (symmetry; apply Z.eqb_neq; exact h6).
+        unfold sP4. rewrite setPc_rget, storeByte_rget.
+        unfold sQ3. rewrite setPc_rget, (rset_rget sP3 29 _ i ltac:(clia) h0).
+        replace (i =? 29) with false by (symmetry; apply Z.eqb_neq; exact h29).
+        unfold sP3. rewrite setPc_rget, storeByte_rget.
+        unfold sQ2. rewrite setPc_rget, (rset_rget sP2 29 _ i ltac:(clia) h0).
+        replace (i =? 29) with false by (symmetry; apply Z.eqb_neq; exact h29).
+        unfold sP2. rewrite setPc_rget, storeByte_rget.
+        unfold sQ1. rewrite setPc_rget, (rset_rget sP1 29 _ i ltac:(clia) h0).
+        replace (i =? 29) with false by (symmetry; apply Z.eqb_neq; exact h29).
+        unfold sP1. rewrite setPc_rget, storeByte_rget.
+        unfold sN3. rewrite setPc_rget, (rset_rget sN2 28 _ i ltac:(clia) h0).
+        replace (i =? 28) with false by (symmetry; apply Z.eqb_neq; exact h28).
+        unfold sN2. rewrite setPc_rget, (rset_rget sN1 29 _ i ltac:(clia) h0).
+        replace (i =? 29) with false by (symmetry; apply Z.eqb_neq; exact h29).
+        unfold sN1. rewrite setPc_rget, (rset_rget sN0 30 _ i ltac:(clia) h0).
+        replace (i =? 30) with false by (symmetry; apply Z.eqb_neq; exact h30).
+        unfold sN0. rewrite setPc_rget.
+        exact (hothM i h0 h5 h7 h28 h29). }
+      split; [exact hbnd1| split; [exact hbnd2|]].
+      assert (hsufx2 : skipn (S idx1) inp = rest'').
+      { replace (S idx1) with (1 + idx1)%nat by clia.
+        rewrite <- skipn_skipn, hsufx. reflexivity. }
+      refine {| p2_wf := hwf; p2_at_loop := _; p2_code := _; p2_a0 := _; p2_a1 := _;
+                p2_a2 := _; p2_a3 := _; p2_a4 := _; p2_ra := _; p2_in_mem := _;
+                p2_idx := _; p2_suffix := _; p2_outidx := _; p2_out_mem := _;
+                p2_tbl := _; p2_m_le := hmle; p2_lab_le := hlable;
+                p2_scan_inp := hscaninp; p2_scan_ok := _; p2_spec := _ |}.
+      * apply setPc_pc.
+      * apply (CodeLoaded1_eqmem sN4); [reflexivity| exact hcN4].
+      * rewrite (hothF 10 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)); exact ha0.
+      * rewrite (hothF 11 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)); exact ha1.
+      * rewrite (hothF 12 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)); exact ha2.
+      * rewrite (hothF 13 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)); exact ha3.
+      * rewrite (hothF 14 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)); exact ha4.
+      * rewrite (hothF 1 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)); exact hra.
+      * (* input intact: all 4 stores land in the out region *)
+        intros j hj. rewrite hframe_out;
+          [exact (hinm j hj)| left; unfold Image1.inputAddr in *; clia].
+      * (* t0 *)
+        assert (hr5F : rget sF 5 = Z.of_nat idx1 + 1).
+        { unfold sF. rewrite setPc_rget.
+          unfold sN4. rewrite setPc_rget, (rset_rget sP4 6 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 6) with false by reflexivity.
+          unfold sP4. rewrite setPc_rget, storeByte_rget.
+          unfold sQ3. rewrite setPc_rget, (rset_rget sP3 29 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 29) with false by reflexivity.
+          unfold sP3. rewrite setPc_rget, storeByte_rget.
+          unfold sQ2. rewrite setPc_rget, (rset_rget sP2 29 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 29) with false by reflexivity.
+          unfold sP2. rewrite setPc_rget, storeByte_rget.
+          unfold sQ1. rewrite setPc_rget, (rset_rget sP1 29 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 29) with false by reflexivity.
+          unfold sP1. rewrite setPc_rget, storeByte_rget.
+          unfold sN3. rewrite setPc_rget, (rset_rget sN2 28 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 28) with false by reflexivity.
+          unfold sN2. rewrite setPc_rget, (rset_rget sN1 29 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 29) with false by reflexivity.
+          unfold sN1. rewrite setPc_rget, (rset_rget sN0 30 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 30) with false by reflexivity.
+          unfold sN0. rewrite setPc_rget.
+          unfold sM3. rewrite setPc_rget, (rset_rget sM2 29 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 29) with false by reflexivity.
+          unfold sM2. rewrite setPc_rget, (rset_rget sM1 28 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 28) with false by reflexivity.
+          unfold sM1. rewrite setPc_rget, (rset_rget sR3 28 _ 5 ltac:(clia) ltac:(clia)).
+          replace (5 =? 28) with false by reflexivity.
+          unfold sR3. rewrite setPc_rget, (rset_rget sR2 5 _ 5 ltac:(clia) ltac:(clia)),
+            Z.eqb_refl. reflexivity. }
+        rewrite hr5F. unfold idx1. simpl length in *. clia.
+      * replace (length inp - length rest'')%nat with (S idx1)
+          by (unfold idx1; simpl length in *; clia).
+        exact hsufx2.
+      * (* t1 = |emitted| + 4 *)
+        assert (hr6F : rget sF 6 = S4).
+        { unfold sF. rewrite setPc_rget.
+          unfold sN4. rewrite setPc_rget, (rset_rget sP4 6 _ 6 ltac:(clia) ltac:(clia)),
+            Z.eqb_refl. reflexivity. }
+        rewrite hr6F, hlen2. unfold S4. clia.
+      * (* out region: the 4 offset bytes *)
+        unfold Image1.outAddr.
+        rewrite hlen2.
+        replace (length emitted + 4)%nat
+          with (S (S (S (S (length emitted))))) by clia.
+        rewrite !readMem_snoc.
+        rewrite (readMem_frame (length emitted) s.(mem) sF.(mem) 2147485184
+          ltac:(intros a ha; apply hframe_out; clia)).
+        rewrite houtmem, hOB.
+        replace (2147485184 + Z.of_nat (length emitted)) with A by (unfold A; clia).
+        replace (2147485184 + Z.of_nat (S (length emitted))) with (A + 1)
+          by (unfold A; clia).
+        replace (2147485184 + Z.of_nat (S (S (length emitted)))) with (A + 2)
+          by (unfold A; clia).
+        replace (2147485184 + Z.of_nat (S (S (S (length emitted))))) with (A + 3)
+          by (unfold A; clia).
+        rewrite (hmemFx A), (hmemFx (A + 1)), (hmemFx (A + 2)), (hmemFx (A + 3)).
+        replace (A =? A + 3) with false by (symmetry; apply Z.eqb_neq; clia).
+        replace (A =? A + 2) with false by (symmetry; apply Z.eqb_neq; clia).
+        replace (A =? A + 1) with false by (symmetry; apply Z.eqb_neq; clia).
+        replace (A + 1 =? A + 3) with false by (symmetry; apply Z.eqb_neq; clia).
+        replace (A + 1 =? A + 2) with false by (symmetry; apply Z.eqb_neq; clia).
+        replace (A + 2 =? A + 3) with false by (symmetry; apply Z.eqb_neq; clia).
+        rewrite !Z.eqb_refl.
+        assert (hV0 := hVoff 0 ltac:(clia)).
+        change (2 ^ 0) with 1 in hV0. rewrite !Z.div_1_r in hV0.
+        rewrite hV0, (hVoff 8 ltac:(clia)),
+                (hVoff 16 ltac:(clia)), (hVoff 24 ltac:(clia)).
+        rewrite <- !app_assoc. reflexivity.
+      * (* table intact: all 4 stores are below lblAddr *)
+        intros c0 hc0 k0 hk0.
+        rewrite hframe_out;
+          [exact (htbl c0 hc0 k0 hk0)|
+           right; unfold Image1.lblAddr in *; clia].
+      * (* residual scan *)
+        rewrite hlen2. exact hscanP.
+      * (* emit telescope through the 4 offset bytes *)
+        assert (hE : emit1 High1 labF (length emitted) (zin (37 :: l :: rest''))
+                     = appOut (offBytes p (length emitted))
+                         (emit1 High1 labF (length emitted + 4) (zin rest''))).
+        { change (zin (37 :: l :: rest'')) with (37%nat :: zin (l :: rest'')).
+          rewrite emit1_pct.
+          change (zin (l :: rest'')) with (l' :: zin rest'').
+          rewrite emit1_pct_cons, Elab. reflexivity. }
+        rewrite hspec, hE. unfold appOut. cbn [fst snd].
+        rewrite hlen2, app_assoc. reflexivity.
+    + (* undefined label -> Undef exit (700) *)
+      assert (hslt : sltb (rget sM3 29) (rget sM3 0) = true).
+      { rewrite hr29M3, rget_zero. exact encodeSlot_none_neg. }
+      assert (hu7 : step sM3 = setPc sM3 (2147483792 + 700)).
+      { rewrite (step1_blt sM3 548 29 0 152 hcM3 ltac:(clia)
+          ltac:(rewrite coreBytes1_len; clia) hpcM3 ltac:(vm_compute; reflexivity)), hslt.
+        cbn match. rewrite hpcM3, (wadd_id (2147483792 + 548) 152 ltac:(clia)).
+        f_equal; clia. }
+      set (sX := setPc sM3 (2147483792 + 700)) in *.
+      assert (hmemX : sX.(mem) = s.(mem)) by (unfold sX; rewrite setPc_mem; exact hmemM3).
+      assert (hcodeX : CodeLoaded1 sX)
+        by (apply (CodeLoaded1_eqmem s); [exact hmemX| exact hcode]).
+      assert (hpcX : sX.(pc) = Image1.coreAddr + 700)
+        by (unfold Image1.coreAddr; reflexivity).
+      assert (hraX : rget sX 1 = 0).
+      { unfold sX. rewrite setPc_rget.
+        rewrite (hothM 1 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)).
+        exact hra. }
+      assert (h6X : rget sX 6 = Z.of_nat (length emitted)).
+      { unfold sX. rewrite setPc_rget.
+        rewrite (hothM 6 ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia) ltac:(clia)).
+        exact houtidx. }
+      assert (hemit : emit1 High1 labF 0 (zin inp) = (emitted, Undef1)).
+      { assert (hE : emit1 High1 labF (length emitted) (zin (37 :: l :: rest''))
+                     = ([], Undef1)).
+        { change (zin (37 :: l :: rest'')) with (37%nat :: zin (l :: rest'')).
+          rewrite emit1_pct.
+          change (zin (l :: rest'')) with (l' :: zin rest'').
+          rewrite emit1_pct_cons, Elab. reflexivity. }
+        rewrite hspec, hE. cbn [fst snd]. rewrite app_nil_r. reflexivity. }
+      destruct (p2_undef_exit inp cap labF m emitted sX hpcX hcodeX hraX h6X
+                  ltac:(clia) ltac:(rewrite hmemX; exact houtmem) hscaninp hmle hemit)
+        as (f & hrunE & hres).
+      exists ((4 + 14) + (6 + (1 + 3)))%nat. right.
+      split; [simpl length; clia|].
+      rewrite (runUntil_add (4 + 14) (6 + (1 + 3))), (runUntil_add 4 14), hrun4, hrunT,
+              (runUntil_add 6 (1 + 3)), hrun6,
+              (runUntil_add 1 3), (runUntil_one sM3 hpM3), hu7.
+      fold sX. rewrite hrunE. exact hres.
+Qed.

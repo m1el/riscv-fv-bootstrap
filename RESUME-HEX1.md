@@ -1,5 +1,52 @@
 # RESUME — hex1 campaign handoff (written 2026-06-04, pre context-clear)
 
+## UPDATE 2026-06-06: Refine1.v through p2_ref; ROADMAP to the finish
+
+State: coq/Refine1.v chunks 1-14 done — PASS 1 complete (pass1_correct),
+pass 2 complete through p2_ref (all six iteration lemmas: spacing,
+comment, labelDef, byte, ref + the exits). p2_ref (chunk 14) landed only
+after a full memory-blowup investigation: bare `lia` in a proof carrying
+the 19-state `set` chain costs 10-100s and up to GBs PER CALL (OOM at the
+16 GiB coqc cap); `.lia.cache` hits mask it on warm recompiles while the
+cache grows to 100s of MB. Fix: `Ltac clia` (defined in Refine1.v just
+before p2_ref) — clears every State-related hypothesis, unfolds the
+Image1 address constants, then lia. p2_ref = 171s/1.0 GB cold with clia.
+USE clia FOR EVERY lia SITE in chain-heavy proofs from here on.
+Full notes: REFINE1.md gotcha list + coq-equations-gotchas memory trap 6.
+
+Remaining roadmap, in order:
+
+1. **p2_eof** — bgeu taken at 368 with rest = [] -> Ok exit 628 via the
+   already-proved p2_ok_exit (a0=0, a1=t1=|emitted|; telescope collapses
+   via emit1 [] = ([], Ok1)). Mirror p1_eof.
+2. **p2_iteration** — per-token dispatch over the six pass-2 iteration
+   lemmas, mirroring p1_iteration's case split on the head character
+   (isComment / isSpace / 58 / 37 / hex-byte / other classes; the
+   scan_ok residual rules out tokens pass 1 would have rejected).
+3. **pass2_correct** — strong induction on |rest| from P2Inv, verbatim
+   mirror of pass1_correct. Conclusion: Result1 within 50*|rest|+1
+   steps. PASS 2 DONE here.
+4. **emit1_props / coreSpec1_props** — joint scan/emit walk: emitted
+   bytes < 256 (byte case hi*16+lo via nibble bounds; offBytes entries
+   <256 by construction %256), |emitted| <= m monotone. Port Lean
+   chunk 17 / hex0 decodeS_bytes_lt idiom.
+5. **observe1 + core1_refines** — glue: init_phase (772 steps, done) ->
+   p1_entry (done) -> pass1_correct -> p2_entry -> pass2_correct; fixed
+   fuel 100000 + runUntil_stab; fuel arithmetic 772 + 2*50*|inp| + slack
+   <= 100000 with |inp| <= 668; convert Result1 to observe1 = coreSpec1
+   tuple equality mirroring hex0 core_refines (coq/Refine.v). THE
+   CAMPAIGN TARGET.
+6. **TCB.md hex1 section** — ld/sd/sub/srli now cross-checked vs
+   riscv-coq; trusted residue: shell1.s, gen_image1.py/gen_decode1.py
+   extraction, QEMU/HW gap; Coq certification needs no native compiler.
+7. **Cleanup** — rm coq/Oom*.v (scratch from the lia investigation),
+   keep coq/.lia.cache small (delete if it ever balloons), REFINE1.md
+   frontier notes, memory update.
+
+Caveat for items 3 and 5: those proofs re-enter heavy-context territory
+(P2Inv/Result1 destructuring + long runUntil compositions) — write every
+arithmetic discharge as clia from the start.
+
 ## UPDATE 2026-06-04 (later session): Coq side largely DONE
 
 Committed and green (`make -j6` in coq/ passes):
