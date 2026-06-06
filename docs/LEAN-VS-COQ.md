@@ -1,7 +1,7 @@
 # Lean vs Coq: implementation difficulty, measured from agent sessions
 
 A comparison of how hard the same refinement proofs were to build in Lean 4 vs
-Coq 8.20, based on the recorded agent sessions in [`sessions/`](sessions/README.md)
+Coq 8.20, based on the recorded agent sessions in [`sessions/`](../sessions/README.md)
 (token costs, timing splits, transcripts) cross-referenced with git-commit
 timestamps. Both campaign targets — hex0 `core_refines` and hex1
 `core1_refines` — were proved in **both** systems.
