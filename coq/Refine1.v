@@ -7660,3 +7660,58 @@ Proof.
         rewrite runUntil_add. exact hres2.
       * exists k1. split; [simpl length in *; lia| exact hres].
 Qed.
+
+(** ** The general refinement theorem (campaign target). *)
+
+Theorem core1_refines : forall (inp : list Z) (cap : Z),
+  WellFormed1 inp cap ->
+  runOn1 inp cap = specOn1 (zin inp) (Z.to_nat cap).
+Proof.
+  intros inp cap hwf.
+  assert (hlen : (length inp <= 668)%nat).
+  { pose proof (in_fits1 _ _ hwf) as h.
+    unfold Image1.inputAddr, Image1.outAddr in h. lia. }
+  set (s0 := mkInit1 (Z.of_nat (length inp)) cap
+               (memWith1 inp Image1.inputAddr)) in *.
+  (* any halted Result1 within the fixed fuel gives the tuple equality *)
+  assert (hconv : forall n, (n <= 100000)%nat ->
+            Result1 (runUntil 0 n s0) inp cap ->
+            runOn1 inp cap = specOn1 (zin inp) (Z.to_nat cap)).
+  { intros n hn hres.
+    assert (hhalt : runUntil 0 100000 s0 = runUntil 0 n s0)
+      by (apply (runUntil_stab _ _ (Result1_pc _ _ _ hres)); exact hn).
+    unfold runOn1. fold s0. rewrite hhalt.
+    unfold specOn1. unfold Result1 in hres.
+    destruct (coreSpec1 (zin inp) (Z.to_nat cap)) as [[st bs] ln].
+    destruct hres as [hp [h10 [h11 hmem]]].
+    rewrite h10, h11, Nat2Z.id, hmem. reflexivity. }
+  destruct (init_phase inp cap hwf) as (s1 & hrun1 & hpe).
+  fold s0 in hrun1.
+  destruct (p1_entry inp cap s1 hwf hpe) as (s2 & hrun2 & hinv1).
+  destruct (pass1_correct (length inp) inp cap inp noLabels 0 s2
+              (le_n _) hinv1)
+    as (k1 & hk1 & [hres | (labF & m & hp2s)]).
+  - (* pass-1 error exit *)
+    apply (hconv (772 + (2 + k1))%nat);
+      [apply Nat2Z.inj_le;
+       replace (Z.of_nat 100000) with 100000%Z by (vm_compute; reflexivity);
+       lia|].
+    rewrite (runUntil_add 772 (2 + k1)), hrun1,
+            (runUntil_add 2 k1), hrun2.
+    exact hres.
+  - (* pass 2 *)
+    destruct (p2_entry inp cap labF m (runUntil 0 k1 s2) hp2s)
+      as (s3 & hrun3 & hinv2).
+    destruct (pass2_correct (length inp) inp cap inp labF noLabels m [] s3
+                (le_n _) hinv2)
+      as (k2 & hk2 & hres).
+    apply (hconv (772 + (2 + (k1 + (2 + k2))))%nat);
+      [apply Nat2Z.inj_le;
+       replace (Z.of_nat 100000) with 100000%Z by (vm_compute; reflexivity);
+       lia|].
+    rewrite (runUntil_add 772 (2 + (k1 + (2 + k2)))), hrun1,
+            (runUntil_add 2 (k1 + (2 + k2))), hrun2,
+            (runUntil_add k1 (2 + k2)),
+            (runUntil_add 2 k2), hrun3.
+    exact hres.
+Qed.
