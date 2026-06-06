@@ -1,6 +1,6 @@
 # Refine1 — plan and progress for `core1_refines` (hex1 general refinement)
 
-## COQ PORT (coq/Refine1.v) — IN PROGRESS (2026-06-04)
+## COQ PORT (coq/Refine1.v) — DONE (2026-06-06): core1_refines PROVED
 
 Chunk-by-chunk port of the (COMPLETE) Lean proof below, in hex0's
 coq/Refine.v idiom (Z model; step lemmas via `ltac:(vm_compute;
@@ -47,11 +47,18 @@ fuel + runUntil_stab at the end). DONE so far (each committed):
   blowup investigation -- see the clia gotcha below; p2_ref compiles
   171s/1.0GB with clia vs OOM-at-16GiB with bare lia.
 
-NEXT: p2_eof (bgeu taken at 368 -> Ok exit 628 via p2_ok_exit),
-p2_iteration dispatch + pass2_correct (mirror pass1_correct induction),
-then init_phase glue + core1_refines (fixed fuel + runUntil_stab),
-TCB.md hex1 section.  Use clia (see gotcha below) for any lia inside
-chain-heavy proofs.
+- chunk 15: p2_eof (bgeu at 368 -> p2_ok_exit; scan_ok on [] pins
+  labF/m), p2_iteration (six-way dispatch; invalid char vacuous by
+  scan_ok), pass2_correct (50*|rest|+4). PASS 2 DONE.
+- chunk 16: core1_refines -- init_phase + p1_entry + pass1_correct +
+  p2_entry + pass2_correct, runUntil_stab over fixed fuel 100000,
+  |inp| <= 668; fuel bound via Nat2Z.inj_le + vm_compute (nat-lia and
+  the abstracted 100000 literal -- hex0 idiom). Print Assumptions =>
+  functional_extensionality_dep ONLY. THE CAMPAIGN TARGET IS PROVED
+  IN BOTH SYSTEMS. Whole-file build: 914s/2.8GB cold-cache,
+  ~265s/5.2GB warm (the warm .lia.cache is unmarshaled into the heap:
+  +4GB memory floor; the cache regrows to ~330MB from chunks 1-13's
+  bare lia -- harmless, documented).
 
 Coq-port gotchas (beyond the Lean list at the bottom):
 - NEVER leave `_` holes in `rewrite (lemma _ _ ltac:(lia))` — evars make
@@ -97,16 +104,6 @@ Coq-port gotchas (beyond the Lean list at the bottom):
   eauto pass (0.7s). Goal-position `simp scan1` is fine.
   Bonus: `destruct (cond) eqn:E` DOES substitute+reduce cond inside
   hypotheses too, so no `rewrite E in heq` is needed after it.
-
-NEXT (mirroring the Lean chunk order below): comment iteration
-(bgeu_eq_taken port at 332..356 / scan1 comment unfolds / comment_read1/
-comment_loop1 / P2Start / p1_comment), then labelDef (264..300, needs
-loadWord_slot/storeWord_slot + error_result1/corePc_ne_zero), ref
-(304..328 + scan1_pos_le/short_result1), byte path (108..260), p1_eof +
-pass1_correct, pass 2 (P2Inv, ~7 iteration lemmas + offBytes value
-lemmas — in Z these are MUCH lighter than the Lean BitVec versions),
-pass2_correct, conversion + core1_refines (mirror hex0 core_refines:
-fuel bound 772 + 50*|inp|·2 + slack <= 100000, |inp| <= 668).
 
 Target theorem (lean/Hex1/Refine.lean):
 ```

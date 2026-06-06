@@ -1,6 +1,15 @@
 # RESUME — hex1 campaign handoff (written 2026-06-04, pre context-clear)
 
-## UPDATE 2026-06-06: Refine1.v through p2_ref; ROADMAP to the finish
+## UPDATE 2026-06-06 (later): CAMPAIGN COMPLETE — core1_refines PROVED IN COQ
+
+All roadmap items below are DONE (commits c79c220 chunk 14 p2_ref+clia,
+859f034 chunk 15 pass2_correct, 922dd13 chunk 16 core1_refines; TCB.md
+hex1 section updated; Oom*.v scratch deleted). Print Assumptions
+core1_refines => functional_extensionality_dep only. hex1 now matches
+hex0: spec+grammar+certification+general refinement in BOTH Lean and
+Coq. Remaining hex1 work: none.
+
+## UPDATE 2026-06-06 (earlier): Refine1.v through p2_ref; the roadmap that was followed
 
 State: coq/Refine1.v chunks 1-14 done — PASS 1 complete (pass1_correct),
 pass 2 complete through p2_ref (all six iteration lemmas: spacing,

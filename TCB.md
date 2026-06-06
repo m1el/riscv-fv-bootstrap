@@ -107,11 +107,15 @@ hex1 = hex0 + label definitions (`:c`) / i32 little-endian relative references
   ≅ HEX1.md's BNF (`lean/Hex1/Grammar.lean`: lexer sound+complete ⇒ grammar
   total + deterministic), and the Coq `Grammar1.v` mirrors those theorems
   (`functional_extensionality_dep` only).
-- **General refinement (Lean)** — `core1_refines : ∀ inp cap, WellFormed1 inp
-  cap → ∃ fuel, observe1 inp cap fuel = coreSpec1 inp cap`
-  (`lean/Hex1/Refine.lean`, sorry-free, no `native_decide`): all three loops
+- **General refinement, BOTH systems** — Lean: `core1_refines : ∀ inp cap,
+  WellFormed1 inp cap → ∃ fuel, observe1 inp cap fuel = coreSpec1 inp cap`
+  (`lean/Hex1/Refine.lean`, sorry-free, no `native_decide`). Coq:
+  `core1_refines : forall inp cap, WellFormed1 inp cap -> runOn1 inp cap =
+  specOn1 (zin inp) (Z.to_nat cap)` (`coq/Refine1.v`, fixed fuel 100000 +
+  `runUntil_stab`; `Print Assumptions` ⇒ `functional_extensionality_dep`
+  only, the same footprint as hex0's `core_refines`). All three loops
   (init / pass 1 / pass 2), the label table region, and the i32 offset-byte
-  arithmetic are kernel-checked.
+  arithmetic are kernel-checked in both.
 - **Concrete certification, both systems** — the deployed `core1` bytes
   (724-byte image, `bare/hex1.elf`) compute `coreSpec1` on the embedded
   267-byte input (exact output value pinned to the QEMU log) and a 27-case
@@ -125,18 +129,15 @@ hex1 = hex0 + label definitions (`:c`) / i32 little-endian relative references
 
 ## Trusted (IN the TCB) — deltas vs hex0
 
-1. **The Coq general refinement is not yet ported.** `Refine1.v`
-   (`core1_refines` in Coq) is pending; until it lands, the ∀-inputs theorem
-   for hex1 rests on the Lean kernel alone (hex0 has it in both systems).
-2. **The trusted I/O shell** is `bare/shell1.s` (a0..a4 convention: adds
+1. **The trusted I/O shell** is `bare/shell1.s` (a0..a4 convention: adds
    a4 = label-table scratch pointer; must point at 2048 writable bytes
    disjoint from code/input/output).
-3. **Extraction**: `tools/gen_image1.py` (and `tools/gen_decode1.py` for the
+2. **Extraction**: `tools/gen_image1.py` (and `tools/gen_decode1.py` for the
    Lean DecodeFacts) faithfully transcribe `bare/hex1.elf` into
    `Image1.{v,lean}`/`Hex1/DecodeFacts.lean`.
-4. **The grammar transcription gap**: `Hex1/Grammar.lean`'s inductive grammar
+3. **The grammar transcription gap**: `Hex1/Grammar.lean`'s inductive grammar
    vs HEX1.md's prose BNF — same eyeball-auditable human-reading gap as hex0
    item 7.
-5. Items 3–6 of the hex0 list (QEMU image load, assembler/linker, proof
+4. Items 3–6 of the hex0 list (QEMU image load, assembler/linker, proof
    kernels incl. the Lean-`native_decide`-vs-Coq-`vm_compute` contrast,
    `pc = 0` halt convention) carry over unchanged.
