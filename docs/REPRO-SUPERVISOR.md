@@ -108,6 +108,12 @@ the next session.
   them), commits, LOC delta, gate results, steering level (§5). Poll the
   OpenRouter usage API for $ spend. This is what makes the final
   cost/capability comparison against `sessions/` (Claude) meaningful.
+- **Per-runner API keys** (lesson from the A/B/C phase, 2026-06-07): provision
+  a separate OpenRouter key per arm/runner so `usage` is attributable per
+  runner directly from the billing API. One shared key forces attribution by
+  token-count arithmetic, and harnesses that don't report tokens (opencode)
+  become estimate-by-subtraction. Keys are free to create; do this at arm
+  setup time, one key per `codex-home-*` / runner config.
 - **Safety nets**: `git bundle` of `work/` into `runs/backups/` after every
   session (agent `rm -rf` / force-push can't lose the campaign);
   `docker update --memory 64g --memory-swap 64g hex0-repro` (Lean/Coq proof
@@ -153,8 +159,9 @@ and interesting experimental result, not a failure of supervision.
   supervisor audit of the main theorem statement confirms it says what SPEC.txt
   §B3 demands (universally quantified, actual bytes, right contract) with a
   clean axiom report.
-- **Budget**: ask the user for a $ cap on the OpenRouter key; track in the
-  ledger. Pause the loop at 80%.
+- **Budget**: user-set cap **$80 `usage_daily`** (set 2026-06-06, three-arm
+  A/B/C phase; burn observed ≈$12/h with all arms live). Warn at $72, hard
+  stop all arms at $80 and report.
 - **Stuck**: 3 consecutive supervisor reviews (≈15 sessions) without gate
   progress → report to user with the obstacle analysis; decide jointly
   whether to spend an L2 hint or call it.
@@ -168,5 +175,30 @@ and interesting experimental result, not a failure of supervision.
 - 2026-06-06: harness live; session 01 produced a committed, smoke-tested
   bare-metal RV64 decoder (`hex0.S`, `rv64imac`!) in ~30 min unsteered, then
   started `hex0_proof/` (Spec.lean, Machine.lean) and hit its first Lean
-  termination-proof obstacle on the comment-skip recursion. §4 automation not
-  yet built; sessions driven manually. Steering so far: none (L0 prompt only).
+  termination-proof obstacle on the comment-skip recursion.
+- 2026-06-07 ~03:40 UTC: **night-1 wind-down at the $80 cap** (total $78.3,
+  ~10h wall, three arms in parallel from ~22:20). All sessions killed, all
+  workspaces snapshotted to `runs/backups/*-final-night1.tgz`. Standings:
+  - **Arm A** (codex/original, 5 sessions, ~12.5M tok): 11 work commits;
+    deepest proof stack (119 fetch lemmas, disjointness frame, step engine,
+    `init_block` keystone lemmas; **2 sorries**: `init_block`, `hex0_correct`).
+    Chronic: 6× checkout-as-undo, dirty-tree deaths, elaboration-timeout
+    loops; independently rediscovered non-let state form + frame lemmas.
+  - **Arm B** (codex/hardened, 4 sessions, ~5M+ tok): **22 work commits**, the
+    hardened prompt demonstrably fixed process (PLAN.md lemma tree, commit per
+    green build, surgical patches); model heavily differentially-validated
+    (J-imm, sign-ext, BLT/BGE signedness, SLLI/SRLI shamt, Array O(1) port,
+    64KB image padding); composition not started. One self-kill via broad
+    pkill (argv match).
+  - **Arm C** (opencode/original, 8 short sessions): 4 work commits;
+    parse_nibble 256-case verification + main-theorem scaffold; harness traits:
+    frequent tool-arg schema errors (write/edit/bash), subagent usage
+    (Explore/General), no token reporting. Discipline as poor as arm A
+    (commit droughts) — discipline is model-bound, not harness-bound.
+  - Convergence findings: all arms chose RV64 asm + step-lemma + invariant
+    architecture; all hit the elaboration-perf wall the original campaign
+    documented (whnf timeouts on deep state terms); none has B3 yet.
+  - Per-arm OpenRouter keys now provisioned (`hex0-arm-{a,b,c}`, $15 limits,
+    in `~/.or-keys.d/`), wired into runner configs for the next phase.
+  - To resume: relaunch sessions via `run-session{,-b,-c}.sh` (A: continue
+    init_block; B: composition per PLAN.md; C: clear `runs/c/STOP` first).
