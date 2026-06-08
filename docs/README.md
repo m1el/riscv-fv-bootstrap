@@ -24,6 +24,7 @@ New docs go in this directory; add a line for each new doc below.
 
 ## Experiments
 
+- [REPRO-FINDINGS.md](REPRO-FINDINGS.md) — results of the clean-room A/B/C reproduction: what ds4-pro reproduced (engineering) vs not (the universal theorem), and the two distinct structural walls.
 - [REPRO-SUPERVISOR.md](REPRO-SUPERVISOR.md) — supervisor handbook for the clean-room hex0 reproduction (codex + ds4-pro in docker): session loop, steering-integrity levels, acceptance gate, stop conditions.
 
 ## Analyses
