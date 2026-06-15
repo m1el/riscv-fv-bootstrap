@@ -40,6 +40,36 @@ def build_redactions():
         reds.append((re.compile(re.escape(home)), "/home/<user>"))
     elif user:
         reds.append((re.compile(re.escape(f"/home/{user}")), "/home/<user>"))
+    # API keys / bearer tokens. Output under sessions/ is meant to be publishable
+    # (pushed to a public repo with secret-scanning), but transcripts capture
+    # shell commands and configs that echo keys. Discover the exact key values
+    # from the local key stores and redact each literal; plus a generic OpenRouter
+    # pattern as a safety net for keys never stored locally (e.g. baked into a
+    # config.toml in the workspace).
+    keyvals = set()
+    kd = os.path.expanduser("~/.or-keys.d")
+    if os.path.isdir(kd):
+        for fn in os.listdir(kd):
+            try:
+                v = open(os.path.join(kd, fn)).read().strip()
+                if len(v) >= 16:
+                    keyvals.add(v)
+            except Exception:
+                pass
+    kf = os.path.expanduser("~/.or-keys")
+    if os.path.isfile(kf):
+        try:
+            for ln in open(kf):
+                if "=" in ln:
+                    v = ln.split("=", 1)[1].strip().strip('"').strip("'")
+                    if len(v) >= 16:
+                        keyvals.add(v)
+        except Exception:
+            pass
+    for v in sorted(keyvals, key=len, reverse=True):
+        reds.append((re.compile(re.escape(v)), "<redacted-key>"))
+    reds.append((re.compile(r"sk-or-v1-[A-Za-z0-9]+"), "<redacted-key>"))
+    reds.append((re.compile(r"sk-or-[A-Za-z0-9_-]{24,}"), "<redacted-key>"))
     return reds
 
 REDACTIONS = build_redactions()
