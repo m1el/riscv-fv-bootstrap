@@ -26,6 +26,7 @@ New docs go in this directory; add a line for each new doc below.
 
 - [REPRO-FINDINGS.md](REPRO-FINDINGS.md) — results of the clean-room A/B/C reproduction: what ds4-pro reproduced (engineering) vs not (the universal theorem), and the two distinct structural walls.
 - [REPRO-SUPERVISOR.md](REPRO-SUPERVISOR.md) — supervisor handbook for the clean-room hex0 reproduction (codex + ds4-pro in docker): session loop, steering-integrity levels, acceptance gate, stop conditions.
+- [REPRO-FOLLOWUP.md](REPRO-FOLLOWUP.md) — follow-on arms (2026-06): MiniMax M3 (newer frontier, clean-room) and deepseek-v4-pro **with the PREV_CTX head-start**. Key finding: the head-start gets ds4 to author the real theorem and *correctly plan its proof*, but it still can't execute it — the gap is **execution, not comprehension** (the elaboration-performance wall).
 
 ## Analyses
 
