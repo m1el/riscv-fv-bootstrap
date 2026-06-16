@@ -87,9 +87,6 @@ theorem acc_times_ten (acc : Word) : (acc <<< 3) + (acc <<< 1) = acc * 10 := by
 
     `strtoull10_correct` then runs the const/init prelude (straight-line, like strlen's)
     into the loop-entry state and reads off `accFold 0 (inp.takeWhile isDig) = strtoullSpec inp`. -/
-theorem strtoull10_correct (inp : List Byte) :
-    ∃ s, run (8 * inp.length + 32) Strtoull.strtoull10 (Strtoull.strtoull10State inp) = some s
-      ∧ s.rget 12 = Strtoull.strtoullSpec inp := by
-  sorry   -- wrapping-semantics proof; superseded by the conformant version (CtrlStrtoull2)
+-- (the real `strtoull10_correct` is proved in `CtrlStrtoull10Proof.lean`)
 
 end LowIR.Ctrl
