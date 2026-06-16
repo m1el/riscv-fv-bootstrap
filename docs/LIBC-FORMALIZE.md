@@ -225,10 +225,20 @@ trusted RV64I model:
   - `strlen_roundtrip` — every emitted instruction decodes back to itself.
   - `strlen_rv_abc/_hello/_empty` — compiled `strlen`, executed as bytes by `Rv64i.step`,
     returns 3 / 5 / 0. End-to-end: structured IL → RISC-V bytes → trusted machine.
-- **Next (stated in-file as T1/T2):** *T1* compiler forward-simulation (`compile_sim`,
-  proved once by structural induction — amortises the `Refine.lean` cost); *T2*
-  per-program functional correctness at the structured altitude (e.g. `strlen` for all
-  strings). `T1 ∘ T2` transports a structured-altitude proof down to the real bytes.
+- **T1 — compiler correctness (stated; proof deferred).** `lean/LowIR.lean` defines
+  the forward-simulation relation (`Layout`/`Installed`/`Agree`/`NoSelfModify`) and the
+  theorem `compile_sim`: `exec` of any program ⇒ the trusted machine runs the compiled
+  bytes to the fall-through PC in an agreeing state. Proof is `sorry` for now (sanctioned)
+  — once proved (by structural induction, *once*), it amortises the `Refine.lean` cost
+  for every program.
+- **T2 — `strlen` proved correct, sorry-free** (`lean/LowIR/StrlenProof.lean`):
+  `strlen_correct` shows `strlen` computes the first-NUL offset for **all** strings, by a
+  `while`-invariant + induction on the distance to the NUL — no PC, no decode, no offsets
+  (core Lean only: `simp`/`omega`/`bv_omega`/`decide`). This is the concrete demonstration
+  that program proofs are *easy* at the structured altitude. `T1 ∘ T2` will transport it to
+  the real RV64I bytes.
+- **In progress:** hex0 functional correctness at the IL level (`hex0` ≡ `coreSpec`), the
+  larger analogue of `strlen_correct` (two-state machine, comment-skip inner loop, capacity).
 
 ### Roadmap up the abstraction ladder (steps 3–4)
 
