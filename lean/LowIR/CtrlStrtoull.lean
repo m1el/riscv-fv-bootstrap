@@ -18,19 +18,19 @@ namespace LowIR.Ctrl.Strtoull
 open LowIR.Ctrl
 open Rv64i (Word Byte)
 
--- regs: s=10(arg) cursor=5 acc=12(result) c=7 digit=28 t1=29 t2=30 ; '0'=20 '9'=21 one=16
+-- regs: s=10(arg) cursor=5 acc=12(result) c=7 digit=28 t1=29 t2=30 ; '0'=20 ':'=22(58) one=16
 def lit (r v : Nat) : Stmt := .addi r 0 (BitVec.ofNat 12 v)
 
-/-- The digit loop, written as an infinite loop broken by `break-block`. -/
+/-- The digit loop, written as an infinite loop broken by `break-block`. Uses unsigned
+    (`geu`) comparisons for the digit check (c≥48 ? (c≥58 ? break : digit) : break). -/
 def strtoull10 : Stmt :=
   seqs
-    [ lit 20 48, lit 21 57, lit 16 1,
+    [ lit 20 48, lit 22 58, lit 16 1,
       .addi 12 0 0,                 -- acc := 0
       .addi 5 10 0,                 -- cursor := s
       .block (.while .lt 0 16 (seqs -- while (0 < 1)  ≡  while true
-        [ .lbu 7 5 0,                       -- c := mem[cursor]
-          .ife .lt 7 20 (.brkB 0) .skip,    -- c < '0'  → break the block (exits loop)
-          .ife .lt 21 7 (.brkB 0) .skip,    -- '9' < c  → break
+        [ .lbu 7 5 0,                                                  -- c := mem[cursor]
+          .ife .geu 7 20 (.ife .geu 7 22 (.brkB 0) .skip) (.brkB 0),   -- digit? else break
           .sub 28 7 20,                     -- digit := c - '0'
           .slli 29 12 3,                    -- t1 := acc << 3   (acc*8)
           .slli 30 12 1,                    -- t2 := acc << 1   (acc*2)
