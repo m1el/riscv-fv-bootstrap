@@ -100,3 +100,34 @@ grammar ..... lean/Hex0/Grammar.lean                   (HEX0.md BNF ⟺ decodeS:
 tools/ ...... gen_image.py (ELF bytes -> Image.{v,lean})
 TCB.md ...... the trusted base
 ```
+
+---
+
+# Status — LowIR control-flow IL (libc-formalize frontier)
+
+The active frontier: a structured near-assembly IL (`lean/LowIR/`) for proving libc
+functions and compiling them to RV64I. Design + survey in [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md);
+execution log in [PROGRESS.md](PROGRESS.md).
+
+| Item | Artifact | Strength |
+|---|---|---|
+| Structured IL + verified-compile to RV64I (16-instr surface) | `LowIR.lean` | model + executable, `native_decide` end-to-end |
+| `strlen_correct` (all strings) | `LowIR/StrlenProof.lean` | **proof-grade, sorry-free** |
+| hex0 ≡ `coreSpec` battery on real `Rv64i.step` | `LowIR/Hex0Prog.lean` | finite / testing-grade (`native_decide`) |
+| `compile_sim` (T1, compiler correctness) | `LowIR.lean` | **stated; proof deferred** (`sorry`, sanctioned) |
+| `hex0_correct` (IL ≡ `coreSpec`, original IL) | `LowIR/Hex0Proof.lean` | **stated + plan; deferred** (`sorry`) |
+| Control-flow IL `block`/`break`/`continue`/`ret` | `LowIR/Ctrl.lean` | model + `#guard` |
+| `strlen_correct` on control-flow IL | `LowIR/CtrlStrlen.lean` | **proof-grade, sorry-free** |
+| hex0 flat-`ret` cascade ≡ `coreSpec` (IL level) | `LowIR/CtrlHex0.lean` | finite / testing-grade (`native_decide`) |
+| strtoull base-10 ≡ reference (incl. 2⁶⁴ wraparound) | `LowIR/CtrlStrtoull.lean` | finite / testing-grade (`native_decide`) |
+| break/block/ret proof primitives | `LowIR/CtrlStrtoullProof.lean` | **proof-grade** (one-liners) |
+| `strtoull10_correct` (all inputs) | `LowIR/CtrlStrtoullProof.lean` | **stated + invariant; deferred** (`sorry`) |
+
+**Ergonomics finding:** the control-flow outcome machinery is nearly free in proofs
+(every `block`/`while`-break/`seq`-break/`ret` rule is a one-line `by simp [exec]`); it
+makes *programs* much cleaner (flat error cascades, real early-return), with no win for a
+single straight loop like strlen.
+
+**Open (this turn, in order):** (a) `strtoull10_correct` sorry-free · (b) label-based
+compiler for the control-flow constructs (Ctrl → bytes) · (c) re-prove hex0 on the flat
+structure.

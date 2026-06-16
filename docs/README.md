@@ -14,6 +14,7 @@ New docs go in this directory; add a line for each new doc below.
 - [REFINE1.md](REFINE1.md) — plan and progress for `core1_refines` (hex1 general refinement), including the Coq-port gotcha log (lia/OOM, `clia`, Equations traps).
 - [CROSSCHECK.md](CROSSCHECK.md) — task #7: cross-checking the ISA model against `riscv-coq` (decode + step agreement, transport corollary).
 - [TCB.md](TCB.md) — the Trusted Computing Base: what you must trust for the bare-metal bytes to implement the spec.
+- [PROGRESS.md](PROGRESS.md) — LowIR & libc-formalize execution log (reverse-chronological).
 - [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md) — exploration + plan for formalizing & verifying libc: survey of the `third-party/` substrate (CompCert, Frama-C, CakeML/Pancake, Tree Borrows, POSIX spec, fv-libc partition), the design space, and the recommended path.
 
 ## Status & handoffs
