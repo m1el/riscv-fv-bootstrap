@@ -8,7 +8,9 @@ Reverse-chronological execution log for the libc-formalization effort (design do
 Items, in order: (a) `strtoull10_correct` sorry-free · (b) label-based compiler so
 `LowIR.Ctrl` programs reach real RV64I bytes · (c) re-prove hex0 on the flat ret-cascade.
 
-- **(a) — pivoted + partly delivered.** The wrapping `strtoull10_correct` proof fought
+- **(a) — DONE.** `strtoull10_correct` proved sorry-free (`CtrlStrtoull10Proof.lean`): the IL
+  computes the leading-digit left-fold for all inputs (geu digit loop; body_digit/body_break/
+  digit_loop + prelude peel + block-catch). The geu/threshold foundation is reused. Earlier note: The wrapping `strtoull10_correct` proof fought
   signed (`slt`) comparisons under `bv_omega`, so it's scaffolded (`sorry`). Per the
   overflow discussion, built the **conformant `strtoull`** instead (`CtrlStrtoull2.lean`):
   C/POSIX overflow — saturate to ULLONG_MAX + `errno=ERANGE`, returned as `(x12,x14)`

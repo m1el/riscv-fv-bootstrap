@@ -122,7 +122,7 @@ execution log in [PROGRESS.md](PROGRESS.md).
 | strtoull base-10 (wrapping) ≡ reference | `LowIR/CtrlStrtoull.lean` | finite / testing-grade (`native_decide`) |
 | break/block/ret proof primitives | `LowIR/CtrlStrtoullProof.lean` | **proof-grade** (one-liners) |
 | strtoull **conformant**: overflow→saturate ULLONG_MAX + `errno`, returned as (x12,x14) | `LowIR/CtrlStrtoull2.lean` | finite / testing-grade (`native_decide`) |
-| `strtoull10_correct` (functional, all inputs) | `LowIR/CtrlStrtoullProof.lean` | **scaffold** (`sorry`) — needs the geu-based digit loop |
+| `strtoull10_correct` (functional, all inputs) | `LowIR/CtrlStrtoull10Proof.lean` | **proof-grade, sorry-free** (geu digit loop; axioms = propext/Quot/Choice) |
 
 **Ergonomics finding:** the control-flow outcome machinery is nearly free in proofs
 (every `block`/`while`-break/`seq`-break/`ret` rule is a one-line `by simp [exec]`); it
@@ -133,6 +133,5 @@ single straight loop like strlen.
 conditions — `bv_omega` discharges those cleanly, whereas signed `slt` of zero-extended
 bytes stalls it. The conformant strtoull already uses `geu`.
 
-**Open (in order):** (a) functional strtoull proof via the geu digit loop · (b) label-based
-compiler for the control-flow constructs (Ctrl → bytes) · (c) re-prove hex0 on the flat
-structure.
+**Open (in order):** (a) ✓ done — `strtoull10_correct` proved. (b) re-prove hex0 on the flat
+ret-cascade structure · (c) label-based compiler for the control-flow constructs (Ctrl → bytes).
