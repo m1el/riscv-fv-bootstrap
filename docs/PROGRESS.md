@@ -5,9 +5,19 @@ Reverse-chronological execution log for the libc-formalization effort (design do
 
 ## In progress (current turn)
 
-Working, in order: (a) `strtoull10_correct` sorry-free, (b) label-based compiler so
-`LowIR.Ctrl` programs reach real RV64I bytes, (c) re-prove hex0 on the new flat
-ret-cascade structure. See STATUS.md for the live state.
+Items, in order: (a) `strtoull10_correct` sorry-free · (b) label-based compiler so
+`LowIR.Ctrl` programs reach real RV64I bytes · (c) re-prove hex0 on the flat ret-cascade.
+
+- **(a) — pivoted + partly delivered.** The wrapping `strtoull10_correct` proof fought
+  signed (`slt`) comparisons under `bv_omega`, so it's scaffolded (`sorry`). Per the
+  overflow discussion, built the **conformant `strtoull`** instead (`CtrlStrtoull2.lean`):
+  C/POSIX overflow — saturate to ULLONG_MAX + `errno=ERANGE`, returned as `(x12,x14)`
+  (no globals). Threshold `0x1999999999999999` built in-prelude; unsigned (`geu`)
+  comparisons. **Validated** vs a conformant reference (value+errno, `native_decide`),
+  incl. exact 2⁶⁴−1, 2⁶⁴ overflow, 20-nines overflow. The functional *proof* (of either
+  version) remains: the tractable path is the **geu-based** digit loop (same shape as
+  `strlen_loop` + the accumulator), since `geu`/`ult` are `bv_omega`-friendly.
+- **(b), (c)** — not yet started.
 
 ## Done
 

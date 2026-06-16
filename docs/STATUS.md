@@ -119,15 +119,20 @@ execution log in [PROGRESS.md](PROGRESS.md).
 | Control-flow IL `block`/`break`/`continue`/`ret` | `LowIR/Ctrl.lean` | model + `#guard` |
 | `strlen_correct` on control-flow IL | `LowIR/CtrlStrlen.lean` | **proof-grade, sorry-free** |
 | hex0 flat-`ret` cascade ≡ `coreSpec` (IL level) | `LowIR/CtrlHex0.lean` | finite / testing-grade (`native_decide`) |
-| strtoull base-10 ≡ reference (incl. 2⁶⁴ wraparound) | `LowIR/CtrlStrtoull.lean` | finite / testing-grade (`native_decide`) |
+| strtoull base-10 (wrapping) ≡ reference | `LowIR/CtrlStrtoull.lean` | finite / testing-grade (`native_decide`) |
 | break/block/ret proof primitives | `LowIR/CtrlStrtoullProof.lean` | **proof-grade** (one-liners) |
-| `strtoull10_correct` (all inputs) | `LowIR/CtrlStrtoullProof.lean` | **stated + invariant; deferred** (`sorry`) |
+| strtoull **conformant**: overflow→saturate ULLONG_MAX + `errno`, returned as (x12,x14) | `LowIR/CtrlStrtoull2.lean` | finite / testing-grade (`native_decide`) |
+| `strtoull10_correct` (functional, all inputs) | `LowIR/CtrlStrtoullProof.lean` | **scaffold** (`sorry`) — needs the geu-based digit loop |
 
 **Ergonomics finding:** the control-flow outcome machinery is nearly free in proofs
 (every `block`/`while`-break/`seq`-break/`ret` rule is a one-line `by simp [exec]`); it
 makes *programs* much cleaner (flat error cascades, real early-return), with no win for a
 single straight loop like strlen.
 
-**Open (this turn, in order):** (a) `strtoull10_correct` sorry-free · (b) label-based
+**Note (signed vs unsigned compares):** functional proofs should use unsigned (`geu`/`ult`)
+conditions — `bv_omega` discharges those cleanly, whereas signed `slt` of zero-extended
+bytes stalls it. The conformant strtoull already uses `geu`.
+
+**Open (in order):** (a) functional strtoull proof via the geu digit loop · (b) label-based
 compiler for the control-flow constructs (Ctrl → bytes) · (c) re-prove hex0 on the flat
 structure.
