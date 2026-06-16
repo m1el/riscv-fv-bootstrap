@@ -27,6 +27,12 @@ open Rv64i (Word Byte)
 theorem exec_slli (f rd rs sh : Nat) (s : St) :
     exec (f+1) (.slli rd rs sh) s = some (s.rset rd (s.rget rs <<< sh), .normal) := by simp [exec]
 
+theorem exec_add (f rd r1 r2 : Nat) (s : St) :
+    exec (f+1) (.add rd r1 r2) s = some (s.rset rd (s.rget r1 + s.rget r2), .normal) := by simp [exec]
+
+theorem exec_orr (f rd r1 r2 : Nat) (s : St) :
+    exec (f+1) (.orr rd r1 r2) s = some (s.rset rd (s.rget r1 ||| s.rget r2), .normal) := by simp [exec]
+
 theorem exec_brkB (f k : Nat) (s : St) :
     exec (f+1) (.brkB k) s = some (s, .brk k) := by simp [exec]
 
@@ -84,6 +90,6 @@ theorem acc_times_ten (acc : Word) : (acc <<< 3) + (acc <<< 1) = acc * 10 := by
 theorem strtoull10_correct (inp : List Byte) :
     ∃ s, run (8 * inp.length + 32) Strtoull.strtoull10 (Strtoull.strtoull10State inp) = some s
       ∧ s.rget 12 = Strtoull.strtoullSpec inp := by
-  sorry
+  sorry   -- wrapping-semantics proof; superseded by the conformant version (CtrlStrtoull2)
 
 end LowIR.Ctrl
