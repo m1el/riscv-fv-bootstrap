@@ -386,6 +386,26 @@ theorem ceq_false {st : St} {b : Byte} {r : Reg} {k : Word} (n : Nat)
   rw [BitVec.toNat_setWidth, Nat.mod_eq_of_lt (by have := b.isLt; omega), hk] at this
   exact this
 
+/-- Raw word-equality dispatch (compares two registers' contents). -/
+theorem weq_true {s : St} {a b : Reg} {x y : Word} (ha : s.rget a = x) (hb : s.rget b = y)
+    (h : x = y) : evalCond .eq (s.rget a) (s.rget b) = true := by
+  rw [ha, hb]; simp only [evalCond, decide_eq_true_eq]; exact h
+theorem weq_false {s : St} {a b : Reg} {x y : Word} (ha : s.rget a = x) (hb : s.rget b = y)
+    (h : x ≠ y) : evalCond .eq (s.rget a) (s.rget b) = false := by
+  rw [ha, hb]; simp only [evalCond, decide_eq_false_iff_not]; exact h
+
+/-- Unsigned `≥` between two registers' word contents. -/
+theorem geu_ww_true {s : St} {a b : Reg} {x y : Word} (ha : s.rget a = x) (hb : s.rget b = y)
+    (h : y.toNat ≤ x.toNat) : evalCond .geu (s.rget a) (s.rget b) = true := by
+  rw [ha, hb]; simp only [evalCond]
+  rw [show x.ult y = decide (x.toNat < y.toNat) from rfl]
+  simp only [Bool.not_eq_true', decide_eq_false_iff_not]; omega
+theorem geu_ww_false {s : St} {a b : Reg} {x y : Word} (ha : s.rget a = x) (hb : s.rget b = y)
+    (h : x.toNat < y.toNat) : evalCond .geu (s.rget a) (s.rget b) = false := by
+  rw [ha, hb]; simp only [evalCond]
+  rw [show x.ult y = decide (x.toNat < y.toNat) from rfl]
+  simp only [Bool.not_eq_false', decide_eq_true_eq]; omega
+
 /-! ### Register context: the constants + pointer registers held at every loop head. -/
 
 structure Regs (st : St) (p L q cap : Word) : Prop where
@@ -529,5 +549,17 @@ theorem body_comment (st : St) (p L q cap i : Word) (c : Byte) (d : Nat)
   · rw [hskpres 6 (by decide) (by decide) (by decide) (by decide), hreadpres 6 (by decide) (by decide) (by decide)]
   · rw [hskpres 14 (by decide) (by decide) (by decide) (by decide), hreadpres 14 (by decide) (by decide) (by decide)]
   · rw [hskmem, hmem]
+
+/-! ### body_step, case 3: the hex-digit path (`hexPath`). -/
+
+/-- `err code` sets the status register and returns. -/
+theorem exec_err (f : Nat) (s : St) (code : Nat) :
+    exec (f+2) (err code) s = some (s.rset 14 ((BitVec.ofNat 12 code).signExtend 64), .ret) := by
+  show exec (f+2) (.seq (lit 14 code) .ret) s = _
+  have hlit : exec (f+1) (lit 14 code) s
+      = some (s.rset 14 ((BitVec.ofNat 12 code).signExtend 64), .normal) := by
+    show exec (f+1) (.addi 14 0 (BitVec.ofNat 12 code)) s = _
+    rw [exec_addi, rget_zero, wzero_add]
+  rw [show f+2 = (f+1)+1 from rfl, exec_seq_normal _ _ _ _ _ hlit, exec_ret]
 
 end LowIR.Ctrl.Hex0
