@@ -294,4 +294,28 @@ theorem skip_loop (d : Nat) : ∀ (st : St) (i L p : Word),
     · rw [hr5, cur_step]
     · rw [hrmem, hsmem]
 
+/-- The full comment-skip: advances `in_idx` by `d` to the first newline/EOF. -/
+theorem skipComment_eff (d : Nat) (st : St) (i L p : Word)
+    (h5 : st.rget 5 = i) (h11 : st.rget 11 = L) (h10 : st.rget 10 = p) (h24 : st.rget 24 = 10)
+    (h16 : st.rget 16 = 1) (hi : i.toNat < 2^63) (hL : L.toNat < 2^63) (hd : i.toNat + d < 2^63)
+    (hdig : ∀ j, j < d → gOf st.mem (i + BitVec.ofNat 64 j) L p = 1)
+    (hz : gOf st.mem (i + BitVec.ofNat 64 d) L p = 0) :
+    ∃ st', exec (d + 10) skipComment st = some (st', .normal)
+      ∧ st'.rget 5 = i + BitVec.ofNat 64 d ∧ st'.rget 11 = L ∧ st'.rget 10 = p
+      ∧ st'.rget 24 = 10 ∧ st'.rget 16 = 1 ∧ st'.mem = st.mem := by
+  unfold skipComment
+  obtain ⟨s1, hcg, hg, hpres, hmem⟩ := cgGuard_eff (d+3) st i L p h5 h11 h10 h24 hi hL
+  have hs5 : s1.rget 5 = i := by rw [hpres 5 (by decide) (by decide) (by decide), h5]
+  have hs11 : s1.rget 11 = L := by rw [hpres 11 (by decide) (by decide) (by decide), h11]
+  have hs10 : s1.rget 10 = p := by rw [hpres 10 (by decide) (by decide) (by decide), h10]
+  have hs24 : s1.rget 24 = 10 := by rw [hpres 24 (by decide) (by decide) (by decide), h24]
+  have hs16 : s1.rget 16 = 1 := by rw [hpres 16 (by decide) (by decide) (by decide), h16]
+  have hsg : s1.rget 15 = gOf s1.mem i L p := by rw [hg, hmem]
+  obtain ⟨st', he, hr5, hr11, hr10, hr24, hr16, hrmem⟩ :=
+    skip_loop d s1 i L p hs5 hs11 hs10 hs24 hs16 hsg hL hd
+      (by intro j hj; rw [hmem]; exact hdig j hj) (by rw [hmem]; exact hz)
+  refine ⟨st', ?_, hr5, hr11, hr10, hr24, hr16, ?_⟩
+  · rw [show d+10 = (d+9)+1 from rfl, exec_seq_normal _ _ _ _ _ hcg]; exact he
+  · rw [hrmem, hmem]
+
 end LowIR.Ctrl.Hex0
