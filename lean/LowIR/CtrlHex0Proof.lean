@@ -144,6 +144,47 @@ theorem pnib_correct (f : Nat) (st : St) (b : Byte) (dst : Reg)
               show f+3 = (f+2)+1 from rfl, exec_ife_else _ _ _ _ _ _ _ (D_false h7 h23 (by omega)),
               show lit dst 255 = Stmt.addi dst 0 (BitVec.ofNat 12 255) from rfl, exec_addi, bad_val]
 
+/-! ### readAdv: load mem[p+i] into dst and advance the cursor. -/
+
+/-- `readAdv dst` loads the byte at `p+i` into `dst`, sets `x30 = p+i`, and bumps `x5` to `i+1`. -/
+theorem readAdv_eff (f : Nat) (st : St) (dst : Reg) (p i : Word)
+    (h10 : st.rget 10 = p) (h5 : st.rget 5 = i)
+    (hd0 : dst ≠ 0) (hd5 : dst ≠ 5) (hd10 : dst ≠ 10) (hd30 : dst ≠ 30) :
+    ∃ st', exec (f + 4) (readAdv dst) st = some (st', .normal)
+      ∧ st'.rget 5 = i + 1
+      ∧ st'.rget dst = (st.mem (p + i)).setWidth 64
+      ∧ st'.rget 30 = p + i
+      ∧ (∀ r, r ≠ 5 → r ≠ dst → r ≠ 30 → st'.rget r = st.rget r)
+      ∧ st'.mem = st.mem := by
+  have ha : exec (f+3) (.add 30 10 5) st = some (st.rset 30 (p + i), .normal) := by
+    rw [exec_add, h10, h5]
+  have hb : exec (f+2) (.lbu dst 30 0) (st.rset 30 (p + i))
+      = some ((st.rset 30 (p + i)).rset dst ((st.mem (p + i)).setWidth 64), .normal) := by
+    rw [exec_lbu]
+    have : (st.rset 30 (p + i)).rget 30 = p + i := by simp
+    simp only [this, zero_signExtend, wadd_zero, St.loadByte]
+    congr 2
+  have hc : exec (f+1) (.addi 5 5 1) ((st.rset 30 (p + i)).rset dst ((st.mem (p + i)).setWidth 64))
+      = some (((st.rset 30 (p + i)).rset dst ((st.mem (p + i)).setWidth 64)).rset 5 (i + 1), .normal) := by
+    rw [exec_addi]
+    have h5' : ((st.rset 30 (p + i)).rset dst ((st.mem (p + i)).setWidth 64)).rget 5 = i := by
+      rw [rget_rset_ne _ _ _ _ hd5.symm, rget_rset_ne _ _ _ _ (by decide : (5:Reg) ≠ 30), h5]
+    rw [h5', show (1 : BitVec 12).signExtend 64 = (1:Word) from by decide]
+  refine ⟨((st.rset 30 (p + i)).rset dst ((st.mem (p + i)).setWidth 64)).rset 5 (i + 1), ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · unfold readAdv
+    simp only [seqs, List.foldr_cons, List.foldr_nil]
+    rw [show f+4 = (f+3)+1 from rfl, exec_seq_normal _ _ _ _ _ ha,
+        show f+3 = (f+2)+1 from rfl, exec_seq_normal _ _ _ _ _ hb,
+        show f+2 = (f+1)+1 from rfl, exec_seq_normal _ _ _ _ _ hc]
+    rfl
+  · simp
+  · rw [rget_rset_ne _ _ _ _ hd5, rget_rset_eq _ _ _ hd0]
+  · rw [rget_rset_ne _ _ _ _ (by decide : (30:Reg) ≠ 5), rget_rset_ne _ _ _ _ (Ne.symm hd30),
+        rget_rset_eq _ _ _ (by decide : (30:Reg) ≠ 0)]
+  · intro r hr5 hrdst hr30
+    rw [rget_rset_ne _ _ _ _ hr5, rget_rset_ne _ _ _ _ hrdst, rget_rset_ne _ _ _ _ hr30]
+  · simp
+
 /-! ### cgGuard: computes the loop guard `x15`. -/
 
 def nlB : Byte := 10
