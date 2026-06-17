@@ -27,9 +27,9 @@ def lit (r v : Nat) : Stmt := .addi r 0 (BitVec.ofNat 12 v)
 def err (code : Nat) : Stmt := .seq (lit 14 code) .ret
 
 def pnib (dst src : Reg) : Stmt :=
-  .ife .ge src 20
-    (.ife .ge 21 src (.sub dst src 20)
-      (.ife .ge src 22 (.ife .ge 23 src (.sub dst src 17) (lit dst 255)) (lit dst 255)))
+  .ife .geu src 20
+    (.ife .geu 21 src (.sub dst src 20)
+      (.ife .geu src 22 (.ife .geu 23 src (.sub dst src 17) (lit dst 255)) (lit dst 255)))
     (lit dst 255)
 
 def readAdv (dst : Reg) : Stmt := seqs [.add 30 10 5, .lbu dst 30 0, .addi 5 5 1]
@@ -48,7 +48,7 @@ def hexPath : Stmt :=
   seqs
     [ pnib 28 7,
       .ife .eq 28 19 (err 5) .skip,          -- bad high  → Unknown
-      .ife .ge 5 11 (err 4) .skip,           -- no low    → Trailing
+      .ife .geu 5 11 (err 4) .skip,           -- no low    → Trailing
       readAdv 7,                             -- chr := low
       .ife .eq 7 24 (err 3) .skip,           -- low-stop  → Split
       .ife .eq 7 25 (err 3) .skip,
@@ -57,7 +57,7 @@ def hexPath : Stmt :=
       .ife .eq 7 18 (err 3) .skip,
       pnib 29 7,
       .ife .eq 29 19 (err 5) .skip,          -- bad low   → Unknown
-      .ife .ge 6 13 (err 2) .skip,           -- out full  → OutputShort
+      .ife .geu 6 13 (err 2) .skip,           -- out full  → OutputShort
       .slli 31 28 4, .orr 31 31 29, .add 30 12 6, .sb 30 31 0, .addi 6 6 1 ]
 
 /-- one main-loop iteration: read a char, dispatch; falling off the end = "continue". -/
