@@ -1046,4 +1046,45 @@ theorem lowStop_iff (c : Byte) : lowStop c ↔ Hex0.isLowStop c.toNat = true := 
   simp only [Bool.or_eq_true, beq_iff_eq]
   omega
 
+/-! ### Spec-side `decodeS` unfolding (item B's per-iteration case rewrites). -/
+
+theorem decodeS_high_comment (c : Nat) (rest : List Nat) (h : Hex0.isComment c = true) :
+    Hex0.decodeS .High (c :: rest) = Hex0.decodeS .High (_root_.Hex0.skipComment rest) := by
+  rw [Hex0.decodeS]; simp [h]
+
+theorem decodeS_high_space (c : Nat) (rest : List Nat)
+    (hc : Hex0.isComment c = false) (h : Hex0.isSpace c = true) :
+    Hex0.decodeS .High (c :: rest) = Hex0.decodeS .High rest := by
+  rw [Hex0.decodeS]; simp [hc, h]
+
+theorem decodeS_high_badhi (c : Nat) (rest : List Nat)
+    (hc : Hex0.isComment c = false) (hs : Hex0.isSpace c = false) (hn : Hex0.nibble c = none) :
+    Hex0.decodeS .High (c :: rest) = ([], .Unknown) := by
+  rw [Hex0.decodeS]; simp [hc, hs, hn]
+
+theorem decodeS_high_goodhi (c : Nat) (rest : List Nat) (hi : Nat)
+    (hc : Hex0.isComment c = false) (hs : Hex0.isSpace c = false) (hn : Hex0.nibble c = some hi) :
+    Hex0.decodeS .High (c :: rest) = Hex0.decodeS (.Low hi) rest := by
+  rw [Hex0.decodeS]; simp [hc, hs, hn]
+
+theorem decodeS_high_nil : Hex0.decodeS .High [] = ([], .Ok) := by rw [Hex0.decodeS]
+
+theorem decodeS_low_nil (hi : Nat) : Hex0.decodeS (.Low hi) [] = ([], .Trailing) := by
+  rw [Hex0.decodeS]
+
+theorem decodeS_low_split (hi c2 : Nat) (rest : List Nat) (h : Hex0.isLowStop c2 = true) :
+    Hex0.decodeS (.Low hi) (c2 :: rest) = ([], .Split) := by
+  rw [Hex0.decodeS]; simp [h]
+
+theorem decodeS_low_badlo (hi c2 : Nat) (rest : List Nat)
+    (h : Hex0.isLowStop c2 = false) (hn : Hex0.nibble c2 = none) :
+    Hex0.decodeS (.Low hi) (c2 :: rest) = ([], .Unknown) := by
+  rw [Hex0.decodeS]; simp [h, hn]
+
+theorem decodeS_low_goodlo (hi c2 lo : Nat) (rest : List Nat)
+    (h : Hex0.isLowStop c2 = false) (hn : Hex0.nibble c2 = some lo) :
+    Hex0.decodeS (.Low hi) (c2 :: rest)
+      = ((hi * 16 + lo) :: (Hex0.decodeS .High rest).1, (Hex0.decodeS .High rest).2) := by
+  rw [Hex0.decodeS]; simp [h, hn]
+
 end LowIR.Ctrl.Hex0
