@@ -869,4 +869,79 @@ theorem hexPath_eff (s : St) (p L q cap m : Word) (chi : Byte)
             · -- memory: the written byte
               simp only [rset_mem, mem_storeByte_self, hsrmem']
 
+/-- body_step, case 3 assembled on `body`: read the high char, dispatch falls through
+    to `hexPath`. Same six outcomes as `hexPath_eff`, phrased on the loop-head state. -/
+theorem body_hex (st : St) (p L q cap i : Word) (c : Byte)
+    (hr : Regs st p L q cap) (h5 : st.rget 5 = i) (hmemc : st.mem (p+i) = c)
+    (hns : c.toNat ≠ 10 ∧ c.toNat ≠ 32 ∧ c.toNat ≠ 95 ∧ c.toNat ≠ 35 ∧ c.toNat ≠ 59) :
+    (pnibR c = 255 ∧ ∃ fuel st', exec fuel body st = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 5 ∧ st'.rget 6 = st.rget 6 ∧ st'.mem = st.mem)
+  ∨ (pnibR c ≠ 255 ∧ L.toNat ≤ (i+1).toNat ∧ ∃ fuel st', exec fuel body st = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 4 ∧ st'.rget 6 = st.rget 6 ∧ st'.mem = st.mem)
+  ∨ (pnibR c ≠ 255 ∧ (i+1).toNat < L.toNat ∧ lowStop (st.mem (p+(i+1)))
+        ∧ ∃ fuel st', exec fuel body st = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 3 ∧ st'.rget 6 = st.rget 6 ∧ st'.mem = st.mem)
+  ∨ (pnibR c ≠ 255 ∧ (i+1).toNat < L.toNat ∧ ¬ lowStop (st.mem (p+(i+1))) ∧ pnibR (st.mem (p+(i+1))) = 255
+        ∧ ∃ fuel st', exec fuel body st = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 5 ∧ st'.rget 6 = st.rget 6 ∧ st'.mem = st.mem)
+  ∨ (pnibR c ≠ 255 ∧ (i+1).toNat < L.toNat ∧ ¬ lowStop (st.mem (p+(i+1))) ∧ pnibR (st.mem (p+(i+1))) ≠ 255
+        ∧ cap.toNat ≤ (st.rget 6).toNat
+        ∧ ∃ fuel st', exec fuel body st = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 2 ∧ st'.rget 6 = st.rget 6 ∧ st'.mem = st.mem)
+  ∨ (pnibR c ≠ 255 ∧ (i+1).toNat < L.toNat ∧ ¬ lowStop (st.mem (p+(i+1))) ∧ pnibR (st.mem (p+(i+1))) ≠ 255
+        ∧ (st.rget 6).toNat < cap.toNat
+        ∧ ∃ fuel st', exec fuel body st = some (st', .normal)
+        ∧ st'.rget 5 = (i+1) + 1 ∧ st'.rget 6 = st.rget 6 + 1 ∧ st'.rget 14 = st.rget 14
+        ∧ Regs st' p L q cap
+        ∧ st'.mem = (st.storeByte (q + st.rget 6)
+              ((((pnibR c) <<< 4) ||| pnibR (st.mem (p+(i+1)))).setWidth 8)).mem) := by
+  obtain ⟨st1, hread0, hr5, hr7, hr30, hreadpres, hmem⟩ :=
+    readAdv_eff 41 st 7 p i hr.h10 h5 (by decide) (by decide) (by decide) (by decide)
+  have e7 : st1.rget 7 = c.setWidth 64 := by rw [hr7, hmemc]
+  have e27 : st1.rget 27 = (35:Word) := by rw [hreadpres 27 (by decide) (by decide) (by decide), hr.h27]
+  have e18 : st1.rget 18 = (59:Word) := by rw [hreadpres 18 (by decide) (by decide) (by decide), hr.h18]
+  have e24 : st1.rget 24 = (10:Word) := by rw [hreadpres 24 (by decide) (by decide) (by decide), hr.h24]
+  have e25 : st1.rget 25 = (32:Word) := by rw [hreadpres 25 (by decide) (by decide) (by decide), hr.h25]
+  have e26 : st1.rget 26 = (95:Word) := by rw [hreadpres 26 (by decide) (by decide) (by decide), hr.h26]
+  have hregs1 : Regs st1 p L q cap :=
+    hr.transfer (fun r a5 _ a7 _ _ _ _ _ a30 _ => hreadpres r a5 a7 a30)
+  have hst16 : st1.rget 6 = st.rget 6 := hreadpres 6 (by decide) (by decide) (by decide)
+  have hlift : ∀ (st' : St) (oc : Outcome), exec 40 hexPath st1 = some (st', oc) →
+      exec 46 body st = some (st', oc) := by
+    intro st' oc h
+    have hread' : exec 45 (readAdv 7) st = some (st1, .normal) := hread0
+    unfold body
+    rw [show (46:Nat)=45+1 from rfl, exec_seq_normal _ _ _ _ _ hread',
+        show (45:Nat)=44+1 from rfl, exec_ife_else _ _ _ _ _ _ _ (ceq_false 35 e7 e27 (by decide) hns.2.2.2.1),
+        show (44:Nat)=43+1 from rfl, exec_ife_else _ _ _ _ _ _ _ (ceq_false 59 e7 e18 (by decide) hns.2.2.2.2),
+        show (43:Nat)=42+1 from rfl, exec_ife_else _ _ _ _ _ _ _ (ceq_false 10 e7 e24 (by decide) hns.1),
+        show (42:Nat)=41+1 from rfl, exec_ife_else _ _ _ _ _ _ _ (ceq_false 32 e7 e25 (by decide) hns.2.1),
+        show (41:Nat)=40+1 from rfl, exec_ife_else _ _ _ _ _ _ _ (ceq_false 95 e7 e26 (by decide) hns.2.2.1)]
+    exact h
+  rcases hexPath_eff st1 p L q cap (i+1) c hregs1 hr5 e7 with
+      ⟨hc, st', he, h14, h6, hm⟩
+    | ⟨hc, ht, st', he, h14, h6, hm⟩
+    | ⟨hc, ht, hls, st', he, h14, h6, hm⟩
+    | ⟨hc, ht, hls, hb2, st', he, h14, h6, hm⟩
+    | ⟨hc, ht, hls, hb2, hf, st', he, h14, h6, hm⟩
+    | ⟨hc, ht, hls, hb2, hf, st', he, h5', h6', h14', hregs', hm'⟩
+  · exact Or.inl ⟨hc, _, _, hlift _ _ he, h14, by rw [h6, hst16], by rw [hm, hmem]⟩
+  · exact Or.inr (Or.inl ⟨hc, ht, _, _, hlift _ _ he, h14, by rw [h6, hst16], by rw [hm, hmem]⟩)
+  · refine Or.inr (Or.inr (Or.inl ⟨hc, ht, ?_, _, _, hlift _ _ he, h14, by rw [h6, hst16], by rw [hm, hmem]⟩))
+    rw [← hmem]; exact hls
+  · refine Or.inr (Or.inr (Or.inr (Or.inl ⟨hc, ht, ?_, ?_, _, _, hlift _ _ he, h14, by rw [h6, hst16], by rw [hm, hmem]⟩)))
+    · rw [← hmem]; exact hls
+    · rw [← hmem]; exact hb2
+  · refine Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨hc, ht, ?_, ?_, ?_, _, _, hlift _ _ he, h14, by rw [h6, hst16], by rw [hm, hmem]⟩))))
+    · rw [← hmem]; exact hls
+    · rw [← hmem]; exact hb2
+    · rw [← hst16]; exact hf
+  · refine Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨hc, ht, ?_, ?_, ?_, _, _, hlift _ _ he, h5', by rw [h6', hst16], ?_, ?_, ?_⟩))))
+    · rw [← hmem]; exact hls
+    · rw [← hmem]; exact hb2
+    · rw [← hst16]; exact hf
+    · rw [h14', hreadpres 14 (by decide) (by decide) (by decide)]
+    · exact hregs'
+    · rw [hm', hst16]; simp only [mem_storeByte_self, hmem]
+
 end LowIR.Ctrl.Hex0
