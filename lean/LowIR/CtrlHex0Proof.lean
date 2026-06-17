@@ -19,6 +19,38 @@ namespace LowIR.Ctrl.Hex0
 open LowIR.Ctrl
 open Rv64i (Word Byte)
 
+/-! ### Memory borrows — separation discipline (Tree-Borrows residue; see docs/MEMORY-BORROWS.md).
+    We keep only the well-formedness/disjointness consequence, not the TB operational model. -/
+
+structure Slice where
+  base : Word
+  len  : Nat
+
+/-- Addresses covered by a slice. -/
+def Slice.has (s : Slice) (a : Word) : Prop := ∃ k, k < s.len ∧ a = s.base + BitVec.ofNat 64 k
+
+inductive Perm | shared | uniq
+deriving DecidableEq, Repr
+
+structure Borrow where
+  slice : Slice
+  perm  : Perm
+
+def Disjoint (s t : Slice) : Prop := ∀ a, s.has a → t.has a → False
+
+/-- Well-formed borrow set: a unique borrow is disjoint from every other borrow. -/
+def Wf (bs : List Borrow) : Prop :=
+  ∀ b ∈ bs, ∀ b' ∈ bs, b ≠ b' → (b.perm = .uniq ∨ b'.perm = .uniq) → Disjoint b.slice b'.slice
+
+theorem Disjoint.symm {s t : Slice} (h : Disjoint s t) : Disjoint t s :=
+  fun a hat has => h a has hat
+
+/-- Writing a byte outside slice `s` preserves every read within `s`. -/
+theorem storeByte_preserves {st : St} {s : Slice} {a a' : Word} {b : Byte}
+    (hna : ¬ s.has a) (ha' : s.has a') : (st.storeByte a b).mem a' = st.mem a' := by
+  show (if a' = a then b else st.mem a') = st.mem a'
+  rw [if_neg]; intro he; exact hna (he ▸ ha')
+
 theorem tn (m : Nat) (hm : m < 2^64) : ((BitVec.ofNat 64 m)).toNat = m := by
   rw [BitVec.toNat_ofNat]; exact Nat.mod_eq_of_lt hm
 
