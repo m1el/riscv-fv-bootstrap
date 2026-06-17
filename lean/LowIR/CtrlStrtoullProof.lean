@@ -70,6 +70,164 @@ theorem exec_ife_else (f : Nat) (c : Cond) (a b : Reg) (t e : Stmt) (s : St)
 theorem acc_times_ten (acc : Word) : (acc <<< 3) + (acc <<< 1) = acc * 10 := by
   bv_omega
 
+/-! ### The remaining one-layer exec equations (needed for fuel monotonicity). -/
+
+theorem exec_seq_cont (f : Nat) (a b : Stmt) (s s' : St) (k : Nat)
+    (h : exec f a s = some (s', .cont k)) :
+    exec (f+1) (.seq a b) s = some (s', .cont k) := by simp [exec, h]
+
+theorem exec_seq_none (f : Nat) (a b : Stmt) (s : St) (h : exec f a s = none) :
+    exec (f+1) (.seq a b) s = none := by simp [exec, h]
+
+theorem exec_block_normal (f : Nat) (body : Stmt) (s s' : St)
+    (h : exec f body s = some (s', .normal)) :
+    exec (f+1) (.block body) s = some (s', .normal) := by simp [exec, h]
+
+theorem exec_block_brkS (f : Nat) (body : Stmt) (s s' : St) (k : Nat)
+    (h : exec f body s = some (s', .brk (k+1))) :
+    exec (f+1) (.block body) s = some (s', .brk k) := by simp [exec, h]
+
+theorem exec_block_cont (f : Nat) (body : Stmt) (s s' : St) (k : Nat)
+    (h : exec f body s = some (s', .cont k)) :
+    exec (f+1) (.block body) s = some (s', .cont k) := by simp [exec, h]
+
+theorem exec_block_ret (f : Nat) (body : Stmt) (s s' : St)
+    (h : exec f body s = some (s', .ret)) :
+    exec (f+1) (.block body) s = some (s', .ret) := by simp [exec, h]
+
+theorem exec_block_none (f : Nat) (body : Stmt) (s : St) (h : exec f body s = none) :
+    exec (f+1) (.block body) s = none := by simp [exec, h]
+
+theorem exec_while_none (f : Nat) (c : Cond) (a b : Reg) (body : Stmt) (s : St)
+    (hc : evalCond c (s.rget a) (s.rget b) = true) (hb : exec f body s = none) :
+    exec (f+1) (.while c a b body) s = none := by simp [exec, hc, hb]
+
+theorem exec_while_cont0 (f : Nat) (c : Cond) (a b : Reg) (body : Stmt) (s s' : St)
+    (hc : evalCond c (s.rget a) (s.rget b) = true) (hb : exec f body s = some (s', .cont 0)) :
+    exec (f+1) (.while c a b body) s = exec f (.while c a b body) s' := by simp [exec, hc, hb]
+
+theorem exec_while_contS (f : Nat) (c : Cond) (a b : Reg) (body : Stmt) (s s' : St) (k : Nat)
+    (hc : evalCond c (s.rget a) (s.rget b) = true) (hb : exec f body s = some (s', .cont (k+1))) :
+    exec (f+1) (.while c a b body) s = some (s', .cont k) := by simp [exec, hc, hb]
+
+theorem exec_while_ret (f : Nat) (c : Cond) (a b : Reg) (body : Stmt) (s s' : St)
+    (hc : evalCond c (s.rget a) (s.rget b) = true) (hb : exec f body s = some (s', .ret)) :
+    exec (f+1) (.while c a b body) s = some (s', .ret) := by simp [exec, hc, hb]
+
+/-! ### Fuel monotonicity — more fuel never changes a `some` result.
+
+    The key enabler for composing clocked-exec results without exact-fuel arithmetic:
+    every lemma can return an *existential* fuel, and `exec_mono_le` bumps any two
+    results up to a common fuel before combining (e.g. in a `while` step, where the
+    body and the recursive loop must share one fuel). Proved via the one-layer exec
+    equations so the inner recursive calls are never accidentally unfolded. -/
+
+theorem exec_mono (f : Nat) : ∀ (stmt : Stmt) (s : St) (r : St × Outcome),
+    exec f stmt s = some r → exec (f+1) stmt s = some r := by
+  induction f with
+  | zero => intro stmt s r h; rw [show exec 0 stmt s = none from rfl] at h; simp at h
+  | succ f ih =>
+    intro stmt s r h
+    cases stmt with
+    | skip => simpa only [exec] using h
+    | addi => simpa only [exec] using h
+    | add => simpa only [exec] using h
+    | sub => simpa only [exec] using h
+    | orr => simpa only [exec] using h
+    | slli => simpa only [exec] using h
+    | srli => simpa only [exec] using h
+    | lbu => simpa only [exec] using h
+    | sb => simpa only [exec] using h
+    | brkB => simpa only [exec] using h
+    | contL => simpa only [exec] using h
+    | ret => simpa only [exec] using h
+    | seq a b =>
+      cases ha : exec f a s with
+      | none => rw [exec_seq_none _ _ _ _ ha] at h; exact absurd h (by simp)
+      | some r' =>
+        obtain ⟨s', o⟩ := r'
+        have ha1 := ih a s (s', o) ha
+        cases o with
+        | normal =>
+          rw [exec_seq_normal _ _ _ _ _ ha] at h
+          rw [exec_seq_normal _ _ _ _ _ ha1]; exact ih b s' r h
+        | brk k =>
+          rw [exec_seq_brk _ _ _ _ _ _ ha] at h
+          rw [exec_seq_brk _ _ _ _ _ _ ha1]; exact h
+        | cont k =>
+          rw [exec_seq_cont _ _ _ _ _ _ ha] at h
+          rw [exec_seq_cont _ _ _ _ _ _ ha1]; exact h
+        | ret =>
+          rw [exec_seq_ret _ _ _ _ _ ha] at h
+          rw [exec_seq_ret _ _ _ _ _ ha1]; exact h
+    | ife c a b t e =>
+      cases hc : evalCond c (s.rget a) (s.rget b) with
+      | false =>
+        rw [exec_ife_else _ _ _ _ _ _ _ hc] at h
+        rw [exec_ife_else _ _ _ _ _ _ _ hc]; exact ih e s r h
+      | true =>
+        rw [exec_ife_then _ _ _ _ _ _ _ hc] at h
+        rw [exec_ife_then _ _ _ _ _ _ _ hc]; exact ih t s r h
+    | block body =>
+      cases hb : exec f body s with
+      | none => rw [exec_block_none _ _ _ hb] at h; exact absurd h (by simp)
+      | some r' =>
+        obtain ⟨s', o⟩ := r'
+        have hb1 := ih body s (s', o) hb
+        cases o with
+        | normal =>
+          rw [exec_block_normal _ _ _ _ hb] at h
+          rw [exec_block_normal _ _ _ _ hb1]; exact h
+        | brk k => cases k with
+          | zero =>
+            rw [exec_block_catch _ _ _ _ hb] at h
+            rw [exec_block_catch _ _ _ _ hb1]; exact h
+          | succ k =>
+            rw [exec_block_brkS _ _ _ _ _ hb] at h
+            rw [exec_block_brkS _ _ _ _ _ hb1]; exact h
+        | cont k =>
+          rw [exec_block_cont _ _ _ _ _ hb] at h
+          rw [exec_block_cont _ _ _ _ _ hb1]; exact h
+        | ret =>
+          rw [exec_block_ret _ _ _ _ hb] at h
+          rw [exec_block_ret _ _ _ _ hb1]; exact h
+    | «while» c a b body =>
+      cases hc : evalCond c (s.rget a) (s.rget b) with
+      | false =>
+        rw [exec_while_done _ _ _ _ _ _ hc] at h
+        rw [exec_while_done _ _ _ _ _ _ hc]; exact h
+      | true =>
+        cases hbody : exec f body s with
+        | none => rw [exec_while_none _ _ _ _ _ _ hc hbody] at h; exact absurd h (by simp)
+        | some r' =>
+          obtain ⟨s', o⟩ := r'
+          have hb1 := ih body s (s', o) hbody
+          cases o with
+          | normal =>
+            rw [exec_while_step _ _ _ _ _ _ _ hc hbody] at h
+            rw [exec_while_step _ _ _ _ _ _ _ hc hb1]; exact ih (.while c a b body) s' r h
+          | cont k => cases k with
+            | zero =>
+              rw [exec_while_cont0 _ _ _ _ _ _ _ hc hbody] at h
+              rw [exec_while_cont0 _ _ _ _ _ _ _ hc hb1]; exact ih (.while c a b body) s' r h
+            | succ k =>
+              rw [exec_while_contS _ _ _ _ _ _ _ _ hc hbody] at h
+              rw [exec_while_contS _ _ _ _ _ _ _ _ hc hb1]; exact h
+          | brk k =>
+            rw [exec_while_brk _ _ _ _ _ _ _ _ hc hbody] at h
+            rw [exec_while_brk _ _ _ _ _ _ _ _ hc hb1]; exact h
+          | ret =>
+            rw [exec_while_ret _ _ _ _ _ _ _ hc hbody] at h
+            rw [exec_while_ret _ _ _ _ _ _ _ hc hb1]; exact h
+
+theorem exec_mono_le {f f' : Nat} (hle : f ≤ f') {stmt : Stmt} {s : St} {r : St × Outcome}
+    (he : exec f stmt s = some r) : exec f' stmt s = some r := by
+  obtain ⟨k, rfl⟩ := Nat.le.dest hle
+  clear hle
+  induction k with
+  | zero => exact he
+  | succ k ih => rw [show f + (k+1) = (f+k)+1 from rfl]; exact exec_mono (f+k) stmt s r ih
+
 /-! ### Correctness statement + invariant (induction deferred).
 
     `digit_loop` invariant (the deferred work): for the body
