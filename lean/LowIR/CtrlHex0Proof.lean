@@ -944,4 +944,54 @@ theorem body_hex (st : St) (p L q cap i : Word) (c : Byte)
     · exact hregs'
     · rw [hm', hst16]; simp only [mem_storeByte_self, hmem]
 
+/-! ### Bridge lemmas: the IL nibble register values vs the spec `Hex0.nibble` (item B prep). -/
+
+/-- `pnib` writes `255` exactly when the spec `nibble` is `none`. -/
+theorem pnibR_eq_255_iff (c : Byte) : pnibR c = 255 ↔ Hex0.nibble c.toNat = none := by
+  unfold pnibR Hex0.nibble
+  by_cases h1 : 48 ≤ c.toNat ∧ c.toNat ≤ 57
+  · rw [if_pos h1, if_pos h1]; simp only [reduceCtorEq, iff_false]; intro hc; bv_omega
+  · rw [if_neg h1, if_neg h1]
+    by_cases h2 : 65 ≤ c.toNat ∧ c.toNat ≤ 70
+    · rw [if_pos h2, if_pos h2]; simp only [reduceCtorEq, iff_false]; intro hc; bv_omega
+    · rw [if_neg h2, if_neg h2]; simp
+
+/-- When `pnib` does not write `255`, its value is exactly the spec nibble value. -/
+theorem pnibR_nibble (c : Byte) (h : pnibR c ≠ 255) :
+    Hex0.nibble c.toNat = some (pnibR c).toNat := by
+  unfold pnibR Hex0.nibble
+  unfold pnibR at h
+  have hsw : (c.setWidth 64).toNat = c.toNat := by
+    rw [BitVec.toNat_setWidth]; have := c.isLt; omega
+  by_cases h1 : 48 ≤ c.toNat ∧ c.toNat ≤ 57
+  · obtain ⟨h1a, h1b⟩ := h1
+    rw [if_pos ⟨h1a, h1b⟩, if_pos ⟨h1a, h1b⟩]; rw [if_pos ⟨h1a, h1b⟩] at h; congr 1
+    rw [BitVec.toNat_sub, hsw, show ((48 : BitVec 64)).toNat = 48 from by decide]; omega
+  · rw [if_neg h1, if_neg h1]; rw [if_neg h1] at h
+    by_cases h2 : 65 ≤ c.toNat ∧ c.toNat ≤ 70
+    · obtain ⟨h2a, h2b⟩ := h2
+      rw [if_pos ⟨h2a, h2b⟩, if_pos ⟨h2a, h2b⟩]; rw [if_pos ⟨h2a, h2b⟩] at h; congr 1
+      rw [BitVec.toNat_sub, hsw, show ((55 : BitVec 64)).toNat = 55 from by decide]; omega
+    · rw [if_neg h2, if_neg h2]; rw [if_neg h2] at h; exact absurd rfl h
+
+/-- A valid nibble value is `< 16`. -/
+theorem pnibR_lt_16 (c : Byte) (h : pnibR c ≠ 255) : (pnibR c).toNat < 16 := by
+  unfold pnibR at h ⊢
+  by_cases h1 : 48 ≤ c.toNat ∧ c.toNat ≤ 57
+  · rw [if_pos h1] at h ⊢; bv_omega
+  · rw [if_neg h1] at h ⊢
+    by_cases h2 : 65 ≤ c.toNat ∧ c.toNat ≤ 70
+    · rw [if_pos h2] at h ⊢; bv_omega
+    · rw [if_neg h2] at h; exact absurd rfl h
+
+-- TODO(item B): `hexbyte_val` — `(((pnibR c)<<<4 ||| pnibR c2).setWidth 8).toNat = hi*16+lo`.
+-- `bv_omega` treats `|||` opaquely; needs a disjoint-or = add lemma (low nibble of `<<<4` is 0).
+
+/-- `lowStop` (the IL test) matches the spec `Hex0.isLowStop`. -/
+theorem lowStop_iff (c : Byte) : lowStop c ↔ Hex0.isLowStop c.toNat = true := by
+  unfold lowStop Hex0.isLowStop Hex0.isSpace Hex0.isComment
+    Hex0.c_nl Hex0.c_sp Hex0.c_us Hex0.c_hash Hex0.c_semi
+  simp only [Bool.or_eq_true, beq_iff_eq]
+  omega
+
 end LowIR.Ctrl.Hex0
