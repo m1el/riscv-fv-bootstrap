@@ -42,6 +42,23 @@ theorem geuL_false (b : Byte) (m : Nat) (hm : (BitVec.ofNat 64 m).toNat = m) (h 
     rw [e, swb, hm, decide_eq_true_eq]; omega
   simp only [evalCond, hult]; rfl
 
+/-- Signed `<` on indices = unsigned `<`, since indices are `< 2⁶³`. -/
+theorem slt_true {x y : Word} (hx : x.toNat < 2^63) (hy : y.toNat < 2^63) (h : x.toNat < y.toNat) :
+    evalCond .lt x y = true := by
+  simp only [evalCond]
+  rw [show x.slt y = decide (x.toInt < y.toInt) from rfl,
+      BitVec.toInt_eq_toNat_of_lt (by omega : 2 * x.toNat < 2^64),
+      BitVec.toInt_eq_toNat_of_lt (by omega : 2 * y.toNat < 2^64), decide_eq_true_eq]
+  omega
+
+theorem slt_false {x y : Word} (hx : x.toNat < 2^63) (hy : y.toNat < 2^63) (h : y.toNat ≤ x.toNat) :
+    evalCond .lt x y = false := by
+  simp only [evalCond]
+  rw [show x.slt y = decide (x.toInt < y.toInt) from rfl,
+      BitVec.toInt_eq_toNat_of_lt (by omega : 2 * x.toNat < 2^64),
+      BitVec.toInt_eq_toNat_of_lt (by omega : 2 * y.toNat < 2^64), decide_eq_false_iff_not]
+  omega
+
 -- the constant byte codes used by pnib (in BitVec.ofNat form for the geu lemmas)
 theorem c48 : (BitVec.ofNat 64 48).toNat = 48 := by decide
 theorem c57 : (BitVec.ofNat 64 57).toNat = 57 := by decide
