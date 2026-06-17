@@ -359,4 +359,122 @@ theorem skipComment_eff (d : Nat) (st : St) (i L p : Word)
   · rw [show d+10 = (d+9)+1 from rfl, exec_seq_normal _ _ _ _ _ hcg]; exact he
   · rw [hrmem, hmem]
 
+/-! ### Character-equality dispatch lemmas (`.eq` against a byte). -/
+
+theorem ceq_true {st : St} {b : Byte} {r : Reg} {k : Word} (n : Nat)
+    (h7 : st.rget 7 = b.setWidth 64) (hr : st.rget r = k) (hk : k.toNat = n)
+    (h : b.toNat = n) : evalCond .eq (st.rget 7) (st.rget r) = true := by
+  rw [h7, hr]; simp only [evalCond, decide_eq_true_eq]
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_setWidth, Nat.mod_eq_of_lt (by have := b.isLt; omega), hk]; exact h
+
+theorem ceq_false {st : St} {b : Byte} {r : Reg} {k : Word} (n : Nat)
+    (h7 : st.rget 7 = b.setWidth 64) (hr : st.rget r = k) (hk : k.toNat = n)
+    (h : b.toNat ≠ n) : evalCond .eq (st.rget 7) (st.rget r) = false := by
+  rw [h7, hr]; simp only [evalCond, decide_eq_false_iff_not]
+  intro hc; apply h
+  have := congrArg BitVec.toNat hc
+  rw [BitVec.toNat_setWidth, Nat.mod_eq_of_lt (by have := b.isLt; omega), hk] at this
+  exact this
+
+/-! ### Register context: the constants + pointer registers held at every loop head. -/
+
+structure Regs (st : St) (p L q cap : Word) : Prop where
+  h10 : st.rget 10 = p
+  h11 : st.rget 11 = L
+  h12 : st.rget 12 = q
+  h13 : st.rget 13 = cap
+  h16 : st.rget 16 = 1
+  h17 : st.rget 17 = 55
+  h18 : st.rget 18 = 59
+  h19 : st.rget 19 = 255
+  h20 : st.rget 20 = 48
+  h21 : st.rget 21 = 57
+  h22 : st.rget 22 = 65
+  h23 : st.rget 23 = 70
+  h24 : st.rget 24 = 10
+  h25 : st.rget 25 = 32
+  h26 : st.rget 26 = 95
+  h27 : st.rget 27 = 35
+
+/-- The scratch registers `body` ever writes; `Regs` lives on the complement. -/
+abbrev Pres (st' st : St) : Prop :=
+  ∀ r, r ≠ 5 → r ≠ 6 → r ≠ 7 → r ≠ 8 → r ≠ 14 → r ≠ 15 →
+       r ≠ 28 → r ≠ 29 → r ≠ 30 → r ≠ 31 → st'.rget r = st.rget r
+
+/-- `Regs` is preserved by any state change that touches only the scratch registers. -/
+theorem Regs.transfer {st st' : St} {p L q cap : Word} (hr : Regs st p L q cap)
+    (h : Pres st' st) : Regs st' p L q cap where
+  h10 := by rw [h 10 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h10]
+  h11 := by rw [h 11 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h11]
+  h12 := by rw [h 12 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h12]
+  h13 := by rw [h 13 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h13]
+  h16 := by rw [h 16 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h16]
+  h17 := by rw [h 17 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h17]
+  h18 := by rw [h 18 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h18]
+  h19 := by rw [h 19 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h19]
+  h20 := by rw [h 20 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h20]
+  h21 := by rw [h 21 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h21]
+  h22 := by rw [h 22 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h22]
+  h23 := by rw [h 23 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h23]
+  h24 := by rw [h 24 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h24]
+  h25 := by rw [h 25 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h25]
+  h26 := by rw [h 26 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h26]
+  h27 := by rw [h 27 (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) (by decide), hr.h27]
+
+/-! ### body_step, case 1: a space character (`\n`/` `/`_`) — skip, continue. -/
+
+theorem body_space (st : St) (p L q cap i : Word) (c : Byte)
+    (hr : Regs st p L q cap) (h5 : st.rget 5 = i) (hmemc : st.mem (p + i) = c)
+    (hsp : c.toNat = 10 ∨ c.toNat = 32 ∨ c.toNat = 95) :
+    ∃ fuel st', exec fuel body st = some (st', .normal)
+      ∧ Regs st' p L q cap ∧ st'.rget 5 = i + 1 ∧ st'.rget 6 = st.rget 6
+      ∧ st'.rget 14 = st.rget 14 ∧ st'.mem = st.mem := by
+  obtain ⟨st1, hread0, hr5, hr7, hr30, hpres, hmem⟩ :=
+    readAdv_eff 10 st 7 p i hr.h10 h5 (by decide) (by decide) (by decide) (by decide)
+  have hread : exec 14 (readAdv 7) st = some (st1, .normal) := hread0
+  have e7 : st1.rget 7 = c.setWidth 64 := by rw [hr7, hmemc]
+  have e27 : st1.rget 27 = (35:Word) := by rw [hpres 27 (by decide) (by decide) (by decide), hr.h27]
+  have e18 : st1.rget 18 = (59:Word) := by rw [hpres 18 (by decide) (by decide) (by decide), hr.h18]
+  have e24 : st1.rget 24 = (10:Word) := by rw [hpres 24 (by decide) (by decide) (by decide), hr.h24]
+  have e25 : st1.rget 25 = (32:Word) := by rw [hpres 25 (by decide) (by decide) (by decide), hr.h25]
+  have e26 : st1.rget 26 = (95:Word) := by rw [hpres 26 (by decide) (by decide) (by decide), hr.h26]
+  have hregs1 : Regs st1 p L q cap :=
+    hr.transfer (fun r a5 _ a7 _ _ _ _ _ a30 _ => hpres r a5 a7 a30)
+  refine ⟨15, st1, ?_, hregs1, ?_, ?_, ?_, ?_⟩
+  · unfold body
+    rw [show (15:Nat) = 14+1 from rfl, exec_seq_normal _ _ _ _ _ hread]
+    rcases hsp with h10 | h32 | h95
+    · rw [show (14:Nat)=13+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 35 e7 e27 (by decide) (by omega)),
+          show (13:Nat)=12+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 59 e7 e18 (by decide) (by omega)),
+          show (12:Nat)=11+1 from rfl,
+          exec_ife_then _ _ _ _ _ _ _ (ceq_true 10 e7 e24 (by decide) h10)]
+      rfl
+    · rw [show (14:Nat)=13+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 35 e7 e27 (by decide) (by omega)),
+          show (13:Nat)=12+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 59 e7 e18 (by decide) (by omega)),
+          show (12:Nat)=11+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 10 e7 e24 (by decide) (by omega)),
+          show (11:Nat)=10+1 from rfl,
+          exec_ife_then _ _ _ _ _ _ _ (ceq_true 32 e7 e25 (by decide) h32)]
+      rfl
+    · rw [show (14:Nat)=13+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 35 e7 e27 (by decide) (by omega)),
+          show (13:Nat)=12+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 59 e7 e18 (by decide) (by omega)),
+          show (12:Nat)=11+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 10 e7 e24 (by decide) (by omega)),
+          show (11:Nat)=10+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 32 e7 e25 (by decide) (by omega)),
+          show (10:Nat)=9+1 from rfl,
+          exec_ife_then _ _ _ _ _ _ _ (ceq_true 95 e7 e26 (by decide) h95)]
+      rfl
+  · rw [hr5]
+  · rw [hpres 6 (by decide) (by decide) (by decide)]
+  · rw [hpres 14 (by decide) (by decide) (by decide)]
+  · exact hmem
+
 end LowIR.Ctrl.Hex0
