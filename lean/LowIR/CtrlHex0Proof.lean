@@ -144,4 +144,96 @@ theorem pnib_correct (f : Nat) (st : St) (b : Byte) (dst : Reg)
               show f+3 = (f+2)+1 from rfl, exec_ife_else _ _ _ _ _ _ _ (D_false h7 h23 (by omega)),
               show lit dst 255 = Stmt.addi dst 0 (BitVec.ofNat 12 255) from rfl, exec_addi, bad_val]
 
+/-! ### cgGuard: computes the loop guard `x15`. -/
+
+def nlB : Byte := 10
+
+private theorem mem_eq_nl_iff (b : Byte) : (b.setWidth 64 = (10:Word)) ↔ (b = nlB) := by
+  rw [nlB]
+  constructor
+  · intro h
+    have ht : b.toNat = 10 := by
+      have := congrArg BitVec.toNat h
+      rw [BitVec.toNat_setWidth, Nat.mod_eq_of_lt (by have := b.isLt; omega)] at this
+      simpa using this
+    apply BitVec.eq_of_toNat_eq; rw [ht]; decide
+  · intro h; rw [h]; decide
+
+/-- The guard value: `1` iff `in_idx < in_len` and the byte there is not a newline. -/
+def gOf (mem : Word → Byte) (i L p : Word) : Word :=
+  if i.toNat < L.toNat then (if mem (p + i) = nlB then 0 else 1) else 0
+
+theorem cgGuard_eff (f : Nat) (st : St) (i L p : Word)
+    (h5 : st.rget 5 = i) (h11 : st.rget 11 = L) (h10 : st.rget 10 = p) (h24 : st.rget 24 = 10)
+    (hi : i.toNat < 2^63) (hL : L.toNat < 2^63) :
+    ∃ st', exec (f + 6) cgGuard st = some (st', .normal)
+      ∧ st'.rget 15 = gOf st.mem i L p
+      ∧ (∀ r, r ≠ 8 → r ≠ 15 → r ≠ 30 → st'.rget r = st.rget r)
+      ∧ st'.mem = st.mem := by
+  have haddr : st.rget 10 + st.rget 5 = p + i := by rw [h10, h5]
+  unfold cgGuard
+  by_cases hil : i.toNat < L.toNat
+  · -- i < L: load and test the byte
+    have hlt : evalCond .lt (st.rget 5) (st.rget 11) = true := by rw [h5, h11]; exact slt_true hi hL hil
+    have ha : exec (f+4) (.add 30 10 5) st = some (st.rset 30 (p + i), .normal) := by
+      rw [exec_add, haddr]
+    have hl : exec (f+3) (.lbu 8 30 0) (st.rset 30 (p + i))
+        = some ((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64), .normal) := by
+      rw [exec_lbu]; simp [zero_signExtend, wadd_zero]
+    have h24' : ((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64)).rget 24 = 10 := by
+      simp [h24]
+    have h8' : ((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64)).rget 8
+        = (st.mem (p + i)).setWidth 64 := by simp
+    have hz0 : ((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64)).rget 0
+        + (BitVec.ofNat 12 0).signExtend 64 = (0:Word) := by rw [rget_zero]; decide
+    have hz1 : ((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64)).rget 0
+        + (BitVec.ofNat 12 1).signExtend 64 = (1:Word) := by rw [rget_zero]; decide
+    by_cases hnl : st.mem (p + i) = nlB
+    · -- newline → g = 0
+      have hinner : exec (f+2) (.ife .eq 8 24 (lit 15 0) (lit 15 1))
+          ((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64))
+          = some (((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64)).rset 15 0, .normal) := by
+        rw [show f+2 = (f+1)+1 from rfl,
+            exec_ife_then _ _ _ _ _ _ _ (by rw [h8', h24']; simp only [evalCond]; rw [decide_eq_true_eq, mem_eq_nl_iff]; exact hnl),
+            show lit 15 0 = Stmt.addi 15 0 (BitVec.ofNat 12 0) from rfl, exec_addi, hz0]
+      refine ⟨((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64)).rset 15 0, ?_, ?_, ?_, ?_⟩
+      · rw [show f+6 = (f+5)+1 from rfl, exec_ife_then _ _ _ _ _ _ _ hlt]
+        simp only [seqs, List.foldr_cons, List.foldr_nil]
+        rw [show f+5 = (f+4)+1 from rfl, exec_seq_normal _ _ _ _ _ ha,
+            show f+4 = (f+3)+1 from rfl, exec_seq_normal _ _ _ _ _ hl,
+            show f+3 = (f+2)+1 from rfl, exec_seq_normal _ _ _ _ _ hinner]
+        rfl
+      · rw [gOf, if_pos hil, if_pos hnl]; simp
+      · intro r hr8 hr15 hr30
+        rw [rget_rset_ne _ _ _ _ hr15, rget_rset_ne _ _ _ _ hr8, rget_rset_ne _ _ _ _ hr30]
+      · simp
+    · -- not newline → g = 1
+      have hinner : exec (f+2) (.ife .eq 8 24 (lit 15 0) (lit 15 1))
+          ((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64))
+          = some (((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64)).rset 15 1, .normal) := by
+        rw [show f+2 = (f+1)+1 from rfl,
+            exec_ife_else _ _ _ _ _ _ _ (by
+              rw [h8', h24']; simp only [evalCond]; rw [decide_eq_false_iff_not, mem_eq_nl_iff]; exact hnl),
+            show lit 15 1 = Stmt.addi 15 0 (BitVec.ofNat 12 1) from rfl, exec_addi, hz1]
+      refine ⟨((st.rset 30 (p + i)).rset 8 ((st.mem (p + i)).setWidth 64)).rset 15 1, ?_, ?_, ?_, ?_⟩
+      · rw [show f+6 = (f+5)+1 from rfl, exec_ife_then _ _ _ _ _ _ _ hlt]
+        simp only [seqs, List.foldr_cons, List.foldr_nil]
+        rw [show f+5 = (f+4)+1 from rfl, exec_seq_normal _ _ _ _ _ ha,
+            show f+4 = (f+3)+1 from rfl, exec_seq_normal _ _ _ _ _ hl,
+            show f+3 = (f+2)+1 from rfl, exec_seq_normal _ _ _ _ _ hinner]
+        rfl
+      · rw [gOf, if_pos hil, if_neg hnl]; simp
+      · intro r hr8 hr15 hr30
+        rw [rget_rset_ne _ _ _ _ hr15, rget_rset_ne _ _ _ _ hr8, rget_rset_ne _ _ _ _ hr30]
+      · simp
+  · -- i >= L: g = 0 directly
+    refine ⟨st.rset 15 0, ?_, ?_, ?_, ?_⟩
+    · rw [show f+6 = (f+5)+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (by rw [h5, h11]; exact slt_false hi hL (by omega)),
+          show lit 15 0 = Stmt.addi 15 0 (BitVec.ofNat 12 0) from rfl, exec_addi,
+          show st.rget 0 + (BitVec.ofNat 12 0).signExtend 64 = (0:Word) from by rw [rget_zero]; decide]
+    · rw [gOf, if_neg hil]; simp
+    · intro r hr8 hr15 hr30; rw [rget_rset_ne _ _ _ _ hr15]
+    · simp
+
 end LowIR.Ctrl.Hex0
