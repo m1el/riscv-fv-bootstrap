@@ -1087,4 +1087,24 @@ theorem decodeS_low_goodlo (hi c2 lo : Nat) (rest : List Nat)
       = ((hi * 16 + lo) :: (Hex0.decodeS .High rest).1, (Hex0.decodeS .High rest).2) := by
   rw [Hex0.decodeS]; simp [h, hn]
 
+/-- `skipComment` over an all-non-newline list drops everything (EOF comment). -/
+theorem skipComment_nonl (l : List Nat) (h : ∀ x ∈ l, x ≠ 10) : _root_.Hex0.skipComment l = [] := by
+  induction l with
+  | nil => rfl
+  | cons c l' ih =>
+    rw [_root_.Hex0.skipComment]
+    have hc : c ≠ 10 := h c (by simp)
+    simp only [Hex0.c_nl, beq_iff_eq, if_neg hc]
+    exact ih (fun x hx => h x (by simp [hx]))
+
+/-- `skipComment` over a non-newline run then a `\n` drops through the `\n`. -/
+theorem skipComment_run (pre rest : List Nat) (h : ∀ x ∈ pre, x ≠ 10) :
+    _root_.Hex0.skipComment (pre ++ 10 :: rest) = rest := by
+  induction pre with
+  | nil => simp [_root_.Hex0.skipComment, Hex0.c_nl]
+  | cons c pre' ih =>
+    have hc : c ≠ 10 := h c (by simp)
+    simp only [List.cons_append, _root_.Hex0.skipComment, Hex0.c_nl, beq_iff_eq, if_neg hc]
+    exact ih (fun x hx => h x (by simp [hx]))
+
 end LowIR.Ctrl.Hex0

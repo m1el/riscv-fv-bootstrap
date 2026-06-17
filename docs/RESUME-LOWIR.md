@@ -99,18 +99,41 @@ Target: `CtrlHex0.hex0` (the program) computes `Hex0.coreSpec` (= `decodeS` two-
 
 **(A) body-dispatch step — ✅ DONE** (`body_space` + `body_comment` + `body_hex`).
 
-**(B) main-loop invariant** (`while .lt 5 11 body`). At each loop head the IL is at a *High*
-position, so `decodeS High input` splits there:
-- `in_idx = i`, `out_idx = |produced|`, `x14 = 0` (Ok so far);
-- output region `[out_ptr, out_ptr+out_idx)` = the bytes decoded from `input[0..i)`;
-- `decodeS High input = (produced ++ rest, finalStatus)` where `(rest, finalStatus) = decodeS High (input.drop i)`;
-- `i ≤ in_len`, `out_idx ≤ cap`, input memory unchanged.
-Induct (like `digit_loop`) on `in_len - i` (or on `(input.drop i).length`). The main loop uses
-`.lt 5 11` (signed) → use `slt_true/slt_false` with `i ≤ in_len < 2^63` carried in the invariant.
-**Comment subtlety:** IL `skipComment` stops *at* the `\n` (doesn't consume it); the spec
-`Hex0.skipComment` consumes *through* the `\n`. They reconcile because the *next* main-loop
-iteration reads that `\n` as a space and skips it — so the per-token correspondence for a comment
-spans `skipComment_eff` + one more space iteration. Handle this in the invariant/induction.
+**(B) main-loop invariant** (`while .lt 5 11 body`). All the *pieces* are now proved; this is a
+composition by **strong induction on `len - idx`** (each iteration advances `idx` by ≥1). Ready tools:
+`body_space`/`body_comment`/`body_hex` (per-iteration effect, 6 hex arms), `decodeS_high_*`/
+`decodeS_low_*` (spec unfolders), `pnibR_eq_255_iff`/`pnibR_nibble`/`pnibR_lt_16`/`hexbyte_val`/
+`lowStop_iff` (IL↔spec bridges), the borrow layer (`Disjoint`/`Wf`/`storeByte_preserves`/
+`Disjoint.not_left`), `slt_true/false`, `exec_while_step/done`, `exec_mono_le` (existential fuel).
+
+Invariant at a loop head (index `idx`, output length `olen`), carrying:
+- `Regs st p L q cap`; `x5 = ofNat idx`, `x6 = ofNat olen`, `x14 = 0`; `L = ofNat len`,
+  `cap = ofNat capN`; `idx ≤ len`, `len < 2^63`, `olen ≤ capN`, `capN < 2^63`.
+- **input bridge**: `∀ k < len, (st.mem (p + ofNat k)).toNat = inp[k]` (inp : List Nat, len = inp.length).
+- **output bridge**: `∀ k < olen, (st.mem (q + ofNat k)).toNat = produced[k]`, where `produced` is the
+  prefix decoded so far.
+- **Disjoint** input/output slices (from the borrow `Wf` precondition) ⇒ output writes never change
+  input reads (`storeByte_preserves` + `Disjoint.not_left`); keeps the input bridge stable.
+
+Two spec-side lemmas still to prove (pure `decodeS`, no IL — small):
+1. **High-boundary decomposition**: if decoding `inp.take idx` ends cleanly in `High` producing
+   `produced`, then `decodeS High inp = (produced ++ rest, status)` with `(rest,status) = decodeS High (inp.drop idx)`.
+   Induct on `idx` following the decode. This is what lets per-iteration steps compose to the whole.
+2. **Comment reconciliation** (the `\n` subtlety dissolves): when `body_comment` lands the IL at
+   `J = first \n at/after idx+1` (or `len`), the IH from `J` *directly* discharges the comment case,
+   because `decodeS High (inp.drop J) = decodeS High (skipComment (inp.drop (idx+1)))` — the IL stops
+   *at* the `\n`, and `decodeS`'s own `High` recursion treats that `\n` as a space (`decodeS_high_space`),
+   landing at `J+1 = skipComment` result. So NO separate `\n` iteration is needed in the proof; just
+   prove `skipComment (inp.drop (idx+1)) = inp.drop (J+1)` and `inp.drop J = inp[J] :: inp.drop (J+1)`.
+   (Connecting `body_comment`'s `gOf`-based skip distance `d` to "J = first \n" uses the input bridge:
+   `gOf st.mem (idx+1+ofNat j) L p = 1` ⟺ `idx+1+j < len ∧ inp[idx+1+j] ≠ 10`.)
+
+Per-arm mapping (each body arm → one `decodeS` step via the unfolders + bridges):
+space→`decodeS_high_space`; comment→reconciliation+IH; hex badHi(`pnibR=255`)→`decodeS_high_badhi`
+(via `pnibR_eq_255_iff`); trailing→`decodeS_low_nil`; split(`lowStop`)→`decodeS_low_split`
+(via `lowStop_iff`); badLo→`decodeS_low_badlo`; OK→`decodeS_low_goodlo` with byte `hexbyte_val`
+(value `=hi*16+lo` via `pnibR_nibble`), then IH from `idx+2` with `produced ++ [byte]`. The capacity
+arm (`outFull`, `cap ≤ olen`) → see (C).
 
 **(C) coreSpec assembly.** `coreSpec` computes the *full* decode bytes then checks `cap < bytes.length`;
 the IL checks capacity per byte and `ret`s `OutputShort` on the first overflow. These agree because
@@ -157,20 +180,20 @@ output at `outBase=0x4000`, regs 10–13). Memory past `inp.length` reads 0.
 
 ## 5. Suggested next session
 
-`body_step` (item A) is **DONE**. Next:
+`body_step` (item A) **DONE**, plus all bridges, the borrow layer, and the `decodeS` unfolders.
+Remaining is item B (the invariant) + item C, both now composition exercises:
 
-1. **Nibble bridge lemmas** (small, do first — item B needs them):
-   - `pnibR c = 255 ↔ Hex0.nibble c.toNat = none` (case split mirrors `pnib_correct`'s regions).
-   - for hex `c`: `(pnibR c).toNat = (Hex0.nibble c.toNat).get` (the nibble value), and
-     `(((pnibR c)<<<4) ||| pnibR c2).setWidth 8).toNat = hi*16+lo` (orr = + since `hi*16` has low
-     nibble 0 and `lo<16`; `bv_omega` after relating `pnibR` to the nibble Nat values).
-   - `lowStop c ↔ Hex0.isLowStop c.toNat`; `c not space/comment ↔ ¬isComment ∧ ¬isSpace`.
-2. **main invariant** (item B) by induction on the input suffix (decreasing `decodeS` recursion).
-   Compose `body_space`/`body_comment`/`body_hex`, mapping each arm to the matching `decodeS` branch
-   via the bridge lemmas. Carry: `Regs`, `x5=i`, `x6=out_idx`, `x14=0`, output region = decoded
-   prefix, `i ≤ L < 2^63` (for the signed `.lt 5 11` guard → `slt_true/slt_false`), and the
-   capacity relation. **Comment subtlety** (see below) — the comment iteration lands the IL *at* the
-   `\n`; the next iteration's space-skip consumes it, so a comment spans `body_comment`+1 space step.
-   Everything is **existential fuel** now (use `exec_mono_le` + `exec_while_step`/`exec_while_done`).
-3. **coreSpec assembly** (item C) + prelude peel (15 `lit`/init instrs → loop-entry `Regs`+state).
-4. Optionally: conformant strtoull functional proof; **`compile_sim`** (T1) to real RV64I bytes.
+1. **Two small spec lemmas** (pure `decodeS`, no IL): the *High-boundary decomposition* and the
+   *comment reconciliation* — see §3 (B). Do these first; they're the glue for the induction.
+2. **Main invariant** (item B): strong induction on `len - idx`, composing `body_space`/`body_comment`/
+   `body_hex` with the `decodeS_*` unfolders and the bridges, per the per-arm mapping in §3 (B). Carry
+   the input/output bridges + `Disjoint` (borrow `Wf` ⇒ output writes preserve input). Everything is
+   existential-fuel (`exec_mono_le`); the signed guard uses `slt_true/false`.
+3. **coreSpec assembly** (item C): the invariant gives a per-byte-capacity decode; relate to
+   `coreSpec` (cap applied to the full decode). Equivalence: if `|decode| > cap` the IL hits `outFull`
+   (arm E, code 2) exactly at `olen = cap` before any later step, matching `(2, take cap, cap)`; else
+   no `outFull` fires and the decode status stands. Then peel hex0's 15-instr const/init prelude into
+   the loop-entry `Regs`+state and apply the invariant; read off `x14`/output/`x6` vs `coreSpec`.
+   Top-level theorem takes the borrow `Wf [shared input, uniq output]` precondition (⇒ `Disjoint`).
+4. Optionally: conformant strtoull functional proof (errno = single global, single-threaded — see
+   `docs/MEMORY-BORROWS.md`); **`compile_sim`** (T1) to real RV64I bytes.
