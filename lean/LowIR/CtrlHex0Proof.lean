@@ -236,4 +236,62 @@ theorem cgGuard_eff (f : Nat) (st : St) (i L p : Word)
     · intro r hr8 hr15 hr30; rw [rget_rset_ne _ _ _ _ hr15]
     · simp
 
+/-! ### The comment-skip loop body and loop. -/
+
+theorem skip_body (f : Nat) (st : St) (i L p : Word)
+    (h5 : st.rget 5 = i) (h11 : st.rget 11 = L) (h10 : st.rget 10 = p) (h24 : st.rget 24 = 10)
+    (hi1 : i.toNat + 1 < 2^63) (hL : L.toNat < 2^63) :
+    ∃ st', exec (f + 8) (.seq (.addi 5 5 1) cgGuard) st = some (st', .normal)
+      ∧ st'.rget 5 = i + 1 ∧ st'.rget 11 = L ∧ st'.rget 10 = p ∧ st'.rget 24 = 10
+      ∧ st'.rget 16 = st.rget 16 ∧ st'.rget 15 = gOf st.mem (i + 1) L p ∧ st'.mem = st.mem := by
+  have ha : exec (f+7) (.addi 5 5 1) st = some (st.rset 5 (i + 1), .normal) := by
+    rw [exec_addi, h5, show (1 : BitVec 12).signExtend 64 = (1:Word) from by decide]
+  have hi1' : (i + 1).toNat < 2^63 := by bv_omega
+  obtain ⟨st', hcg, hg, hpres, hmem⟩ := cgGuard_eff (f+1) (st.rset 5 (i + 1)) (i + 1) L p
+    (by simp) (by simp [h11]) (by simp [h10]) (by simp [h24]) hi1' hL
+  have hmem' : (st.rset 5 (i + 1)).mem = st.mem := by simp
+  refine ⟨st', ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [show f+8 = (f+7)+1 from rfl, exec_seq_normal _ _ _ _ _ ha]; exact hcg
+  · rw [hpres 5 (by decide) (by decide) (by decide)]; simp
+  · rw [hpres 11 (by decide) (by decide) (by decide)]; simp [h11]
+  · rw [hpres 10 (by decide) (by decide) (by decide)]; simp [h10]
+  · rw [hpres 24 (by decide) (by decide) (by decide)]; simp [h24]
+  · rw [hpres 16 (by decide) (by decide) (by decide)]; simp
+  · rw [hg, hmem']
+  · rw [hmem, hmem']
+
+theorem skip_loop (d : Nat) : ∀ (st : St) (i L p : Word),
+    st.rget 5 = i → st.rget 11 = L → st.rget 10 = p → st.rget 24 = 10 → st.rget 16 = 1 →
+    st.rget 15 = gOf st.mem i L p → L.toNat < 2^63 → i.toNat + d < 2^63 →
+    (∀ j, j < d → gOf st.mem (i + BitVec.ofNat 64 j) L p = 1) →
+    gOf st.mem (i + BitVec.ofNat 64 d) L p = 0 →
+    ∃ st', exec (d + 9) (.while .geu 15 16 (.seq (.addi 5 5 1) cgGuard)) st = some (st', .normal)
+      ∧ st'.rget 5 = i + BitVec.ofNat 64 d ∧ st'.rget 11 = L ∧ st'.rget 10 = p
+      ∧ st'.rget 24 = 10 ∧ st'.rget 16 = 1 ∧ st'.mem = st.mem := by
+  induction d with
+  | zero =>
+    intro st i L p h5 h11 h10 h24 h16 hg hL _ _ hz
+    rw [cur_zero] at hz
+    have hcond : evalCond .geu (st.rget 15) (st.rget 16) = false := by rw [hg, h16, hz]; decide
+    refine ⟨st, ?_, ?_, h11, h10, h24, h16, rfl⟩
+    · rw [show (0:Nat)+9 = 8+1 from rfl, exec_while_done _ _ _ _ _ _ hcond]
+    · rw [cur_zero]; exact h5
+  | succ d ih =>
+    intro st i L p h5 h11 h10 h24 h16 hg hL hbd hdig hz
+    have g0 : gOf st.mem i L p = 1 := by have := hdig 0 (by omega); rwa [cur_zero] at this
+    have hcond : evalCond .geu (st.rget 15) (st.rget 16) = true := by rw [hg, h16, g0]; decide
+    have hi1n : (i + 1).toNat = i.toNat + 1 := by bv_omega
+    obtain ⟨st1, hbody, hs5, hs11, hs10, hs24, hs16, hsg, hsmem⟩ :=
+      skip_body (d+1) st i L p h5 h11 h10 h24 (by omega) hL
+    have hgi1 : st1.rget 15 = gOf st1.mem (i+1) L p := by rw [hsg, hsmem]
+    have hdig' : ∀ j, j < d → gOf st1.mem ((i+1) + BitVec.ofNat 64 j) L p = 1 := by
+      intro j hj; rw [hsmem, ← cur_step]; exact hdig (j+1) (by omega)
+    have hz' : gOf st1.mem ((i+1) + BitVec.ofNat 64 d) L p = 0 := by rw [hsmem, ← cur_step]; exact hz
+    obtain ⟨st', he, hr5, hr11, hr10, hr24, hr16, hrmem⟩ :=
+      ih st1 (i+1) L p hs5 hs11 hs10 hs24 (hs16.trans h16) hgi1 hL (by rw [hi1n]; omega) hdig' hz'
+    refine ⟨st', ?_, ?_, hr11, hr10, hr24, hr16, ?_⟩
+    · rw [show (d+1)+9 = (d+9)+1 from rfl, exec_while_step _ _ _ _ _ _ _ hcond hbody]; exact he
+    · rw [hr5, cur_step]
+    · rw [hrmem, hsmem]
+
 end LowIR.Ctrl.Hex0
