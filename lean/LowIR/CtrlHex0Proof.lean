@@ -386,6 +386,12 @@ theorem ceq_false {st : St} {b : Byte} {r : Reg} {k : Word} (n : Nat)
   rw [BitVec.toNat_setWidth, Nat.mod_eq_of_lt (by have := b.isLt; omega), hk] at this
   exact this
 
+@[simp] theorem rget_storeByte (s : St) (a : Word) (b : Byte) (r : Reg) :
+    (s.storeByte a b).rget r = s.rget r := rfl
+
+@[simp] theorem mem_storeByte_self (s : St) (a : Word) (b : Byte) :
+    (s.storeByte a b).mem = fun x => if x = a then b else s.mem x := rfl
+
 /-- Raw word-equality dispatch (compares two registers' contents). -/
 theorem weq_true {s : St} {a b : Reg} {x y : Word} (ha : s.rget a = x) (hb : s.rget b = y)
     (h : x = y) : evalCond .eq (s.rget a) (s.rget b) = true := by
@@ -552,6 +558,13 @@ theorem body_comment (st : St) (p L q cap i : Word) (c : Byte) (d : Nat)
 
 /-! ### body_step, case 3: the hex-digit path (`hexPath`). -/
 
+theorem exec_skip (f : Nat) (s : St) : exec (f+1) .skip s = some (s, .normal) := rfl
+
+theorem exec_sb (f rb rv : Nat) (imm : BitVec 12) (s : St) :
+    exec (f+1) (.sb rb rv imm) s
+      = some (s.storeByte (s.rget rb + imm.signExtend 64) ((s.rget rv).setWidth 8), .normal) := by
+  simp [exec]
+
 /-- `err code` sets the status register and returns. -/
 theorem exec_err (f : Nat) (s : St) (code : Nat) :
     exec (f+2) (err code) s = some (s.rset 14 ((BitVec.ofNat 12 code).signExtend 64), .ret) := by
@@ -561,5 +574,299 @@ theorem exec_err (f : Nat) (s : St) (code : Nat) :
     show exec (f+1) (.addi 14 0 (BitVec.ofNat 12 code)) s = _
     rw [exec_addi, rget_zero, wzero_add]
   rw [show f+2 = (f+1)+1 from rfl, exec_seq_normal _ _ _ _ _ hlit, exec_ret]
+
+/-- An `ife _ _ _ t .skip` whose condition is false: falls through unchanged. -/
+theorem ife_skip_false (n : Nat) (hn : 2 ≤ n) (c : Cond) (a b : Reg) (t : Stmt) (s : St)
+    (hc : evalCond c (s.rget a) (s.rget b) = false) :
+    exec n (.ife c a b t .skip) s = some (s, .normal) :=
+  exec_mono_le hn (by rw [show (2:Nat) = 1+1 from rfl, exec_ife_else _ _ _ _ _ _ _ hc]; rfl)
+
+/-- An `ife _ _ _ (err code) .skip` whose condition is true: returns with the status. -/
+theorem ife_err_true (n : Nat) (hn : 4 ≤ n) (c : Cond) (a b : Reg) (code : Nat) (s : St)
+    (hc : evalCond c (s.rget a) (s.rget b) = true) :
+    exec n (.ife c a b (err code) .skip) s
+      = some (s.rset 14 ((BitVec.ofNat 12 code).signExtend 64), .ret) :=
+  exec_mono_le hn (by rw [show (4:Nat) = 3+1 from rfl, exec_ife_then _ _ _ _ _ _ _ hc]; exact exec_err 1 s code)
+
+/-- One low-stop test character set (where a low nibble is expected → Split). -/
+def lowStop (c : Byte) : Prop :=
+  c.toNat = 10 ∨ c.toNat = 32 ∨ c.toNat = 95 ∨ c.toNat = 35 ∨ c.toNat = 59
+
+/-- The full hex-digit path. Six mutually-exclusive outcomes, each carrying its
+    defining condition so the loop invariant can align with `decodeS`. -/
+theorem hexPath_eff (s : St) (p L q cap m : Word) (chi : Byte)
+    (hr : Regs s p L q cap) (h5 : s.rget 5 = m) (h7 : s.rget 7 = chi.setWidth 64) :
+    (pnibR chi = 255 ∧ ∃ st', exec 40 hexPath s = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 5 ∧ st'.rget 6 = s.rget 6 ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ L.toNat ≤ m.toNat ∧ ∃ st', exec 40 hexPath s = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 4 ∧ st'.rget 6 = s.rget 6 ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ m.toNat < L.toNat ∧ lowStop (s.mem (p+m))
+        ∧ ∃ st', exec 40 hexPath s = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 3 ∧ st'.rget 6 = s.rget 6 ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ m.toNat < L.toNat ∧ ¬ lowStop (s.mem (p+m)) ∧ pnibR (s.mem (p+m)) = 255
+        ∧ ∃ st', exec 40 hexPath s = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 5 ∧ st'.rget 6 = s.rget 6 ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ m.toNat < L.toNat ∧ ¬ lowStop (s.mem (p+m)) ∧ pnibR (s.mem (p+m)) ≠ 255
+        ∧ cap.toNat ≤ (s.rget 6).toNat
+        ∧ ∃ st', exec 40 hexPath s = some (st', .ret)
+        ∧ (st'.rget 14).toNat = 2 ∧ st'.rget 6 = s.rget 6 ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ m.toNat < L.toNat ∧ ¬ lowStop (s.mem (p+m)) ∧ pnibR (s.mem (p+m)) ≠ 255
+        ∧ (s.rget 6).toNat < cap.toNat
+        ∧ ∃ st', exec 40 hexPath s = some (st', .normal)
+        ∧ st'.rget 5 = m + 1 ∧ st'.rget 6 = s.rget 6 + 1 ∧ st'.rget 14 = s.rget 14
+        ∧ Regs st' p L q cap
+        ∧ st'.mem = (s.storeByte (q + s.rget 6)
+              ((((pnibR chi) <<< 4) ||| pnibR (s.mem (p+m))).setWidth 8)).mem) := by
+  -- s0 = state after `pnib 28 7`
+  have hpnib28 : exec 6 (pnib 28 7) s = some (s.rset 28 (pnibR chi), .normal) :=
+    pnib_correct 0 s chi 28 h7 hr.h20 hr.h21 hr.h22 hr.h23 hr.h17
+  have h28_0 : (s.rset 28 (pnibR chi)).rget 28 = pnibR chi := rget_rset_eq _ _ _ (by decide)
+  have h19_0 : (s.rset 28 (pnibR chi)).rget 19 = 255 := by
+    rw [rget_rset_ne _ _ _ _ (by decide : (19:Reg) ≠ 28)]; exact hr.h19
+  have h5_0 : (s.rset 28 (pnibR chi)).rget 5 = m := by
+    rw [rget_rset_ne _ _ _ _ (by decide : (5:Reg) ≠ 28)]; exact h5
+  have h11_0 : (s.rset 28 (pnibR chi)).rget 11 = L := by
+    rw [rget_rset_ne _ _ _ _ (by decide : (11:Reg) ≠ 28)]; exact hr.h11
+  have h10_0 : (s.rset 28 (pnibR chi)).rget 10 = p := by
+    rw [rget_rset_ne _ _ _ _ (by decide : (10:Reg) ≠ 28)]; exact hr.h10
+  by_cases hbad : pnibR chi = (255:Word)
+  · -- ARM A: bad high nibble → Unknown (5)
+    left
+    have hcond : evalCond .eq ((s.rset 28 (pnibR chi)).rget 28) ((s.rset 28 (pnibR chi)).rget 19) = true :=
+      weq_true h28_0 h19_0 hbad
+    have herr : exec 38 (.ife .eq 28 19 (err 5) .skip) (s.rset 28 (pnibR chi))
+        = some ((s.rset 28 (pnibR chi)).rset 14 ((BitVec.ofNat 12 5).signExtend 64), .ret) := by
+      rw [show (38:Nat) = 37+1 from rfl, exec_ife_then _ _ _ _ _ _ _ hcond]
+      exact exec_mono_le (by omega) (exec_err 0 (s.rset 28 (pnibR chi)) 5)
+    refine ⟨hbad, (s.rset 28 (pnibR chi)).rset 14 ((BitVec.ofNat 12 5).signExtend 64), ?_, ?_, ?_, ?_⟩
+    · simp only [hexPath, seqs, List.foldr_cons, List.foldr_nil]
+      rw [show (40:Nat) = 39+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) hpnib28),
+          show (39:Nat) = 38+1 from rfl, exec_seq_ret _ _ _ _ _ herr]
+    · rw [rget_rset_eq _ _ _ (by decide : (14:Reg) ≠ 0)]; decide
+    · rw [rget_rset_ne _ _ _ _ (by decide : (6:Reg) ≠ 14), rget_rset_ne _ _ _ _ (by decide : (6:Reg) ≠ 28)]
+    · simp
+  · -- high nibble OK; the `ife eq 28 19` falls through (skip)
+    have hcondA : evalCond .eq ((s.rset 28 (pnibR chi)).rget 28) ((s.rset 28 (pnibR chi)).rget 19) = false :=
+      weq_false h28_0 h19_0 hbad
+    have hA : exec 38 (.ife .eq 28 19 (err 5) .skip) (s.rset 28 (pnibR chi))
+        = some (s.rset 28 (pnibR chi), .normal) := by
+      rw [show (38:Nat) = 37+1 from rfl, exec_ife_else _ _ _ _ _ _ _ hcondA]; rfl
+    by_cases htrail : L.toNat ≤ m.toNat
+    · -- ARM B: no low char → Trailing (4)
+      right; left
+      have hcond : evalCond .geu ((s.rset 28 (pnibR chi)).rget 5) ((s.rset 28 (pnibR chi)).rget 11) = true :=
+        geu_ww_true h5_0 h11_0 htrail
+      have herr : exec 36 (.ife .geu 5 11 (err 4) .skip) (s.rset 28 (pnibR chi))
+          = some ((s.rset 28 (pnibR chi)).rset 14 ((BitVec.ofNat 12 4).signExtend 64), .ret) := by
+        rw [show (36:Nat) = 35+1 from rfl, exec_ife_then _ _ _ _ _ _ _ hcond]
+        exact exec_mono_le (by omega) (exec_err 0 (s.rset 28 (pnibR chi)) 4)
+      refine ⟨hbad, htrail, (s.rset 28 (pnibR chi)).rset 14 ((BitVec.ofNat 12 4).signExtend 64), ?_, ?_, ?_, ?_⟩
+      · simp only [hexPath, seqs, List.foldr_cons, List.foldr_nil]
+        rw [show (40:Nat) = 39+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) hpnib28),
+            show (39:Nat) = 38+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) hA),
+            show (38:Nat) = 37+1 from rfl, exec_seq_ret _ _ _ _ _ (exec_mono_le (by omega) herr)]
+      · rw [rget_rset_eq _ _ _ (by decide : (14:Reg) ≠ 0)]; decide
+      · rw [rget_rset_ne _ _ _ _ (by decide : (6:Reg) ≠ 14), rget_rset_ne _ _ _ _ (by decide : (6:Reg) ≠ 28)]
+      · simp
+    · -- low char exists; the `ife geu 5 11` falls through (skip), then readAdv loads it
+      have htrail2 : m.toNat < L.toNat := by omega
+      have hcondB : evalCond .geu ((s.rset 28 (pnibR chi)).rget 5) ((s.rset 28 (pnibR chi)).rget 11) = false :=
+        geu_ww_false h5_0 h11_0 htrail2
+      have hB : exec 36 (.ife .geu 5 11 (err 4) .skip) (s.rset 28 (pnibR chi))
+          = some (s.rset 28 (pnibR chi), .normal) := by
+        rw [show (36:Nat) = 35+1 from rfl, exec_ife_else _ _ _ _ _ _ _ hcondB]; rfl
+      obtain ⟨sr, hread_r, hsr5, hsr7, hsr30, hsrpres, hsrmem⟩ :=
+        readAdv_eff 0 (s.rset 28 (pnibR chi)) 7 p m h10_0 h5_0 (by decide) (by decide) (by decide) (by decide)
+      -- low byte
+      have hc2 : sr.rget 7 = (s.mem (p+m)).setWidth 64 := by rw [hsr7]; simp
+      have hsrconst : ∀ r, r ≠ 5 → r ≠ 7 → r ≠ 30 → r ≠ 28 → sr.rget r = s.rget r := by
+        intro r a b c d; rw [hsrpres r a b c, rget_rset_ne _ _ _ _ d]
+      have e24 : sr.rget 24 = (10:Word) := by
+        rw [hsrconst 24 (by decide) (by decide) (by decide) (by decide)]; exact hr.h24
+      have e25 : sr.rget 25 = (32:Word) := by
+        rw [hsrconst 25 (by decide) (by decide) (by decide) (by decide)]; exact hr.h25
+      have e26 : sr.rget 26 = (95:Word) := by
+        rw [hsrconst 26 (by decide) (by decide) (by decide) (by decide)]; exact hr.h26
+      have e27 : sr.rget 27 = (35:Word) := by
+        rw [hsrconst 27 (by decide) (by decide) (by decide) (by decide)]; exact hr.h27
+      have e18 : sr.rget 18 = (59:Word) := by
+        rw [hsrconst 18 (by decide) (by decide) (by decide) (by decide)]; exact hr.h18
+      have e19 : sr.rget 19 = (255:Word) := by
+        rw [hsrconst 19 (by decide) (by decide) (by decide) (by decide)]; exact hr.h19
+      have e20 : sr.rget 20 = (48:Word) := by
+        rw [hsrconst 20 (by decide) (by decide) (by decide) (by decide)]; exact hr.h20
+      have e21 : sr.rget 21 = (57:Word) := by
+        rw [hsrconst 21 (by decide) (by decide) (by decide) (by decide)]; exact hr.h21
+      have e22 : sr.rget 22 = (65:Word) := by
+        rw [hsrconst 22 (by decide) (by decide) (by decide) (by decide)]; exact hr.h22
+      have e23 : sr.rget 23 = (70:Word) := by
+        rw [hsrconst 23 (by decide) (by decide) (by decide) (by decide)]; exact hr.h23
+      have e17 : sr.rget 17 = (55:Word) := by
+        rw [hsrconst 17 (by decide) (by decide) (by decide) (by decide)]; exact hr.h17
+      have e13 : sr.rget 13 = cap := by
+        rw [hsrconst 13 (by decide) (by decide) (by decide) (by decide)]; exact hr.h13
+      have e12 : sr.rget 12 = q := by
+        rw [hsrconst 12 (by decide) (by decide) (by decide) (by decide)]; exact hr.h12
+      have e6 : sr.rget 6 = s.rget 6 := hsrconst 6 (by decide) (by decide) (by decide) (by decide)
+      have hsrmem' : sr.mem = s.mem := by rw [hsrmem]; simp
+      have hregs_sr : Regs sr p L q cap :=
+        hr.transfer (fun r a5 _ a7 _ _ _ a28 _ a30 _ => hsrconst r a5 a7 a30 a28)
+      -- peel the prefix: pnib, ife(bad-high) skip, ife(trailing) skip, readAdv
+      have hpeel4 : exec 40 hexPath s = exec 36
+          (.seq (.ife .eq 7 24 (err 3) .skip) (.seq (.ife .eq 7 25 (err 3) .skip)
+            (.seq (.ife .eq 7 26 (err 3) .skip) (.seq (.ife .eq 7 27 (err 3) .skip)
+            (.seq (.ife .eq 7 18 (err 3) .skip) (.seq (pnib 29 7)
+            (.seq (.ife .eq 29 19 (err 5) .skip) (.seq (.ife .geu 6 13 (err 2) .skip)
+            (.seq (.slli 31 28 4) (.seq (.orr 31 31 29) (.seq (.add 30 12 6)
+            (.seq (.sb 30 31 0) (.seq (.addi 6 6 1) .skip))))))))))))) sr := by
+        simp only [hexPath, seqs, List.foldr_cons, List.foldr_nil]
+        rw [show (40:Nat) = 39+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) hpnib28),
+            show (39:Nat) = 38+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) hA),
+            show (38:Nat) = 37+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) hB),
+            show (37:Nat) = 36+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) hread_r)]
+      by_cases hls : lowStop (s.mem (p+m))
+      · -- ARM C: low-stop char → Split (3)
+        right; right; left
+        refine ⟨hbad, htrail2, hls, sr.rset 14 ((BitVec.ofNat 12 3).signExtend 64), ?_, ?_, ?_, ?_⟩
+        · rw [hpeel4]
+          rcases hls with h | h | h | h | h
+          · rw [show (36:Nat)=35+1 from rfl,
+                exec_seq_ret _ _ _ _ _ (ife_err_true 35 (by omega) .eq 7 24 3 sr (ceq_true 10 hc2 e24 (by decide) h))]
+          · rw [show (36:Nat)=35+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 35 (by omega) .eq 7 24 (err 3) sr (ceq_false 10 hc2 e24 (by decide) (by omega))),
+                show (35:Nat)=34+1 from rfl,
+                exec_seq_ret _ _ _ _ _ (ife_err_true 34 (by omega) .eq 7 25 3 sr (ceq_true 32 hc2 e25 (by decide) h))]
+          · rw [show (36:Nat)=35+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 35 (by omega) .eq 7 24 (err 3) sr (ceq_false 10 hc2 e24 (by decide) (by omega))),
+                show (35:Nat)=34+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 34 (by omega) .eq 7 25 (err 3) sr (ceq_false 32 hc2 e25 (by decide) (by omega))),
+                show (34:Nat)=33+1 from rfl,
+                exec_seq_ret _ _ _ _ _ (ife_err_true 33 (by omega) .eq 7 26 3 sr (ceq_true 95 hc2 e26 (by decide) h))]
+          · rw [show (36:Nat)=35+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 35 (by omega) .eq 7 24 (err 3) sr (ceq_false 10 hc2 e24 (by decide) (by omega))),
+                show (35:Nat)=34+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 34 (by omega) .eq 7 25 (err 3) sr (ceq_false 32 hc2 e25 (by decide) (by omega))),
+                show (34:Nat)=33+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 33 (by omega) .eq 7 26 (err 3) sr (ceq_false 95 hc2 e26 (by decide) (by omega))),
+                show (33:Nat)=32+1 from rfl,
+                exec_seq_ret _ _ _ _ _ (ife_err_true 32 (by omega) .eq 7 27 3 sr (ceq_true 35 hc2 e27 (by decide) h))]
+          · rw [show (36:Nat)=35+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 35 (by omega) .eq 7 24 (err 3) sr (ceq_false 10 hc2 e24 (by decide) (by omega))),
+                show (35:Nat)=34+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 34 (by omega) .eq 7 25 (err 3) sr (ceq_false 32 hc2 e25 (by decide) (by omega))),
+                show (34:Nat)=33+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 33 (by omega) .eq 7 26 (err 3) sr (ceq_false 95 hc2 e26 (by decide) (by omega))),
+                show (33:Nat)=32+1 from rfl,
+                exec_seq_normal _ _ _ _ _ (ife_skip_false 32 (by omega) .eq 7 27 (err 3) sr (ceq_false 35 hc2 e27 (by decide) (by omega))),
+                show (32:Nat)=31+1 from rfl,
+                exec_seq_ret _ _ _ _ _ (ife_err_true 31 (by omega) .eq 7 18 3 sr (ceq_true 59 hc2 e18 (by decide) h))]
+        · rw [rget_rset_eq _ _ _ (by decide : (14:Reg) ≠ 0)]; decide
+        · rw [rget_rset_ne _ _ _ _ (by decide : (6:Reg) ≠ 14)]; exact e6
+        · simp [hsrmem']
+      · -- not a low-stop char
+        have hn10 : (s.mem (p+m)).toNat ≠ 10 := fun h => hls (Or.inl h)
+        have hn32 : (s.mem (p+m)).toNat ≠ 32 := fun h => hls (Or.inr (Or.inl h))
+        have hn95 : (s.mem (p+m)).toNat ≠ 95 := fun h => hls (Or.inr (Or.inr (Or.inl h)))
+        have hn35 : (s.mem (p+m)).toNat ≠ 35 := fun h => hls (Or.inr (Or.inr (Or.inr (Or.inl h))))
+        have hn59 : (s.mem (p+m)).toNat ≠ 59 := fun h => hls (Or.inr (Or.inr (Or.inr (Or.inr h))))
+        -- peel the 5 low-stop ifes (all false), reaching `pnib 29 7`
+        have hpeel9 : exec 40 hexPath s = exec 31
+            (.seq (pnib 29 7) (.seq (.ife .eq 29 19 (err 5) .skip)
+            (.seq (.ife .geu 6 13 (err 2) .skip) (.seq (.slli 31 28 4) (.seq (.orr 31 31 29)
+            (.seq (.add 30 12 6) (.seq (.sb 30 31 0) (.seq (.addi 6 6 1) .skip)))))))) sr := by
+          rw [hpeel4,
+              show (36:Nat)=35+1 from rfl,
+              exec_seq_normal _ _ _ _ _ (ife_skip_false 35 (by omega) .eq 7 24 (err 3) sr (ceq_false 10 hc2 e24 (by decide) hn10)),
+              show (35:Nat)=34+1 from rfl,
+              exec_seq_normal _ _ _ _ _ (ife_skip_false 34 (by omega) .eq 7 25 (err 3) sr (ceq_false 32 hc2 e25 (by decide) hn32)),
+              show (34:Nat)=33+1 from rfl,
+              exec_seq_normal _ _ _ _ _ (ife_skip_false 33 (by omega) .eq 7 26 (err 3) sr (ceq_false 95 hc2 e26 (by decide) hn95)),
+              show (33:Nat)=32+1 from rfl,
+              exec_seq_normal _ _ _ _ _ (ife_skip_false 32 (by omega) .eq 7 27 (err 3) sr (ceq_false 35 hc2 e27 (by decide) hn35)),
+              show (32:Nat)=31+1 from rfl,
+              exec_seq_normal _ _ _ _ _ (ife_skip_false 31 (by omega) .eq 7 18 (err 3) sr (ceq_false 59 hc2 e18 (by decide) hn59))]
+        -- s9 = state after `pnib 29 7`
+        have hpnib29 : exec 6 (pnib 29 7) sr = some (sr.rset 29 (pnibR (s.mem (p+m))), .normal) :=
+          pnib_correct 0 sr (s.mem (p+m)) 29 hc2 e20 e21 e22 e23 e17
+        have h29_9 : (sr.rset 29 (pnibR (s.mem (p+m)))).rget 29 = pnibR (s.mem (p+m)) :=
+          rget_rset_eq _ _ _ (by decide)
+        have h19_9 : (sr.rset 29 (pnibR (s.mem (p+m)))).rget 19 = (255:Word) := by
+          rw [rget_rset_ne _ _ _ _ (by decide : (19:Reg) ≠ 29)]; exact e19
+        have h6_9 : (sr.rset 29 (pnibR (s.mem (p+m)))).rget 6 = s.rget 6 := by
+          rw [rget_rset_ne _ _ _ _ (by decide : (6:Reg) ≠ 29)]; exact e6
+        have h13_9 : (sr.rset 29 (pnibR (s.mem (p+m)))).rget 13 = cap := by
+          rw [rget_rset_ne _ _ _ _ (by decide : (13:Reg) ≠ 29)]; exact e13
+        have hpeel10 : exec 40 hexPath s = exec 30
+            (.seq (.ife .eq 29 19 (err 5) .skip)
+            (.seq (.ife .geu 6 13 (err 2) .skip) (.seq (.slli 31 28 4) (.seq (.orr 31 31 29)
+            (.seq (.add 30 12 6) (.seq (.sb 30 31 0) (.seq (.addi 6 6 1) .skip))))))) (sr.rset 29 (pnibR (s.mem (p+m)))) := by
+          rw [hpeel9, show (31:Nat)=30+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) hpnib29)]
+        by_cases hbad2 : pnibR (s.mem (p+m)) = (255:Word)
+        · -- ARM D: bad low nibble → Unknown (5)
+          right; right; right; left
+          refine ⟨hbad, htrail2, hls, hbad2,
+            (sr.rset 29 (pnibR (s.mem (p+m)))).rset 14 ((BitVec.ofNat 12 5).signExtend 64), ?_, ?_, ?_, ?_⟩
+          · rw [hpeel10, show (30:Nat)=29+1 from rfl,
+                exec_seq_ret _ _ _ _ _ (ife_err_true 29 (by omega) .eq 29 19 5 _ (weq_true h29_9 h19_9 hbad2))]
+          · rw [rget_rset_eq _ _ _ (by decide : (14:Reg) ≠ 0)]; decide
+          · rw [rget_rset_ne _ _ _ _ (by decide : (6:Reg) ≠ 14)]; exact h6_9
+          · simp [hsrmem']
+        · by_cases hfull : cap.toNat ≤ (s.rget 6).toNat
+          · -- ARM E: output full → OutputShort (2)
+            right; right; right; right; left
+            refine ⟨hbad, htrail2, hls, hbad2, hfull,
+              (sr.rset 29 (pnibR (s.mem (p+m)))).rset 14 ((BitVec.ofNat 12 2).signExtend 64), ?_, ?_, ?_, ?_⟩
+            · rw [hpeel10, show (30:Nat)=29+1 from rfl,
+                  exec_seq_normal _ _ _ _ _ (ife_skip_false 29 (by omega) .eq 29 19 (err 5) _ (weq_false h29_9 h19_9 hbad2)),
+                  show (29:Nat)=28+1 from rfl,
+                  exec_seq_ret _ _ _ _ _ (ife_err_true 28 (by omega) .geu 6 13 2 _ (geu_ww_true h6_9 h13_9 hfull))]
+            · rw [rget_rset_eq _ _ _ (by decide : (14:Reg) ≠ 0)]; decide
+            · rw [rget_rset_ne _ _ _ _ (by decide : (6:Reg) ≠ 14)]; exact h6_9
+            · simp [hsrmem']
+          · -- ARM F: write the byte, continue
+            right; right; right; right; right
+            have hfull2 : (s.rget 6).toNat < cap.toNat := by omega
+            have h28_sr : sr.rget 28 = pnibR chi := by
+              rw [hsrpres 28 (by decide) (by decide) (by decide)]; exact h28_0
+            -- reg facts on s9 = sr.rset 29 (pnibR c2)
+            have h28_9 : (sr.rset 29 (pnibR (s.mem (p+m)))).rget 28 = pnibR chi := by
+              rw [rget_rset_ne _ _ _ _ (by decide : (28:Reg) ≠ 29)]; exact h28_sr
+            have h12_9 : (sr.rset 29 (pnibR (s.mem (p+m)))).rget 12 = q := by
+              rw [rget_rset_ne _ _ _ _ (by decide : (12:Reg) ≠ 29)]; exact e12
+            -- final state (using simplified values)
+            refine ⟨hbad, htrail2, hls, hbad2, hfull2,
+              (((((sr.rset 29 (pnibR (s.mem (p+m)))).rset 31 (pnibR chi <<< 4)).rset 31
+                  ((pnibR chi <<< 4) ||| pnibR (s.mem (p+m)))).rset 30 (q + s.rget 6)).storeByte
+                  (q + s.rget 6) (((pnibR chi <<< 4) ||| pnibR (s.mem (p+m))).setWidth 8)).rset 6
+                  (s.rget 6 + 1), ?_, ?_, ?_, ?_, ?_, ?_⟩
+            · -- exec: peel ife(29) skip, ife(geu613) skip, then the five ops + trailing skip
+              rw [hpeel10, show (30:Nat)=29+1 from rfl,
+                  exec_seq_normal _ _ _ _ _ (ife_skip_false 29 (by omega) .eq 29 19 (err 5) _ (weq_false h29_9 h19_9 hbad2)),
+                  show (29:Nat)=28+1 from rfl,
+                  exec_seq_normal _ _ _ _ _ (ife_skip_false 28 (by omega) .geu 6 13 (err 2) _ (geu_ww_false h6_9 h13_9 hfull2)),
+                  show (28:Nat)=27+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) (exec_slli 0 31 28 4 _)),
+                  show (27:Nat)=26+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) (exec_orr 0 31 31 29 _)),
+                  show (26:Nat)=25+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) (exec_add 0 30 12 6 _)),
+                  show (25:Nat)=24+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) (exec_sb 0 30 31 0 _)),
+                  show (24:Nat)=23+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_mono_le (by omega) (exec_addi 0 6 6 1 _)),
+                  show (23:Nat)=22+1 from rfl, exec_skip]
+              -- reconcile the (unsimplified) execution state with the witness
+              simp [h28_9, h12_9, h6_9,
+                show (BitVec.ofNat 12 0).signExtend 64 = (0:Word) from by decide,
+                show (BitVec.ofNat 12 1).signExtend 64 = (1:Word) from by decide]
+            · -- x5 = m + 1
+              simp; exact hsr5
+            · -- x6 = s.rget 6 + 1
+              rw [rget_rset_eq _ _ _ (by decide : (6:Reg) ≠ 0)]
+            · -- x14 unchanged
+              have h14 : sr.rget 14 = s.rget 14 := hsrconst 14 (by decide) (by decide) (by decide) (by decide)
+              simp [h14]
+            · -- Regs of the final state
+              apply hregs_sr.transfer
+              intro r a5 a6 a7 a8 a14 a15 a28 a29 a30 a31
+              rw [rget_rset_ne _ _ _ _ a6, rget_storeByte, rget_rset_ne _ _ _ _ a30,
+                  rget_rset_ne _ _ _ _ a31, rget_rset_ne _ _ _ _ a31, rget_rset_ne _ _ _ _ a29]
+            · -- memory: the written byte
+              simp only [rset_mem, mem_storeByte_self, hsrmem']
 
 end LowIR.Ctrl.Hex0
