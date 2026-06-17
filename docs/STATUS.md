@@ -123,6 +123,7 @@ execution log in [PROGRESS.md](PROGRESS.md).
 | break/block/ret proof primitives | `LowIR/CtrlStrtoullProof.lean` | **proof-grade** (one-liners) |
 | strtoull **conformant**: overflow→saturate ULLONG_MAX + `errno`, returned as (x12,x14) | `LowIR/CtrlStrtoull2.lean` | finite / testing-grade (`native_decide`) |
 | `strtoull10_correct` (functional, all inputs) | `LowIR/CtrlStrtoull10Proof.lean` | **proof-grade, sorry-free** (geu digit loop; axioms = propext/Quot/Choice) |
+| hex0 **functional proof** — foundation: `pnib_correct` (nibble parser ≡ `Hex0.nibble`) + geu lemmas (both operand orders) | `LowIR/CtrlHex0Proof.lean` | **proof-grade, sorry-free** (1st component) |
 
 **Ergonomics finding:** the control-flow outcome machinery is nearly free in proofs
 (every `block`/`while`-break/`seq`-break/`ret` rule is a one-line `by simp [exec]`); it
