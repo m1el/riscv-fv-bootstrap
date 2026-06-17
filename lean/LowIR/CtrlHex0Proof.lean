@@ -45,6 +45,18 @@ def Wf (bs : List Borrow) : Prop :=
 theorem Disjoint.symm {s t : Slice} (h : Disjoint s t) : Disjoint t s :=
   fun a hat has => h a has hat
 
+theorem Disjoint.not_right {s t : Slice} (h : Disjoint s t) {a : Word} (ha : s.has a) : ¬ t.has a :=
+  fun ht => h a ha ht
+
+theorem Disjoint.not_left {s t : Slice} (h : Disjoint s t) {a : Word} (ha : t.has a) : ¬ s.has a :=
+  fun hs => h a hs ha
+
+/-- A `Wf` borrow set makes a unique borrow disjoint from any other member. -/
+theorem Wf.disjoint {bs : List Borrow} (h : Wf bs) {b b' : Borrow}
+    (hb : b ∈ bs) (hb' : b' ∈ bs) (hne : b ≠ b') (hu : b'.perm = .uniq) :
+    Disjoint b.slice b'.slice :=
+  h b hb b' hb' hne (Or.inr hu)
+
 /-- Writing a byte outside slice `s` preserves every read within `s`. -/
 theorem storeByte_preserves {st : St} {s : Slice} {a a' : Word} {b : Byte}
     (hna : ¬ s.has a) (ha' : s.has a') : (st.storeByte a b).mem a' = st.mem a' := by
