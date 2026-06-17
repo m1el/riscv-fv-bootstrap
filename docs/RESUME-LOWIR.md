@@ -3,7 +3,7 @@
 Handoff for the **LowIR structured-IL** effort (prove libc functions, compile to RV64I)
 and specifically the **in-progress hex0 functional-correctness proof**. Read with
 [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md) (design/altitude survey), [PROGRESS.md](PROGRESS.md)
-(log), [STATUS.md](STATUS.md) §LowIR (table). HEAD at handoff: `9b338ab`.
+(log), [STATUS.md](STATUS.md) §LowIR (table). HEAD at handoff: `body_step` (item A) complete.
 
 Build everything: `cd lean && lake build LowIR.CtrlHex0Proof LowIR.CtrlStrtoull10Proof`.
 All 12 `LowIR*` modules build green (0 errors). Toolchain: `leanprover/lean4:v4.30.0`,
@@ -30,7 +30,7 @@ clocked big-step `exec : Nat → Stmt → St → Option (St × Outcome)`. State 
 | `LowIR/CtrlStrtoull2.lean` | **conformant** strtoull (overflow→ULLONG_MAX+errno) | ✅ validated |
 | `LowIR/CtrlStrtoull2Proof.lean` | conformant foundation: `geu_true/false`, `digit_val`, **threshold proved** (`build_step`,`nib_15`) | ✅ sorry-free; full conformant proof TODO |
 | `LowIR/CtrlStrtoullProof.lean` | the break/block exec primitives (`exec_block_catch`,`exec_while_brk`,`exec_seq_brk`,`acc_times_ten`,…) | ✅ sorry-free |
-| `LowIR/CtrlHex0Proof.lean` | **hex0 proof — IN PROGRESS** (see §3) | partial, sorry-free so far |
+| `LowIR/CtrlHex0Proof.lean` | **hex0 proof — IN PROGRESS**; `body_step` (item A) DONE (see §3) | partial, sorry-free |
 | `LowIR/Hex0Proof.lean` | the *original-IL* `hex0_correct` statement | **sorry** (superseded by Ctrl work) |
 
 **Proved sorry-free, all inputs:** `strlen_correct` (both ILs), `strtoull10_correct`.
@@ -71,26 +71,33 @@ Target: `CtrlHex0.hex0` (the program) computes `Hex0.coreSpec` (= `decodeS` two-
 ### Proved so far (`CtrlHex0Proof.lean`, sorry-free)
 - **`pnib_correct`** — `pnib dst 7` ≡ `Hex0.nibble` (writes `pnibR b`: `b-48` on [48,57], `b-55`
   on [65,70], else 255). 5-region case split.
-- **`cgGuard_eff`** — comment-loop guard: `x15 = gOf = (in_idx<in_len ∧ mem[p+i]≠'\n') ? 1 : 0`,
-  preserves all regs except scratch {8,15,30}.
-- **`skip_body`** (one comment iteration), **`skip_loop`** (the `while`, induction on `d`),
-  **`skipComment_eff`** (full skip: advances `in_idx` by `d` to the first `\n`/EOF).
+- **`cgGuard_eff`** — comment-loop guard; **`skip_body`/`skip_loop`/`skipComment_eff`** (full skip;
+  now each also exposes a **register-preservation clause** `∀ r ∉ {5,8,15,30}, st'.rget r = st.rget r`).
+- **`readAdv_eff`** — `readAdv dst` loads `mem[p+i]`→dst, `x30=p+i`, `x5=i+1`, preserves the rest.
+- **Fuel monotonicity** (in `CtrlStrtoullProof.lean`): `exec_mono` / `exec_mono_le` — more fuel never
+  changes a `some` result. THE enabler: every lemma returns an *existential* fuel and `exec_mono_le`
+  bumps results to a common fuel before composing. Also added the missing one-layer exec eqns
+  (`exec_seq_cont/none`, `exec_block_*`, `exec_while_none/cont0/contS/ret`).
+- **Dispatch helpers**: `ceq_true/ceq_false` (`.eq` against a byte, takes explicit `n`),
+  `weq_true/false` (raw word `.eq` of two regs), `geu_ww_true/false` (unsigned `≥` of two regs),
+  `ife_skip_false`/`ife_err_true` (navigate an `ife _ _ _ t .skip` — take an explicit fuel `n` ≥ 2/4,
+  mono baked in), `exec_err`/`exec_sb`/`exec_skip`, `@[simp] rget_storeByte`/`mem_storeByte_self`.
+- **`Regs` struct** (the 16 const/pointer regs at every loop head: 10–13, 16–27) + **`Regs.transfer`**
+  (re-establish `Regs` across any change touching only scratch `{5,6,7,8,14,15,28,29,30,31}`; the
+  caller supplies a `Pres st' st` = preservation on the complement). `lowStop : Byte → Prop`.
+- **`body_step` — DONE (item A, all cases, sorry-free):**
+  - **`body_space`** — `chr ∈ {\n,sp,_}` → `.normal`, `x5=i+1`, rest unchanged, `Regs` preserved.
+  - **`body_comment`** — `chr ∈ {#,;}` → `skipComment_eff`, `.normal`, `x5=(i+1)+d`; takes the skip
+    distance `d` + `gOf` hyps; preserves `Regs`/`x6`/`x14`/mem.
+  - **`hexPath_eff`** — the hex path alone (6 mutually-exclusive outcomes, each carrying its
+    defining condition): badHi→ret5, trailing(`L≤i+1`)→ret4, split(lowStop)→ret3, badLo→ret5,
+    outFull(`cap≤out_idx`)→ret2, OK→`.normal` (writes byte `((pnibR c<<<4)|||pnibR c2).setWidth 8`
+    at `out[out_idx]`, `x5=i+2`, `x6=out_idx+1`, `Regs` preserved). **`body_hex`** lifts it through
+    `readAdv`+dispatch onto `body` (same 6 arms, on the loop-head state; `chr` not space/comment).
 
-### Remaining (the semantic core — the hard part)
+### Remaining (the semantic core)
 
-**(A) body-dispatch step.** `CtrlHex0.body = readAdv 7; <dispatch chain> ; hexPath`. Prove a
-`body_step` lemma: one main-loop iteration corresponds to **one `decodeS` token**. Structure of
-the dispatch (after reading `chr` and `in_idx++`):
-- `chr ∈ {#(35), ;(59)}` → `skipComment` (use `skipComment_eff`), body returns `.normal` (loop continues).
-- `chr ∈ {\n(10), space(32), _(95)}` → `.skip`, `.normal` (loop continues).
-- else (hex digit path `hexPath`): `pnib 28 7` (hi, use `pnib_correct`); if `hi=255` → `ret 5`
-  (Unknown); if `in_idx≥in_len` → `ret 4` (Trailing); `readAdv 7` (lo); if `chr` is a low-stop
-  `{\n,sp,_,#,;}` → `ret 3` (Split); `pnib 29 7` (lo); if `lo=255` → `ret 5`; if `out_idx≥out_cap`
-  → `ret 2` (OutputShort); else write `(hi<<4)|lo` to `out[out_idx]`, `out_idx++`. (`hexPath` is a
-  **flat `ife guard (err) skip` cascade** — see `CtrlHex0.lean`; `err code = lit 14 code; ret`.)
-  
-  Note the char checks use `.eq` (= `decide (x = y)` — easy) and the digit path emits a byte via
-  `slli 31 28 4; orr 31 31 29; sb` (`hi*16+lo`).
+**(A) body-dispatch step — ✅ DONE** (`body_space` + `body_comment` + `body_hex`).
 
 **(B) main-loop invariant** (`while .lt 5 11 body`). At each loop head the IL is at a *High*
 position, so `decodeS High input` splits there:
@@ -150,13 +157,20 @@ output at `outBase=0x4000`, regs 10–13). Memory past `inp.length` reads 0.
 
 ## 5. Suggested next session
 
-1. **`body_step`** (item A) — the biggest single lemma. Start with the *non-error, hex-digit* path
-   (the common case: hi+lo nibble via `pnib_correct`, byte write), then the space/comment branches
-   (using `skipComment_eff`), then the four error `ret`s. State it as "one iteration advances `in_idx`
-   by the token length, updates output/out_idx, and either continues (`.normal`) or returns the right
-   error status (`.ret`)", phrased to compose with the invariant.
-2. **main invariant** (item B) by induction, composing `body_step`.
-3. **coreSpec assembly** (item C) + prelude peel.
-4. Optionally: finish the **conformant strtoull** functional proof (foundation in
-   `CtrlStrtoull2Proof.lean` — threshold already proved; needs the overflow-branching `digit_loop`),
-   and **`compile_sim`** (T1) to carry everything to real RV64I bytes.
+`body_step` (item A) is **DONE**. Next:
+
+1. **Nibble bridge lemmas** (small, do first — item B needs them):
+   - `pnibR c = 255 ↔ Hex0.nibble c.toNat = none` (case split mirrors `pnib_correct`'s regions).
+   - for hex `c`: `(pnibR c).toNat = (Hex0.nibble c.toNat).get` (the nibble value), and
+     `(((pnibR c)<<<4) ||| pnibR c2).setWidth 8).toNat = hi*16+lo` (orr = + since `hi*16` has low
+     nibble 0 and `lo<16`; `bv_omega` after relating `pnibR` to the nibble Nat values).
+   - `lowStop c ↔ Hex0.isLowStop c.toNat`; `c not space/comment ↔ ¬isComment ∧ ¬isSpace`.
+2. **main invariant** (item B) by induction on the input suffix (decreasing `decodeS` recursion).
+   Compose `body_space`/`body_comment`/`body_hex`, mapping each arm to the matching `decodeS` branch
+   via the bridge lemmas. Carry: `Regs`, `x5=i`, `x6=out_idx`, `x14=0`, output region = decoded
+   prefix, `i ≤ L < 2^63` (for the signed `.lt 5 11` guard → `slt_true/slt_false`), and the
+   capacity relation. **Comment subtlety** (see below) — the comment iteration lands the IL *at* the
+   `\n`; the next iteration's space-skip consumes it, so a comment spans `body_comment`+1 space step.
+   Everything is **existential fuel** now (use `exec_mono_le` + `exec_while_step`/`exec_while_done`).
+3. **coreSpec assembly** (item C) + prelude peel (15 `lit`/init instrs → loop-entry `Regs`+state).
+4. Optionally: conformant strtoull functional proof; **`compile_sim`** (T1) to real RV64I bytes.
