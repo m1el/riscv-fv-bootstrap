@@ -1016,8 +1016,16 @@ theorem pnibR_lt_16 (c : Byte) (h : pnibR c ≠ 255) : (pnibR c).toNat < 16 := b
     · rw [if_pos h2] at h ⊢; bv_omega
     · rw [if_neg h2] at h; exact absurd rfl h
 
--- TODO(item B): `hexbyte_val` — `(((pnibR c)<<<4 ||| pnibR c2).setWidth 8).toNat = hi*16+lo`.
--- `bv_omega` treats `|||` opaquely; needs a disjoint-or = add lemma (low nibble of `<<<4` is 0).
+/-- The emitted byte `(hi<<4) | lo` equals `hi*16 + lo` as a number (disjoint nibbles). -/
+theorem hexbyte_val (c c2 : Byte) (hc : pnibR c ≠ 255) (hc2 : pnibR c2 ≠ 255) :
+    ((((pnibR c) <<< 4) ||| pnibR c2).setWidth 8).toNat
+      = (pnibR c).toNat * 16 + (pnibR c2).toNat := by
+  have h1 := pnibR_lt_16 c hc
+  have h2 := pnibR_lt_16 c2 hc2
+  rw [BitVec.toNat_setWidth, BitVec.toNat_or, BitVec.toNat_shiftLeft, Nat.shiftLeft_eq,
+      Nat.mod_eq_of_lt (by omega : (pnibR c).toNat * 2^4 < 2^64), Nat.mul_comm,
+      ← Nat.two_pow_add_eq_or_of_lt (by omega : (pnibR c2).toNat < 2^4)]
+  omega
 
 /-- `lowStop` (the IL test) matches the spec `Hex0.isLowStop`. -/
 theorem lowStop_iff (c : Byte) : lowStop c ↔ Hex0.isLowStop c.toNat = true := by
