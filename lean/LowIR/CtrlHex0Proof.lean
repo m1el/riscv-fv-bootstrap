@@ -284,14 +284,15 @@ theorem skip_body (f : Nat) (st : St) (i L p : Word)
     (hi1 : i.toNat + 1 < 2^63) (hL : L.toNat < 2^63) :
     ∃ st', exec (f + 8) (.seq (.addi 5 5 1) cgGuard) st = some (st', .normal)
       ∧ st'.rget 5 = i + 1 ∧ st'.rget 11 = L ∧ st'.rget 10 = p ∧ st'.rget 24 = 10
-      ∧ st'.rget 16 = st.rget 16 ∧ st'.rget 15 = gOf st.mem (i + 1) L p ∧ st'.mem = st.mem := by
+      ∧ st'.rget 16 = st.rget 16 ∧ st'.rget 15 = gOf st.mem (i + 1) L p ∧ st'.mem = st.mem
+      ∧ (∀ r, r ≠ 5 → r ≠ 8 → r ≠ 15 → r ≠ 30 → st'.rget r = st.rget r) := by
   have ha : exec (f+7) (.addi 5 5 1) st = some (st.rset 5 (i + 1), .normal) := by
     rw [exec_addi, h5, show (1 : BitVec 12).signExtend 64 = (1:Word) from by decide]
   have hi1' : (i + 1).toNat < 2^63 := by bv_omega
   obtain ⟨st', hcg, hg, hpres, hmem⟩ := cgGuard_eff (f+1) (st.rset 5 (i + 1)) (i + 1) L p
     (by simp) (by simp [h11]) (by simp [h10]) (by simp [h24]) hi1' hL
   have hmem' : (st.rset 5 (i + 1)).mem = st.mem := by simp
-  refine ⟨st', ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨st', ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [show f+8 = (f+7)+1 from rfl, exec_seq_normal _ _ _ _ _ ha]; exact hcg
   · rw [hpres 5 (by decide) (by decide) (by decide)]; simp
   · rw [hpres 11 (by decide) (by decide) (by decide)]; simp [h11]
@@ -300,6 +301,8 @@ theorem skip_body (f : Nat) (st : St) (i L p : Word)
   · rw [hpres 16 (by decide) (by decide) (by decide)]; simp
   · rw [hg, hmem']
   · rw [hmem, hmem']
+  · intro r h5r h8 h15 h30
+    rw [hpres r h8 h15 h30, rget_rset_ne _ _ _ _ h5r]
 
 theorem skip_loop (d : Nat) : ∀ (st : St) (i L p : Word),
     st.rget 5 = i → st.rget 11 = L → st.rget 10 = p → st.rget 24 = 10 → st.rget 16 = 1 →
@@ -308,13 +311,14 @@ theorem skip_loop (d : Nat) : ∀ (st : St) (i L p : Word),
     gOf st.mem (i + BitVec.ofNat 64 d) L p = 0 →
     ∃ st', exec (d + 9) (.while .geu 15 16 (.seq (.addi 5 5 1) cgGuard)) st = some (st', .normal)
       ∧ st'.rget 5 = i + BitVec.ofNat 64 d ∧ st'.rget 11 = L ∧ st'.rget 10 = p
-      ∧ st'.rget 24 = 10 ∧ st'.rget 16 = 1 ∧ st'.mem = st.mem := by
+      ∧ st'.rget 24 = 10 ∧ st'.rget 16 = 1 ∧ st'.mem = st.mem
+      ∧ (∀ r, r ≠ 5 → r ≠ 8 → r ≠ 15 → r ≠ 30 → st'.rget r = st.rget r) := by
   induction d with
   | zero =>
     intro st i L p h5 h11 h10 h24 h16 hg hL _ _ hz
     rw [cur_zero] at hz
     have hcond : evalCond .geu (st.rget 15) (st.rget 16) = false := by rw [hg, h16, hz]; decide
-    refine ⟨st, ?_, ?_, h11, h10, h24, h16, rfl⟩
+    refine ⟨st, ?_, ?_, h11, h10, h24, h16, rfl, fun r _ _ _ _ => rfl⟩
     · rw [show (0:Nat)+9 = 8+1 from rfl, exec_while_done _ _ _ _ _ _ hcond]
     · rw [cur_zero]; exact h5
   | succ d ih =>
@@ -322,18 +326,20 @@ theorem skip_loop (d : Nat) : ∀ (st : St) (i L p : Word),
     have g0 : gOf st.mem i L p = 1 := by have := hdig 0 (by omega); rwa [cur_zero] at this
     have hcond : evalCond .geu (st.rget 15) (st.rget 16) = true := by rw [hg, h16, g0]; decide
     have hi1n : (i + 1).toNat = i.toNat + 1 := by bv_omega
-    obtain ⟨st1, hbody, hs5, hs11, hs10, hs24, hs16, hsg, hsmem⟩ :=
+    obtain ⟨st1, hbody, hs5, hs11, hs10, hs24, hs16, hsg, hsmem, hbpres⟩ :=
       skip_body (d+1) st i L p h5 h11 h10 h24 (by omega) hL
     have hgi1 : st1.rget 15 = gOf st1.mem (i+1) L p := by rw [hsg, hsmem]
     have hdig' : ∀ j, j < d → gOf st1.mem ((i+1) + BitVec.ofNat 64 j) L p = 1 := by
       intro j hj; rw [hsmem, ← cur_step]; exact hdig (j+1) (by omega)
     have hz' : gOf st1.mem ((i+1) + BitVec.ofNat 64 d) L p = 0 := by rw [hsmem, ← cur_step]; exact hz
-    obtain ⟨st', he, hr5, hr11, hr10, hr24, hr16, hrmem⟩ :=
+    obtain ⟨st', he, hr5, hr11, hr10, hr24, hr16, hrmem, hrpres⟩ :=
       ih st1 (i+1) L p hs5 hs11 hs10 hs24 (hs16.trans h16) hgi1 hL (by rw [hi1n]; omega) hdig' hz'
-    refine ⟨st', ?_, ?_, hr11, hr10, hr24, hr16, ?_⟩
+    refine ⟨st', ?_, ?_, hr11, hr10, hr24, hr16, ?_, ?_⟩
     · rw [show (d+1)+9 = (d+9)+1 from rfl, exec_while_step _ _ _ _ _ _ _ hcond hbody]; exact he
     · rw [hr5, cur_step]
     · rw [hrmem, hsmem]
+    · intro r h5r h8 h15 h30
+      rw [hrpres r h5r h8 h15 h30, hbpres r h5r h8 h15 h30]
 
 /-- The full comment-skip: advances `in_idx` by `d` to the first newline/EOF. -/
 theorem skipComment_eff (d : Nat) (st : St) (i L p : Word)
@@ -343,7 +349,8 @@ theorem skipComment_eff (d : Nat) (st : St) (i L p : Word)
     (hz : gOf st.mem (i + BitVec.ofNat 64 d) L p = 0) :
     ∃ st', exec (d + 10) skipComment st = some (st', .normal)
       ∧ st'.rget 5 = i + BitVec.ofNat 64 d ∧ st'.rget 11 = L ∧ st'.rget 10 = p
-      ∧ st'.rget 24 = 10 ∧ st'.rget 16 = 1 ∧ st'.mem = st.mem := by
+      ∧ st'.rget 24 = 10 ∧ st'.rget 16 = 1 ∧ st'.mem = st.mem
+      ∧ (∀ r, r ≠ 5 → r ≠ 8 → r ≠ 15 → r ≠ 30 → st'.rget r = st.rget r) := by
   unfold skipComment
   obtain ⟨s1, hcg, hg, hpres, hmem⟩ := cgGuard_eff (d+3) st i L p h5 h11 h10 h24 hi hL
   have hs5 : s1.rget 5 = i := by rw [hpres 5 (by decide) (by decide) (by decide), h5]
@@ -352,12 +359,14 @@ theorem skipComment_eff (d : Nat) (st : St) (i L p : Word)
   have hs24 : s1.rget 24 = 10 := by rw [hpres 24 (by decide) (by decide) (by decide), h24]
   have hs16 : s1.rget 16 = 1 := by rw [hpres 16 (by decide) (by decide) (by decide), h16]
   have hsg : s1.rget 15 = gOf s1.mem i L p := by rw [hg, hmem]
-  obtain ⟨st', he, hr5, hr11, hr10, hr24, hr16, hrmem⟩ :=
+  obtain ⟨st', he, hr5, hr11, hr10, hr24, hr16, hrmem, hrpres⟩ :=
     skip_loop d s1 i L p hs5 hs11 hs10 hs24 hs16 hsg hL hd
       (by intro j hj; rw [hmem]; exact hdig j hj) (by rw [hmem]; exact hz)
-  refine ⟨st', ?_, hr5, hr11, hr10, hr24, hr16, ?_⟩
+  refine ⟨st', ?_, hr5, hr11, hr10, hr24, hr16, ?_, ?_⟩
   · rw [show d+10 = (d+9)+1 from rfl, exec_seq_normal _ _ _ _ _ hcg]; exact he
   · rw [hrmem, hmem]
+  · intro r h5r h8 h15 h30
+    rw [hrpres r h5r h8 h15 h30, hpres r h8 h15 h30]
 
 /-! ### Character-equality dispatch lemmas (`.eq` against a byte). -/
 
@@ -476,5 +485,49 @@ theorem body_space (st : St) (p L q cap i : Word) (c : Byte)
   · rw [hpres 6 (by decide) (by decide) (by decide)]
   · rw [hpres 14 (by decide) (by decide) (by decide)]
   · exact hmem
+
+/-! ### body_step, case 2: a comment character (`#`/`;`) — skip to newline/EOF. -/
+
+theorem body_comment (st : St) (p L q cap i : Word) (c : Byte) (d : Nat)
+    (hr : Regs st p L q cap) (h5 : st.rget 5 = i) (hmemc : st.mem (p + i) = c)
+    (hcm : c.toNat = 35 ∨ c.toNat = 59)
+    (hi1 : (i+1).toNat < 2^63) (hL : L.toNat < 2^63) (hd : (i+1).toNat + d < 2^63)
+    (hdig : ∀ j, j < d → gOf st.mem ((i+1) + BitVec.ofNat 64 j) L p = 1)
+    (hz : gOf st.mem ((i+1) + BitVec.ofNat 64 d) L p = 0) :
+    ∃ fuel st', exec fuel body st = some (st', .normal)
+      ∧ Regs st' p L q cap ∧ st'.rget 5 = (i+1) + BitVec.ofNat 64 d
+      ∧ st'.rget 6 = st.rget 6 ∧ st'.rget 14 = st.rget 14 ∧ st'.mem = st.mem := by
+  obtain ⟨st1, hread0, hr5, hr7, hr30, hreadpres, hmem⟩ :=
+    readAdv_eff (d+12) st 7 p i hr.h10 h5 (by decide) (by decide) (by decide) (by decide)
+  have hread : exec (d+16) (readAdv 7) st = some (st1, .normal) := hread0
+  have e7 : st1.rget 7 = c.setWidth 64 := by rw [hr7, hmemc]
+  have e27 : st1.rget 27 = (35:Word) := by rw [hreadpres 27 (by decide) (by decide) (by decide), hr.h27]
+  have e18 : st1.rget 18 = (59:Word) := by rw [hreadpres 18 (by decide) (by decide) (by decide), hr.h18]
+  have s5 : st1.rget 5 = i + 1 := hr5
+  have s11 : st1.rget 11 = L := by rw [hreadpres 11 (by decide) (by decide) (by decide), hr.h11]
+  have s10 : st1.rget 10 = p := by rw [hreadpres 10 (by decide) (by decide) (by decide), hr.h10]
+  have s24 : st1.rget 24 = 10 := by rw [hreadpres 24 (by decide) (by decide) (by decide), hr.h24]
+  have s16 : st1.rget 16 = 1 := by rw [hreadpres 16 (by decide) (by decide) (by decide), hr.h16]
+  obtain ⟨st', hskip, hsk5, hsk11, hsk10, hsk24, hsk16, hskmem, hskpres⟩ :=
+    skipComment_eff d st1 (i+1) L p s5 s11 s10 s24 s16 hi1 hL hd
+      (by intro j hj; rw [hmem]; exact hdig j hj) (by rw [hmem]; exact hz)
+  refine ⟨d+17, st', ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · unfold body
+    rw [show d+17 = (d+16)+1 from rfl, exec_seq_normal _ _ _ _ _ hread]
+    rcases hcm with h35 | h59
+    · rw [show d+16 = (d+15)+1 from rfl,
+          exec_ife_then _ _ _ _ _ _ _ (ceq_true 35 e7 e27 (by decide) h35)]
+      exact exec_mono_le (by omega) hskip
+    · rw [show d+16 = (d+15)+1 from rfl,
+          exec_ife_else _ _ _ _ _ _ _ (ceq_false 35 e7 e27 (by decide) (by omega)),
+          show d+15 = (d+14)+1 from rfl,
+          exec_ife_then _ _ _ _ _ _ _ (ceq_true 59 e7 e18 (by decide) h59)]
+      exact exec_mono_le (by omega) hskip
+  · exact hr.transfer (fun r a5 _ a7 a8 _ a15 _ _ a30 _ => by
+      rw [hskpres r a5 a8 a15 a30, hreadpres r a5 a7 a30])
+  · exact hsk5
+  · rw [hskpres 6 (by decide) (by decide) (by decide) (by decide), hreadpres 6 (by decide) (by decide) (by decide)]
+  · rw [hskpres 14 (by decide) (by decide) (by decide) (by decide), hreadpres 14 (by decide) (by decide) (by decide)]
+  · rw [hskmem, hmem]
 
 end LowIR.Ctrl.Hex0
