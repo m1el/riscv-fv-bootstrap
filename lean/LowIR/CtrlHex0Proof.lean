@@ -1046,6 +1046,29 @@ theorem lowStop_iff (c : Byte) : lowStop c ↔ Hex0.isLowStop c.toNat = true := 
   simp only [Bool.or_eq_true, beq_iff_eq]
   omega
 
+/-! ### Output-region readback + index arithmetic (item B). -/
+
+theorem ofNat_succ (n : Nat) : BitVec.ofNat 64 n + 1 = BitVec.ofNat 64 (n+1) := by bv_omega
+
+/-- The bytes in `[base, base+n)` read back as a `List Nat` (matches `outBytes`). -/
+def regionBytes (mem : Word → Byte) (base : Word) (n : Nat) : List Nat :=
+  (List.range n).map (fun k => (mem (base + BitVec.ofNat 64 k)).toNat)
+
+theorem regionBytes_snoc (mem : Word → Byte) (base : Word) (n : Nat) :
+    regionBytes mem base (n+1)
+      = regionBytes mem base n ++ [(mem (base + BitVec.ofNat 64 n)).toNat] := by
+  unfold regionBytes; rw [List.range_succ, List.map_append]; rfl
+
+/-- Writing the byte at index `n` leaves the readback of `[base, base+n)` unchanged. -/
+theorem regionBytes_store_self (s : St) (base : Word) (n : Nat) (b : Byte) (hn : n < 2^64) :
+    regionBytes (s.storeByte (base + BitVec.ofNat 64 n) b).mem base n = regionBytes s.mem base n := by
+  unfold regionBytes
+  apply List.map_congr_left
+  intro k hk
+  rw [List.mem_range] at hk
+  show (if base + BitVec.ofNat 64 k = base + BitVec.ofNat 64 n then b else s.mem _).toNat = _
+  rw [if_neg (by bv_omega)]
+
 /-! ### Spec-side `decodeS` unfolding (item B's per-iteration case rewrites). -/
 
 theorem decodeS_high_comment (c : Nat) (rest : List Nat) (h : Hex0.isComment c = true) :
