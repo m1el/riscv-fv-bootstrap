@@ -25,6 +25,7 @@ open Rv64i (Word Byte)
 structure Slice where
   base : Word
   len  : Nat
+deriving DecidableEq
 
 /-- Addresses covered by a slice. -/
 def Slice.has (s : Slice) (a : Word) : Prop := ∃ k, k < s.len ∧ a = s.base + BitVec.ofNat 64 k
@@ -35,6 +36,7 @@ deriving DecidableEq, Repr
 structure Borrow where
   slice : Slice
   perm  : Perm
+deriving DecidableEq
 
 def Disjoint (s t : Slice) : Prop := ∀ a, s.has a → t.has a → False
 
@@ -604,6 +606,11 @@ theorem body_comment (st : St) (p L q cap i : Word) (c : Byte) (d : Nat)
 
 theorem exec_skip (f : Nat) (s : St) : exec (f+1) .skip s = some (s, .normal) := rfl
 
+theorem exec_lit (f : Nat) (r v : Nat) (st : St) :
+    exec (f+1) (lit r v) st = some (st.rset r ((BitVec.ofNat 12 v).signExtend 64), .normal) := by
+  show exec (f+1) (Stmt.addi r 0 (BitVec.ofNat 12 v)) st = _
+  rw [exec_addi, rget_zero, wzero_add]
+
 theorem exec_sb (f rb rv : Nat) (imm : BitVec 12) (s : St) :
     exec (f+1) (.sb rb rv imm) s
       = some (s.storeByte (s.rget rb + imm.signExtend 64) ((s.rget rv).setWidth 8), .normal) := by
@@ -1156,6 +1163,16 @@ theorem boundedRun_cons (produced : List Nat) (byte : Nat) (more : List Nat) (ds
       rw [hk, List.take_succ_cons]
     rw [ht]; simp
 
+/-- At the top level (empty prefix), the per-byte-capacity run agrees with `coreSpec`. -/
+theorem boundedRun_nil_coreSpec (inp : List Nat) (capN : Nat) :
+    boundedRun [] (Hex0.decodeS .High inp).1 (Hex0.decodeS .High inp).2 capN = Hex0.coreSpec inp capN := by
+  rw [Hex0.coreSpec, Hex0.decode]
+  rcases hd : Hex0.decodeS .High inp with ⟨bs, st⟩
+  simp only [boundedRun, hd, List.length_nil, List.nil_append, Nat.zero_add, Nat.sub_zero]
+  by_cases h : bs.length ≤ capN
+  · rw [if_pos h, if_neg (by omega)]
+  · rw [if_neg h, if_pos (by omega)]
+
 /-- Number of characters before the first `\n` (or the whole list if none). -/
 def commentSkip : List Nat → Nat
   | [] => 0
@@ -1219,6 +1236,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
       (∀ k : Word, k.toNat < inp.length → st.mem (p + k) = BitVec.ofNat 8 (inp[k.toNat]!)) →
       regionBytes st.mem q olen = produced →
       ∃ fuel st' oc, exec fuel (.while .lt 5 11 body) st = some (st', oc)
+        ∧ (oc = .normal ∨ oc = .ret)
         ∧ (st'.rget 14).toNat
             = (boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1 (Hex0.decodeS .High (inp.drop idx)).2 capN).1
         ∧ (st'.rget 6).toNat
@@ -1264,12 +1282,12 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
       have ebridge : ∀ k : Word, k.toNat < inp.length → st1.mem (p+k) = BitVec.ofNat 8 (inp[k.toNat]!) := by
         intro k hk; rw [hsm]; exact hbridge k hk
       have eout : regionBytes st1.mem q olen = produced := by rw [hsm]; exact hout
-      obtain ⟨fr, st', oc, her, hc14, hc6, hcreg⟩ :=
+      obtain ⟨fr, st', oc, her, hoc, hc14, hc6, hcreg⟩ :=
         ih (inp.length - (idx+1)) (by omega) (idx+1) olen st1 produced rfl hr1 e5 e6 e14
           (by omega) holen holenp ebridge eout
       have hstep : Hex0.decodeS .High (inp.drop idx) = Hex0.decodeS .High (inp.drop (idx+1)) := by
         rw [hdropc]; exact decodeS_high_space _ _ hisC hisS
-      refine ⟨max fb fr + 1, st', oc, ?_, ?_, ?_, ?_⟩
+      refine ⟨max fb fr + 1, st', oc, ?_, hoc, ?_, ?_, ?_⟩
       · rw [exec_while_step _ _ _ _ _ _ _ hcond (exec_mono_le (Nat.le_max_left fb fr) heb)]
         exact exec_mono_le (Nat.le_max_right fb fr) her
       · rw [hstep]; exact hc14
@@ -1351,7 +1369,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
       have ebridge : ∀ k : Word, k.toNat < inp.length → st1.mem (p+k) = BitVec.ofNat 8 (inp[k.toNat]!) := by
         intro k hk; rw [hsm]; exact hbridge k hk
       have eout : regionBytes st1.mem q olen = produced := by rw [hsm]; exact hout
-      obtain ⟨fr, st', oc, her, hc14, hc6, hcreg⟩ :=
+      obtain ⟨fr, st', oc, her, hoc, hc14, hc6, hcreg⟩ :=
         ih (inp.length - (idx + 1 + commentSkip (inp.drop (idx+1)))) (by omega)
           (idx + 1 + commentSkip (inp.drop (idx+1))) olen st1 produced rfl hr1 hJ e6 e14
           (by omega) holen holenp ebridge eout
@@ -1360,7 +1378,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
         rw [hdropc, decodeS_high_comment _ _ hisCt, ← decodeS_comment_reconcile,
             show (inp.drop (idx+1)).drop (commentSkip (inp.drop (idx+1)))
               = inp.drop (idx + 1 + commentSkip (inp.drop (idx+1))) from by rw [List.drop_drop]]
-      refine ⟨max fb fr + 1, st', oc, ?_, ?_, ?_, ?_⟩
+      refine ⟨max fb fr + 1, st', oc, ?_, hoc, ?_, ?_, ?_⟩
       · rw [exec_while_step _ _ _ _ _ _ _ hcond (exec_mono_le (Nat.le_max_left fb fr) heb)]
         exact exec_mono_le (Nat.le_max_right fb fr) her
       · rw [hstep]; exact hc14
@@ -1393,7 +1411,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
         have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
             (Hex0.decodeS .High (inp.drop idx)).2 capN = (5, produced, produced.length) := by
           rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
-        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        refine ⟨fb + 1, st1, .ret, ?_, Or.inr rfl, ?_, ?_, ?_⟩
         · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
         · rw [hbr]; exact h14'
         · rw [hbr, h6', h6, htno]; exact holenp
@@ -1411,7 +1429,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
         have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
             (Hex0.decodeS .High (inp.drop idx)).2 capN = (4, produced, produced.length) := by
           rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
-        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        refine ⟨fb + 1, st1, .ret, ?_, Or.inr rfl, ?_, ?_, ?_⟩
         · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
         · rw [hbr]; exact h14'
         · rw [hbr, h6', h6, htno]; exact holenp
@@ -1434,7 +1452,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
         have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
             (Hex0.decodeS .High (inp.drop idx)).2 capN = (3, produced, produced.length) := by
           rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
-        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        refine ⟨fb + 1, st1, .ret, ?_, Or.inr rfl, ?_, ?_, ?_⟩
         · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
         · rw [hbr]; exact h14'
         · rw [hbr, h6', h6, htno]; exact holenp
@@ -1461,7 +1479,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
         have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
             (Hex0.decodeS .High (inp.drop idx)).2 capN = (5, produced, produced.length) := by
           rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
-        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        refine ⟨fb + 1, st1, .ret, ?_, Or.inr rfl, ?_, ?_, ?_⟩
         · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
         · rw [hbr]; exact h14'
         · rw [hbr, h6', h6, htno]; exact holenp
@@ -1496,7 +1514,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           rw [hdec]; unfold boundedRun
           rw [if_neg (by simp only [List.length_cons]; omega)]
           simp [show capN - produced.length = 0 from by omega]
-        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        refine ⟨fb + 1, st1, .ret, ?_, Or.inr rfl, ?_, ?_, ?_⟩
         · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
         · rw [hbr]; exact h14'
         · rw [hbr, h6', h6, htno]; exact holenp.trans hcapeq
@@ -1547,7 +1565,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
                     ||| pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).setWidth 8 from by
             simp [mem_storeByte_self]]
           exact hbyte
-        obtain ⟨fr, st', oc, her, hc14, hc6, hcreg⟩ :=
+        obtain ⟨fr, st', oc, her, hoc, hc14, hc6, hcreg⟩ :=
           ih (inp.length - (idx+2)) (by omega) (idx+2) (olen+1) st1
             (produced ++ [(pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat * 16
                 + (pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).toNat]) rfl hfregs e5 e6 e14
@@ -1559,7 +1577,7 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
               (Hex0.decodeS .High (inp.drop (idx+2))).1 (Hex0.decodeS .High (inp.drop (idx+2))).2 capN := by
           rw [hdropc, decodeS_high_goodhi _ _ _ hisCf hisSf hnib, hdrop1, decodeS_low_goodlo _ _ _ _ hlsF hnib2]
           exact boundedRun_cons _ _ _ _ _ (by omega)
-        refine ⟨max fb fr + 1, st', oc, ?_, ?_, ?_, ?_⟩
+        refine ⟨max fb fr + 1, st', oc, ?_, hoc, ?_, ?_, ?_⟩
         · rw [exec_while_step _ _ _ _ _ _ _ hcond (exec_mono_le (Nat.le_max_left fb fr) heb)]
           exact exec_mono_le (Nat.le_max_right fb fr) her
         · rw [hbreq]; exact hc14
@@ -1578,10 +1596,108 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
     have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop inp.length)).1
         (Hex0.decodeS .High (inp.drop inp.length)).2 capN = (0, produced, produced.length) := by
       rw [hdrop, decodeS_high_nil]; simp [boundedRun, hpc, Hex0.statusCode]
-    refine ⟨1, st, .normal, ?_, ?_, ?_, ?_⟩
+    refine ⟨1, st, .normal, ?_, Or.inl rfl, ?_, ?_, ?_⟩
     · rw [show (1:Nat) = 0+1 from rfl, exec_while_done _ _ _ _ _ _ hcond]
     · rw [hbr]; simp [h14]
     · rw [hbr, h6, htno]; exact holenp
     · rw [hbr, h6, htno]; exact hout
+
+/-! ### Prelude peel + coreSpec assembly (item C). -/
+
+/-- Peel hex0's 15 const/init instructions into the loop-entry state. -/
+theorem hex0_setup (inp : List Nat) (cap : Nat) :
+    ∃ st0, Regs st0 inBase (BitVec.ofNat 64 inp.length) outBase (BitVec.ofNat 64 cap)
+      ∧ st0.rget 5 = 0 ∧ st0.rget 6 = 0 ∧ st0.rget 14 = 0
+      ∧ st0.mem = (hex0ILState (asBytes inp) cap).mem
+      ∧ (∀ fw stw oc, exec fw (.while .lt 5 11 body) st0 = some (stw, oc)
+          → exec (fw + 16) hex0 (hex0ILState (asBytes inp) cap) = some (stw, oc)) := by
+  refine ⟨(hex0ILState (asBytes inp) cap).rset 20 ((BitVec.ofNat 12 48).signExtend 64)
+      |>.rset 21 ((BitVec.ofNat 12 57).signExtend 64) |>.rset 22 ((BitVec.ofNat 12 65).signExtend 64)
+      |>.rset 23 ((BitVec.ofNat 12 70).signExtend 64) |>.rset 24 ((BitVec.ofNat 12 10).signExtend 64)
+      |>.rset 25 ((BitVec.ofNat 12 32).signExtend 64) |>.rset 26 ((BitVec.ofNat 12 95).signExtend 64)
+      |>.rset 27 ((BitVec.ofNat 12 35).signExtend 64) |>.rset 18 ((BitVec.ofNat 12 59).signExtend 64)
+      |>.rset 19 ((BitVec.ofNat 12 255).signExtend 64) |>.rset 17 ((BitVec.ofNat 12 55).signExtend 64)
+      |>.rset 16 ((BitVec.ofNat 12 1).signExtend 64) |>.rset 5 ((BitVec.ofNat 12 0).signExtend 64)
+      |>.rset 6 ((BitVec.ofNat 12 0).signExtend 64) |>.rset 14 ((BitVec.ofNat 12 0).signExtend 64),
+      ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · exact
+    { h10 := by simp; simp [hex0ILState, St.rget, inBase]
+      h11 := by simp; simp [hex0ILState, St.rget, asBytes]
+      h12 := by simp; simp [hex0ILState, St.rget, outBase]
+      h13 := by simp; simp [hex0ILState, St.rget]
+      h16 := by simp
+      h17 := by simp
+      h18 := by simp
+      h19 := by simp
+      h20 := by simp
+      h21 := by simp
+      h22 := by simp
+      h23 := by simp
+      h24 := by simp
+      h25 := by simp
+      h26 := by simp
+      h27 := by simp }
+  · simp
+  · simp
+  · simp
+  · simp [hex0ILState]
+  · intro fw stw oc hw
+    unfold hex0
+    simp only [seqs, List.foldr_cons, List.foldr_nil]
+    rw [show fw+16 = (fw+15)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+14) 20 48 _),
+        show fw+15 = (fw+14)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+13) 21 57 _),
+        show fw+14 = (fw+13)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+12) 22 65 _),
+        show fw+13 = (fw+12)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+11) 23 70 _),
+        show fw+12 = (fw+11)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+10) 24 10 _),
+        show fw+11 = (fw+10)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+9) 25 32 _),
+        show fw+10 = (fw+9)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+8) 26 95 _),
+        show fw+9 = (fw+8)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+7) 27 35 _),
+        show fw+8 = (fw+7)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+6) 18 59 _),
+        show fw+7 = (fw+6)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+5) 19 255 _),
+        show fw+6 = (fw+5)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+4) 17 55 _),
+        show fw+5 = (fw+4)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+3) 16 1 _),
+        show fw+4 = (fw+3)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+2) 5 0 _),
+        show fw+3 = (fw+2)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit (fw+1) 6 0 _),
+        show fw+2 = (fw+1)+1 from rfl, exec_seq_normal _ _ _ _ _ (exec_lit fw 14 0 _)]
+    cases oc with
+    | normal =>
+      rw [exec_seq_normal _ _ _ _ _ hw]
+      cases fw with
+      | zero => simp [exec] at hw
+      | succ f => exact exec_skip f stw
+    | ret => exact exec_seq_ret _ _ _ _ _ hw
+    | brk k => exact exec_seq_brk _ _ _ _ _ _ hw
+    | cont k => exact exec_seq_cont _ _ _ _ _ _ hw
+
+/-- **hex0 functional correctness**: run on the IL semantics, hex0 computes `Hex0.coreSpec`.
+    Input is a shared borrow, output a unique borrow (`Wf` ⇒ the regions don't alias). -/
+theorem hex0_correct (inp : List Nat) (cap : Nat)
+    (hinp : ∀ x ∈ inp, x < 256) (hlen : inp.length < 2^63) (hcap : cap < 2^63)
+    (hwf : Wf [⟨⟨inBase, inp.length⟩, .shared⟩, ⟨⟨outBase, cap⟩, .uniq⟩]) :
+    ∃ fuel, hex0Run (asBytes inp) cap fuel = Hex0.coreSpec inp cap := by
+  have hdisj : Disjoint ⟨inBase, inp.length⟩ ⟨outBase, cap⟩ :=
+    hwf.disjoint (b := ⟨⟨inBase, inp.length⟩, .shared⟩) (b' := ⟨⟨outBase, cap⟩, .uniq⟩)
+      (by simp) (by simp) (by intro h; injection h with _ hp; exact absurd hp (by decide)) rfl
+  obtain ⟨st0, hregs0, h05, h06, h014, h0mem, hlift⟩ := hex0_setup inp cap
+  have hbridge : ∀ k : Word, k.toNat < inp.length → st0.mem (inBase + k) = BitVec.ofNat 8 (inp[k.toNat]!) := by
+    intro k hk
+    rw [h0mem]
+    have hia : ((inBase + k) - inBase).toNat = k.toNat := by bv_omega
+    have hlen' : (asBytes inp).length = inp.length := by simp [asBytes]
+    simp only [hex0ILState, hia, hlen', if_pos hk]
+    rw [List.getElem?_eq_getElem (by rw [hlen']; exact hk)]
+    simp [asBytes, List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hk]
+  obtain ⟨fw, stw, oc, hwexec, hoc, hw14, hw6, hwreg⟩ :=
+    main_loop inp inBase outBase cap hinp hlen hcap hdisj (inp.length - 0) 0 0 st0 []
+      rfl hregs0 (by rw [h05]; rfl) (by rw [h06]; rfl) h014 (by omega) (by omega) rfl hbridge
+      (by simp [regionBytes])
+  rw [List.drop_zero, boundedRun_nil_coreSpec] at hw14 hw6 hwreg
+  refine ⟨fw + 16, ?_⟩
+  have hrun : run (fw + 16) hex0 (hex0ILState (asBytes inp) cap) = some stw := by
+    unfold run; rw [hlift fw stw oc hwexec]; rcases hoc with h | h <;> subst h <;> rfl
+  unfold hex0Run
+  rw [hrun]
+  show ((stw.rget 14).toNat, outBytes stw, (stw.rget 6).toNat) = Hex0.coreSpec inp cap
+  rw [hw14, hw6, show outBytes stw = regionBytes stw.mem outBase (stw.rget 6).toNat from rfl, hwreg]
 
 end LowIR.Ctrl.Hex0
