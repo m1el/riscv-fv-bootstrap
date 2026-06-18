@@ -1,9 +1,20 @@
 # RESUME — LowIR & the hex0 functional proof
 
-Handoff for the **LowIR structured-IL** effort (prove libc functions, compile to RV64I)
-and specifically the **in-progress hex0 functional-correctness proof**. Read with
+Handoff for the **LowIR structured-IL** effort (prove libc functions, compile to RV64I).
+The **hex0 functional-correctness proof is COMPLETE and sorry-free** (`hex0_correct`). Read with
 [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md) (design/altitude survey), [PROGRESS.md](PROGRESS.md)
-(log), [STATUS.md](STATUS.md) §LowIR (table). HEAD at handoff: `body_step` (item A) complete.
+(log), [STATUS.md](STATUS.md) §LowIR (table), [MEMORY-BORROWS.md](MEMORY-BORROWS.md) (separation).
+
+## 0. hex0 — DONE
+
+`CtrlHex0Proof.hex0_correct` : `∃ fuel, hex0Run (asBytes inp) cap fuel = Hex0.coreSpec inp cap`
+for all inputs, given `inputs < 256`, `len < 2⁶³`, `cap < 2⁶³`, and the borrow precondition
+`Wf [⟨⟨inBase,len⟩, .shared⟩, ⟨⟨outBase,cap⟩, .uniq⟩]` (shared input / unique output ⇒ the regions
+are disjoint, so output writes never perturb the input). All three items below are proved:
+**(A)** `body_step` (`body_space`/`body_comment`/`body_hex` — `hexPath_eff`'s 6 outcomes);
+**(B)** `main_loop` (strong induction on `len−idx`, the while loop ≡ `decodeS` via `boundedRun`);
+**(C)** `boundedRun_nil_coreSpec` + `hex0_setup` (15-instr prelude peel) + the assembly.
+The remaining sections describe the toolbox/gotchas (still useful for strtoull / `compile_sim`).
 
 Build everything: `cd lean && lake build LowIR.CtrlHex0Proof LowIR.CtrlStrtoull10Proof`.
 All 12 `LowIR*` modules build green (0 errors). Toolchain: `leanprover/lean4:v4.30.0`,
@@ -30,7 +41,7 @@ clocked big-step `exec : Nat → Stmt → St → Option (St × Outcome)`. State 
 | `LowIR/CtrlStrtoull2.lean` | **conformant** strtoull (overflow→ULLONG_MAX+errno) | ✅ validated |
 | `LowIR/CtrlStrtoull2Proof.lean` | conformant foundation: `geu_true/false`, `digit_val`, **threshold proved** (`build_step`,`nib_15`) | ✅ sorry-free; full conformant proof TODO |
 | `LowIR/CtrlStrtoullProof.lean` | the break/block exec primitives (`exec_block_catch`,`exec_while_brk`,`exec_seq_brk`,`acc_times_ten`,…) | ✅ sorry-free |
-| `LowIR/CtrlHex0Proof.lean` | **hex0 proof — IN PROGRESS**; `body_step` (item A) DONE (see §3) | partial, sorry-free |
+| `LowIR/CtrlHex0Proof.lean` | **hex0 proof — `hex0_correct` COMPLETE** (items A+B+C, see §0) | ✅ sorry-free |
 | `LowIR/Hex0Proof.lean` | the *original-IL* `hex0_correct` statement | **sorry** (superseded by Ctrl work) |
 
 **Proved sorry-free, all inputs:** `strlen_correct` (both ILs), `strtoull10_correct`.
@@ -180,20 +191,11 @@ output at `outBase=0x4000`, regs 10–13). Memory past `inp.length` reads 0.
 
 ## 5. Suggested next session
 
-`body_step` (item A) **DONE**, plus all bridges, the borrow layer, and the `decodeS` unfolders.
-Remaining is item B (the invariant) + item C, both now composition exercises:
+hex0 functional correctness is **DONE** (`hex0_correct`, sorry-free). Remaining LowIR work:
 
-1. **Two small spec lemmas** (pure `decodeS`, no IL): the *High-boundary decomposition* and the
-   *comment reconciliation* — see §3 (B). Do these first; they're the glue for the induction.
-2. **Main invariant** (item B): strong induction on `len - idx`, composing `body_space`/`body_comment`/
-   `body_hex` with the `decodeS_*` unfolders and the bridges, per the per-arm mapping in §3 (B). Carry
-   the input/output bridges + `Disjoint` (borrow `Wf` ⇒ output writes preserve input). Everything is
-   existential-fuel (`exec_mono_le`); the signed guard uses `slt_true/false`.
-3. **coreSpec assembly** (item C): the invariant gives a per-byte-capacity decode; relate to
-   `coreSpec` (cap applied to the full decode). Equivalence: if `|decode| > cap` the IL hits `outFull`
-   (arm E, code 2) exactly at `olen = cap` before any later step, matching `(2, take cap, cap)`; else
-   no `outFull` fires and the decode status stands. Then peel hex0's 15-instr const/init prelude into
-   the loop-entry `Regs`+state and apply the invariant; read off `x14`/output/`x6` vs `coreSpec`.
-   Top-level theorem takes the borrow `Wf [shared input, uniq output]` precondition (⇒ `Disjoint`).
-4. Optionally: conformant strtoull functional proof (errno = single global, single-threaded — see
-   `docs/MEMORY-BORROWS.md`); **`compile_sim`** (T1) to real RV64I bytes.
+1. **Conformant strtoull** functional proof (foundation in `CtrlStrtoull2Proof.lean` — threshold
+   already proved; needs the overflow-branching `digit_loop`). errno = single global, single-threaded
+   (see `docs/MEMORY-BORROWS.md`); the borrow layer + `main_loop`'s structure are the template.
+2. **`compile_sim`** (T1, sanctioned `sorry` in `LowIR.lean`) — carry everything to real RV64I bytes.
+3. Optionally: factor the now-substantial toolbox (`exec_mono`, the borrow layer, region helpers) into
+   shared files (`LowIR/Borrow.lean`, `LowIR/ExecMono.lean`) for reuse by other libc proofs.
