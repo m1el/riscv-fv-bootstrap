@@ -169,17 +169,72 @@ Two flavors exist:
    (RustBelt/λRust style) so well-typedness *produces* the `Wf`/`Disjoint` facts — same "pay once" economics
    as `compile_sim`, but a large effort. Build (b) with a small once-proved soundness lemma; grow toward (c)
    only if in-body reborrowing forces it.
-6. **`compile_sim` for `Ctrl`.** The outstanding pay-once cost: a verified `Ctrl`→RV64I compiler, whose hard
-   part is exactly the control-flow lowering (`while/block/ret` → jumps + label resolution) and register
-   allocation/spilling (D2 caveat). Either compile `Ctrl` directly, or lower `Ctrl`→`LowIR` (eliminating
-   `block/brk/cont/ret`) and reuse the existing compiler.
+6. **`compile_sim` for `Ctrl`.** The outstanding pay-once cost: a verified `Ctrl`→RV64I compiler. **Do not
+   make it one proof** — decompose it into small per-pass simulations (see §5). Hard parts: control-flow
+   lowering and register allocation/spilling (D2 caveat); the rest is mechanical.
 7. **Toolbox factoring.** Promote the now-substantial reusable pieces — `exec_mono`/one-layer `exec_*`
    equations, the `Slice`/`Borrow`/`Wf` layer, `regionBytes` — out of `CtrlHex0Proof`/`CtrlStrtoullProof`
    into shared files (`LowIR/ExecMono.lean`, `LowIR/Borrow.lean`) for the rest of the libc.
 
 ---
 
-## 4. The architecture in one line
+## 4. Compiler-side architecture — decomposing `compile_sim` (CompCert/CakeML-informed)
+
+`compile_sim` (`Ctrl` → RV64I bytes) must **not** be a monolith. Following CompCert (many small IRs,
+each a forward simulation with an explicit `match_states` source↔target relation, composed by
+transitivity) and CakeML (verify down to the *bytes* incl. the encoder; make the stack explicit only in
+a low IR), factor it into passes. Each pass: a `match_states` relation + a step-preservation lemma;
+chain them. Lessons adopted:
+
+- **One shared memory model** (flat bytes + the `Slice`/borrow layer) across *all* levels — disjointness
+  facts transport down without re-translation (CompCert reuses its `Mem` from top to bottom).
+- **Event/trace output threaded through every level** — so I/O-bearing libc (`read`/`write`/`printf`) is
+  even *statable*; correctness is trace-preservation, not just final memory (CompCert behaviors).
+- **External / not-yet-verified functions (and syscalls) via a pre/post + frame spec interface**
+  (CompCert `external_call`) — the bootstrap boundary, and the same interface `.call` already uses.
+- **ABI and ISA are *parameters*** (CakeML retargeting) — the calling convention (callee-saved set, `sp`,
+  `ra`) is a parameter to the frame pass; the encoder/ISA a parameter to the last pass. Not baked in.
+- **Verify the encoder to actual bytes** (CakeML) — the bytes are the deliverable; this is the TCB point.
+- The **clocked functional big-step** semantics is the validated style (CakeML/Owens); `exec_mono` is the
+  known one-time cost. Already in place.
+
+Pass pipeline (`from→to` / job / `match_states` / template / difficulty):
+
+| # | from → to | job | match_states | template | difficulty |
+|---|---|---|---|---|---|
+| 1 | Ctrl → Ctrl | normalize/desugar (`seqs`/`block_`, flatten) | ≈ identity | — | trivial |
+| 2 | Ctrl → CFG | structured control (`while/block/brkB/contL/ret`) → basic blocks + (cond) branches + labels; `.call` → call node | Ctrl outcome/continuation ↔ current-block + pc | CompCert RTLgen | **hard** — factor: (2a) eliminate `block/brk/cont`; (2b) `while/ret/call` → CFG |
+| 3 | CFG(∞ regs) → CFG(32 phys + spills) | register allocation + spilling | virtual-reg state ↔ phys-reg + spill-memory, via the allocation map | CompCert RTL→LTL→Linear | **hard** — copy CompCert **translation validation**: untrusted allocator + *verified checker* |
+| 4 | → stack IR | ABI frame: prologue/epilogue (save `ra` + callee-saved used), caller-save spills, `sp` arithmetic | abstract-call state ↔ machine state with concrete frame; invariant "callee-saved + `ra` restored on return, frame ⊥ program data" | CompCert Stacking; CakeML `stackLang` | mechanical (ABI = param) |
+| 5 | stack IR → linear asm | linearize blocks; resolve labels → PC offsets | block + pc ↔ instruction index | CompCert Mach→Asm; CakeML `labLang` | mechanical |
+| 6 | asm → bytes | encode (the 16 RV64I encodings) | `fetch/decode(bytes) = instr` | CakeML encoder; project `encode` | mechanical, **must-do** (TCB point) |
+
+Cross-cutting: shared `mem` + borrow model across passes 1–4 (passes 3–4 add stack regions to the *same*
+`mem`); traces threaded through all; external-call specs at every level; ABI param at pass 4, ISA/encoder
+param at pass 6. The stack becomes *explicit* exactly at pass 4 — the convention-establishing lowering
+(matching CakeML's `stackLang`), and that frame also holds the `alloca`-style address-taken locals (Ext. 1).
+
+**Feasibility.** Mechanical / well-templated: passes 1, 4, 5, 6. The two **hard** passes are CompCert's
+hard passes too — done before, but real work:
+
+- **Pass 2 (control-flow lowering)** is the highest single risk *here*, because `Ctrl`'s non-local control
+  (`block/brk/cont/ret` + `call`) is richer than a plain while-language — and it's the very feature that
+  *simplified* the functional proofs (D3), so the complexity reappears here. Mitigation: factor into 2a/2b.
+- **Pass 3 (register allocation)** — don't verify the allocator algorithm; verify a *validator* that a
+  given allocation is correct (CompCert's translation-validation trick). Big factoring win.
+
+**Bootstrap shortcut (the key feasibility lever).** Because we control the source and libc functions are
+small, first prove `compile_sim` for a **restricted fragment**: structured control only (no `block/brk/cont`;
+`ret` at tail or removed by 2a), leaf-or-inlined calls, ≤31 live registers (no spilling). That collapses
+pass 2 to near-trivial and *removes* pass 3 entirely — giving an end-to-end-to-bytes result for
+`hex0`/`strlen` early, which you then generalize one fragment-feature at a time.
+
+**Verdict: doable.** It's the CompCert/CakeML recipe, and both hard passes have verified precedents. The
+factoring that makes it tractable for a small effort is exactly: split pass 2 into 2a/2b, translation-
+validate pass 3, and start from the restricted fragment. The residual research-grade risk is concentrated
+in pass 2 — worth a paper-design spike before committing.
+
+## 5. The architecture in one line
 
 Separation does **not** live in the memory model (no block structure); it lives in the **type system /
 function contracts** at the higher IRs and is threaded down as data + proofs, bottoming out as `Wf`/`Disjoint`
