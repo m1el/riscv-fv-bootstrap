@@ -1206,4 +1206,382 @@ theorem decodeS_comment_reconcile (l : List Nat) :
       simp [Hex0.isComment, Hex0.isSpace, Hex0.c_nl, Hex0.c_sp, Hex0.c_us, Hex0.c_hash, Hex0.c_semi, h10]
     · rw [if_neg hc, if_neg hc, List.drop_succ_cons]; exact ih
 
+/-! ### The main-loop invariant (item B). -/
+
+theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
+    (hinp : ∀ x ∈ inp, x < 256) (hlen : inp.length < 2^63) (hcap : capN < 2^63)
+    (hdisj : Disjoint ⟨p, inp.length⟩ ⟨q, capN⟩) :
+    ∀ (n idx olen : Nat) (st : St) (produced : List Nat),
+      n = inp.length - idx →
+      Regs st p (BitVec.ofNat 64 inp.length) q (BitVec.ofNat 64 capN) →
+      st.rget 5 = BitVec.ofNat 64 idx → st.rget 6 = BitVec.ofNat 64 olen → st.rget 14 = 0 →
+      idx ≤ inp.length → olen ≤ capN → olen = produced.length →
+      (∀ k : Word, k.toNat < inp.length → st.mem (p + k) = BitVec.ofNat 8 (inp[k.toNat]!)) →
+      regionBytes st.mem q olen = produced →
+      ∃ fuel st' oc, exec fuel (.while .lt 5 11 body) st = some (st', oc)
+        ∧ (st'.rget 14).toNat
+            = (boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1 (Hex0.decodeS .High (inp.drop idx)).2 capN).1
+        ∧ (st'.rget 6).toNat
+            = (boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1 (Hex0.decodeS .High (inp.drop idx)).2 capN).2.2
+        ∧ regionBytes st'.mem q (st'.rget 6).toNat
+            = (boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1 (Hex0.decodeS .High (inp.drop idx)).2 capN).2.1 := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | ind n ih =>
+  intro idx olen st produced hn hregs h5 h6 h14 hidx holen holenp hbridge hout
+  by_cases hlt : idx < inp.length
+  · -- inductive step: one body iteration
+    have hkidx : (BitVec.ofNat 64 idx).toNat = idx := tn idx (by omega)
+    have htno : (BitVec.ofNat 64 olen).toNat = olen := tn olen (by omega)
+    have hvmem : inp[idx]! = inp[idx] := by simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt]
+    have hv : inp[idx]! < 256 := by rw [hvmem]; exact hinp _ (List.getElem_mem hlt)
+    have hbr_idx : st.mem (p + BitVec.ofNat 64 idx) = BitVec.ofNat 8 (inp[idx]!) := by
+      have hb := hbridge (BitVec.ofNat 64 idx) (by rw [hkidx]; exact hlt)
+      rwa [hkidx] at hb
+    have hcv : (st.mem (p + BitVec.ofNat 64 idx)).toNat = inp[idx]! := by
+      rw [hbr_idx, BitVec.toNat_ofNat]; omega
+    have hcond : evalCond .lt (st.rget 5) (st.rget 11) = true := by
+      have hx5 : (st.rget 5).toNat = idx := by rw [h5, hkidx]
+      have hx11 : (st.rget 11).toNat = inp.length := by rw [hregs.h11, tn inp.length (by omega)]
+      exact slt_true (by rw [hx5]; omega) (by rw [hx11]; omega) (by rw [hx5, hx11]; exact hlt)
+    have hdropc : inp.drop idx = inp[idx]! :: inp.drop (idx+1) := by
+      rw [List.drop_eq_getElem_cons hlt, hvmem]
+    rcases (show (inp[idx]! = 10 ∨ inp[idx]! = 32 ∨ inp[idx]! = 95)
+        ∨ (inp[idx]! = 35 ∨ inp[idx]! = 59)
+        ∨ (inp[idx]! ≠ 10 ∧ inp[idx]! ≠ 32 ∧ inp[idx]! ≠ 95 ∧ inp[idx]! ≠ 35 ∧ inp[idx]! ≠ 59)
+        from by omega) with hsp | hcm | hns
+    · -- SPACE: \n / space / _  → skip, continue
+      have hisS : Hex0.isSpace inp[idx]! = true := by
+        unfold Hex0.isSpace Hex0.c_nl Hex0.c_sp Hex0.c_us; rcases hsp with h|h|h <;> simp [h]
+      have hisC : Hex0.isComment inp[idx]! = false := by
+        unfold Hex0.isComment Hex0.c_hash Hex0.c_semi; rcases hsp with h|h|h <;> simp [h]
+      obtain ⟨fb, st1, heb, hr1, hs5, hs6, hs14, hsm⟩ :=
+        body_space st p (BitVec.ofNat 64 inp.length) q (BitVec.ofNat 64 capN) (BitVec.ofNat 64 idx)
+          (st.mem (p + BitVec.ofNat 64 idx)) hregs h5 rfl (by rw [hcv]; exact hsp)
+      have e5 : st1.rget 5 = BitVec.ofNat 64 (idx+1) := by rw [hs5, ofNat_succ]
+      have e6 : st1.rget 6 = BitVec.ofNat 64 olen := by rw [hs6, h6]
+      have e14 : st1.rget 14 = 0 := by rw [hs14, h14]
+      have ebridge : ∀ k : Word, k.toNat < inp.length → st1.mem (p+k) = BitVec.ofNat 8 (inp[k.toNat]!) := by
+        intro k hk; rw [hsm]; exact hbridge k hk
+      have eout : regionBytes st1.mem q olen = produced := by rw [hsm]; exact hout
+      obtain ⟨fr, st', oc, her, hc14, hc6, hcreg⟩ :=
+        ih (inp.length - (idx+1)) (by omega) (idx+1) olen st1 produced rfl hr1 e5 e6 e14
+          (by omega) holen holenp ebridge eout
+      have hstep : Hex0.decodeS .High (inp.drop idx) = Hex0.decodeS .High (inp.drop (idx+1)) := by
+        rw [hdropc]; exact decodeS_high_space _ _ hisC hisS
+      refine ⟨max fb fr + 1, st', oc, ?_, ?_, ?_, ?_⟩
+      · rw [exec_while_step _ _ _ _ _ _ _ hcond (exec_mono_le (Nat.le_max_left fb fr) heb)]
+        exact exec_mono_le (Nat.le_max_right fb fr) her
+      · rw [hstep]; exact hc14
+      · rw [hstep]; exact hc6
+      · rw [hstep]; exact hcreg
+    · -- COMMENT: '#' / ';' → skip to newline/EOF, continue
+      have hisCt : Hex0.isComment inp[idx]! = true := by
+        unfold Hex0.isComment Hex0.c_hash Hex0.c_semi; rcases hcm with h|h <;> simp [h]
+      have hDle : commentSkip (inp.drop (idx+1)) ≤ inp.length - (idx+1) := by
+        have := commentSkip_le (inp.drop (idx+1)); rwa [List.length_drop] at this
+      -- gOf is 1 on the run before the newline
+      have hdig : ∀ j, j < commentSkip (inp.drop (idx+1)) →
+          gOf st.mem (BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 j) (BitVec.ofNat 64 inp.length) p = 1 := by
+        intro j hj
+        have hoff : (BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 j).toNat = idx+1+j := by
+          rw [show BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 j = BitVec.ofNat 64 (idx+1+j) from by bv_omega]
+          exact tn _ (by omega)
+        have hlt2 : idx+1+j < inp.length := by omega
+        unfold gOf
+        rw [if_pos (by rw [hoff, tn inp.length (by omega)]; omega)]
+        have hmem := hbridge (BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 j) (by rw [hoff]; omega)
+        rw [hoff] at hmem
+        rw [if_neg]
+        intro hcontra
+        rw [hmem] at hcontra
+        have hidxval : inp[idx+1+j]! = inp[idx+1+j] := by
+          simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt2]
+        have hlt256 : inp[idx+1+j]! < 256 := by rw [hidxval]; exact hinp _ (List.getElem_mem hlt2)
+        have hne : inp[idx+1+j]! ≠ 10 := by
+          have hr := commentSkip_run_ne (inp.drop (idx+1)) j hj
+          rwa [show (inp.drop (idx+1))[j]! = inp[idx+1+j]! from by
+            simp [List.getElem!_eq_getElem?_getD, List.getElem?_drop]] at hr
+        apply hne
+        have h2 := congrArg BitVec.toNat hcontra
+        rw [BitVec.toNat_ofNat, show (nlB : Byte).toNat = 10 from by decide] at h2; omega
+      -- gOf is 0 at the newline (or EOF)
+      have hz : gOf st.mem (BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1))))
+          (BitVec.ofNat 64 inp.length) p = 0 := by
+        unfold gOf
+        by_cases hDlen : commentSkip (inp.drop (idx+1)) < (inp.drop (idx+1)).length
+        · have hlt2 : idx+1+commentSkip (inp.drop (idx+1)) < inp.length := by
+            rw [List.length_drop] at hDlen; omega
+          have hoff : (BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1)))).toNat
+              = idx+1+commentSkip (inp.drop (idx+1)) := by
+            rw [show BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1)))
+              = BitVec.ofNat 64 (idx+1+commentSkip (inp.drop (idx+1))) from by bv_omega]
+            exact tn _ (by omega)
+          rw [if_pos (by rw [hoff, tn inp.length (by omega)]; omega)]
+          have hmem := hbridge (BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1))))
+            (by rw [hoff]; omega)
+          rw [hoff] at hmem
+          rw [if_pos]
+          rw [hmem]
+          have hg := commentSkip_get (inp.drop (idx+1)) hDlen
+          rw [show (inp.drop (idx+1))[commentSkip (inp.drop (idx+1))]! = inp[idx+1+commentSkip (inp.drop (idx+1))]! from by
+            simp [List.getElem!_eq_getElem?_getD, List.getElem?_drop]] at hg
+          rw [hg]; rfl
+        · have hDeq : commentSkip (inp.drop (idx+1)) = inp.length - (idx+1) := by
+            rw [List.length_drop] at hDlen; omega
+          have hoff : (BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1)))).toNat
+              = inp.length := by
+            rw [show BitVec.ofNat 64 idx + 1 + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1)))
+              = BitVec.ofNat 64 (idx+1+commentSkip (inp.drop (idx+1))) from by bv_omega]
+            rw [tn _ (by omega)]; omega
+          rw [if_neg (by rw [hoff, tn inp.length (by omega)]; omega)]
+      obtain ⟨fb, st1, heb, hr1, hs5, hs6, hs14, hsm⟩ :=
+        body_comment st p (BitVec.ofNat 64 inp.length) q (BitVec.ofNat 64 capN) (BitVec.ofNat 64 idx)
+          (st.mem (p + BitVec.ofNat 64 idx)) (commentSkip (inp.drop (idx+1))) hregs h5 rfl
+          (by rw [hcv]; exact hcm)
+          (by rw [show BitVec.ofNat 64 idx + 1 = BitVec.ofNat 64 (idx+1) from by bv_omega, tn _ (by omega)]; omega)
+          (by rw [tn inp.length (by omega)]; omega)
+          (by rw [show BitVec.ofNat 64 idx + 1 = BitVec.ofNat 64 (idx+1) from by bv_omega, tn _ (by omega)]; omega)
+          hdig hz
+      -- the IL is now at J = idx+1+D
+      have hJ : st1.rget 5 = BitVec.ofNat 64 (idx + 1 + commentSkip (inp.drop (idx+1))) := by
+        rw [hs5]; bv_omega
+      have e6 : st1.rget 6 = BitVec.ofNat 64 olen := by rw [hs6, h6]
+      have e14 : st1.rget 14 = 0 := by rw [hs14, h14]
+      have ebridge : ∀ k : Word, k.toNat < inp.length → st1.mem (p+k) = BitVec.ofNat 8 (inp[k.toNat]!) := by
+        intro k hk; rw [hsm]; exact hbridge k hk
+      have eout : regionBytes st1.mem q olen = produced := by rw [hsm]; exact hout
+      obtain ⟨fr, st', oc, her, hc14, hc6, hcreg⟩ :=
+        ih (inp.length - (idx + 1 + commentSkip (inp.drop (idx+1)))) (by omega)
+          (idx + 1 + commentSkip (inp.drop (idx+1))) olen st1 produced rfl hr1 hJ e6 e14
+          (by omega) holen holenp ebridge eout
+      have hstep : Hex0.decodeS .High (inp.drop idx)
+          = Hex0.decodeS .High (inp.drop (idx + 1 + commentSkip (inp.drop (idx+1)))) := by
+        rw [hdropc, decodeS_high_comment _ _ hisCt, ← decodeS_comment_reconcile,
+            show (inp.drop (idx+1)).drop (commentSkip (inp.drop (idx+1)))
+              = inp.drop (idx + 1 + commentSkip (inp.drop (idx+1))) from by rw [List.drop_drop]]
+      refine ⟨max fb fr + 1, st', oc, ?_, ?_, ?_, ?_⟩
+      · rw [exec_while_step _ _ _ _ _ _ _ hcond (exec_mono_le (Nat.le_max_left fb fr) heb)]
+        exact exec_mono_le (Nat.le_max_right fb fr) her
+      · rw [hstep]; exact hc14
+      · rw [hstep]; exact hc6
+      · rw [hstep]; exact hcreg
+    · -- HEX: hex-digit path
+      have hisCf : Hex0.isComment inp[idx]! = false := by
+        unfold Hex0.isComment Hex0.c_hash Hex0.c_semi
+        rw [Bool.or_eq_false_iff, beq_eq_false_iff_ne, beq_eq_false_iff_ne]; omega
+      have hisSf : Hex0.isSpace inp[idx]! = false := by
+        unfold Hex0.isSpace Hex0.c_nl Hex0.c_sp Hex0.c_us
+        rw [Bool.or_eq_false_iff, Bool.or_eq_false_iff, beq_eq_false_iff_ne, beq_eq_false_iff_ne,
+            beq_eq_false_iff_ne]; omega
+      have hpc : produced.length ≤ capN := by omega
+      have htc1 : (BitVec.ofNat 64 idx + 1).toNat = idx + 1 := by
+        rw [show BitVec.ofNat 64 idx + 1 = BitVec.ofNat 64 (idx+1) from by bv_omega]; exact tn _ (by omega)
+      rcases body_hex st p (BitVec.ofNat 64 inp.length) q (BitVec.ofNat 64 capN) (BitVec.ofNat 64 idx)
+          (st.mem (p + BitVec.ofNat 64 idx)) hregs h5 rfl (by rw [hcv]; exact hns) with
+        ⟨hbad, fb, st1, heb, h14', h6', hm'⟩
+      | ⟨hbad, htr, fb, st1, heb, h14', h6', hm'⟩
+      | ⟨hbad, hlt2, hls, fb, st1, heb, h14', h6', hm'⟩
+      | ⟨hbad, hlt2, hls, hbad2, fb, st1, heb, h14', h6', hm'⟩
+      | ⟨hbad, hlt2, hls, hbad2, hfull, fb, st1, heb, h14', h6', hm'⟩
+      | ⟨hbad, hlt2, hls, hbad2, hfull, fb, st1, heb, hf5, hf6, hf14, hfregs, hfmem⟩
+      · -- ARM A: bad high nibble → Unknown (5)
+        have hnib : Hex0.nibble inp[idx]! = none := by
+          rw [← hcv]; exact (pnibR_eq_255_iff _).mp hbad
+        have hdec : Hex0.decodeS .High (inp.drop idx) = ([], .Unknown) := by
+          rw [hdropc]; exact decodeS_high_badhi _ _ hisCf hisSf hnib
+        have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
+            (Hex0.decodeS .High (inp.drop idx)).2 capN = (5, produced, produced.length) := by
+          rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
+        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
+        · rw [hbr]; exact h14'
+        · rw [hbr, h6', h6, htno]; exact holenp
+        · rw [hbr, h6', h6, htno, hm']; exact hout
+      · -- ARM B: no low char → Trailing (4)
+        have hnib : Hex0.nibble inp[idx]! = some (pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat := by
+          rw [← hcv]; exact pnibR_nibble _ hbad
+        have hrestnil : inp.drop (idx+1) = [] := by
+          rw [List.drop_eq_nil_iff]
+          have ht1 : (BitVec.ofNat 64 idx + 1).toNat = idx + 1 := by
+            rw [show BitVec.ofNat 64 idx + 1 = BitVec.ofNat 64 (idx+1) from by bv_omega]; exact tn _ (by omega)
+          rw [tn inp.length (by omega), ht1] at htr; omega
+        have hdec : Hex0.decodeS .High (inp.drop idx) = ([], .Trailing) := by
+          rw [hdropc, decodeS_high_goodhi _ _ _ hisCf hisSf hnib, hrestnil, decodeS_low_nil]
+        have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
+            (Hex0.decodeS .High (inp.drop idx)).2 capN = (4, produced, produced.length) := by
+          rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
+        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
+        · rw [hbr]; exact h14'
+        · rw [hbr, h6', h6, htno]; exact holenp
+        · rw [hbr, h6', h6, htno, hm']; exact hout
+      · -- ARM C: low-stop char → Split (3)
+        have hlt2n : idx + 1 < inp.length := by rw [tn inp.length (by omega), htc1] at hlt2; exact hlt2
+        have hc2eq : st.mem (p + (BitVec.ofNat 64 idx + 1)) = BitVec.ofNat 8 (inp[idx+1]!) := by
+          have hb := hbridge (BitVec.ofNat 64 idx + 1) (by rw [htc1]; omega); rwa [htc1] at hb
+        have hv2 : inp[idx+1]! < 256 := by
+          rw [show inp[idx+1]! = inp[idx+1] from by simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt2n]]
+          exact hinp _ (List.getElem_mem hlt2n)
+        have hc2v : (st.mem (p + (BitVec.ofNat 64 idx + 1))).toNat = inp[idx+1]! := by rw [hc2eq, BitVec.toNat_ofNat]; omega
+        have hnib : Hex0.nibble inp[idx]! = some (pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat := by rw [← hcv]; exact pnibR_nibble _ hbad
+        have hdrop1 : inp.drop (idx+1) = inp[idx+1]! :: inp.drop (idx+2) := by
+          rw [List.drop_eq_getElem_cons hlt2n]; congr 1
+          simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt2n]
+        have hlsT : Hex0.isLowStop inp[idx+1]! = true := by rw [← hc2v]; exact (lowStop_iff _).mp hls
+        have hdec : Hex0.decodeS .High (inp.drop idx) = ([], .Split) := by
+          rw [hdropc, decodeS_high_goodhi _ _ _ hisCf hisSf hnib, hdrop1, decodeS_low_split _ _ _ hlsT]
+        have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
+            (Hex0.decodeS .High (inp.drop idx)).2 capN = (3, produced, produced.length) := by
+          rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
+        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
+        · rw [hbr]; exact h14'
+        · rw [hbr, h6', h6, htno]; exact holenp
+        · rw [hbr, h6', h6, htno, hm']; exact hout
+      · -- ARM D: bad low nibble → Unknown (5)
+        have hlt2n : idx + 1 < inp.length := by rw [tn inp.length (by omega), htc1] at hlt2; exact hlt2
+        have hc2eq : st.mem (p + (BitVec.ofNat 64 idx + 1)) = BitVec.ofNat 8 (inp[idx+1]!) := by
+          have hb := hbridge (BitVec.ofNat 64 idx + 1) (by rw [htc1]; omega); rwa [htc1] at hb
+        have hv2 : inp[idx+1]! < 256 := by
+          rw [show inp[idx+1]! = inp[idx+1] from by simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt2n]]
+          exact hinp _ (List.getElem_mem hlt2n)
+        have hc2v : (st.mem (p + (BitVec.ofNat 64 idx + 1))).toNat = inp[idx+1]! := by rw [hc2eq, BitVec.toNat_ofNat]; omega
+        have hnib : Hex0.nibble inp[idx]! = some (pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat := by rw [← hcv]; exact pnibR_nibble _ hbad
+        have hdrop1 : inp.drop (idx+1) = inp[idx+1]! :: inp.drop (idx+2) := by
+          rw [List.drop_eq_getElem_cons hlt2n]; congr 1
+          simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt2n]
+        have hlsF : Hex0.isLowStop inp[idx+1]! = false := by
+          rcases Bool.eq_false_or_eq_true (Hex0.isLowStop inp[idx+1]!) with h | h
+          · exact absurd ((lowStop_iff _).mpr (by rw [hc2v]; exact h)) hls
+          · exact h
+        have hnib2 : Hex0.nibble inp[idx+1]! = none := by rw [← hc2v]; exact (pnibR_eq_255_iff _).mp hbad2
+        have hdec : Hex0.decodeS .High (inp.drop idx) = ([], .Unknown) := by
+          rw [hdropc, decodeS_high_goodhi _ _ _ hisCf hisSf hnib, hdrop1, decodeS_low_badlo _ _ _ hlsF hnib2]
+        have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
+            (Hex0.decodeS .High (inp.drop idx)).2 capN = (5, produced, produced.length) := by
+          rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
+        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
+        · rw [hbr]; exact h14'
+        · rw [hbr, h6', h6, htno]; exact holenp
+        · rw [hbr, h6', h6, htno, hm']; exact hout
+      · -- ARM E: output full → OutputShort (2)
+        have hlt2n : idx + 1 < inp.length := by rw [tn inp.length (by omega), htc1] at hlt2; exact hlt2
+        have hc2eq : st.mem (p + (BitVec.ofNat 64 idx + 1)) = BitVec.ofNat 8 (inp[idx+1]!) := by
+          have hb := hbridge (BitVec.ofNat 64 idx + 1) (by rw [htc1]; omega); rwa [htc1] at hb
+        have hv2 : inp[idx+1]! < 256 := by
+          rw [show inp[idx+1]! = inp[idx+1] from by simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt2n]]
+          exact hinp _ (List.getElem_mem hlt2n)
+        have hc2v : (st.mem (p + (BitVec.ofNat 64 idx + 1))).toNat = inp[idx+1]! := by rw [hc2eq, BitVec.toNat_ofNat]; omega
+        have hnib : Hex0.nibble inp[idx]! = some (pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat := by rw [← hcv]; exact pnibR_nibble _ hbad
+        have hdrop1 : inp.drop (idx+1) = inp[idx+1]! :: inp.drop (idx+2) := by
+          rw [List.drop_eq_getElem_cons hlt2n]; congr 1
+          simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt2n]
+        have hlsF : Hex0.isLowStop inp[idx+1]! = false := by
+          rcases Bool.eq_false_or_eq_true (Hex0.isLowStop inp[idx+1]!) with h | h
+          · exact absurd ((lowStop_iff _).mpr (by rw [hc2v]; exact h)) hls
+          · exact h
+        have hnib2 : Hex0.nibble inp[idx+1]! = some (pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).toNat := by
+          rw [← hc2v]; exact pnibR_nibble _ hbad2
+        have hcapeq : produced.length = capN := by
+          have hh := hfull; rw [tn capN (by omega), h6, htno] at hh; omega
+        have hdec : Hex0.decodeS .High (inp.drop idx)
+            = (((pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat * 16
+                + (pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).toNat)
+                  :: (Hex0.decodeS .High (inp.drop (idx+2))).1, (Hex0.decodeS .High (inp.drop (idx+2))).2) := by
+          rw [hdropc, decodeS_high_goodhi _ _ _ hisCf hisSf hnib, hdrop1, decodeS_low_goodlo _ _ _ _ hlsF hnib2]
+        have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
+            (Hex0.decodeS .High (inp.drop idx)).2 capN = (2, produced, capN) := by
+          rw [hdec]; unfold boundedRun
+          rw [if_neg (by simp only [List.length_cons]; omega)]
+          simp [show capN - produced.length = 0 from by omega]
+        refine ⟨fb + 1, st1, .ret, ?_, ?_, ?_, ?_⟩
+        · exact exec_while_ret _ _ _ _ _ _ _ hcond heb
+        · rw [hbr]; exact h14'
+        · rw [hbr, h6', h6, htno]; exact holenp.trans hcapeq
+        · rw [hbr, h6', h6, htno, hm']; exact hout
+      · -- ARM F: write the byte, continue
+        have hlt2n : idx + 1 < inp.length := by rw [tn inp.length (by omega), htc1] at hlt2; exact hlt2
+        have holt : olen < capN := by have hh := hfull; rw [h6, htno, tn capN (by omega)] at hh; exact hh
+        have hc2eq : st.mem (p + (BitVec.ofNat 64 idx + 1)) = BitVec.ofNat 8 (inp[idx+1]!) := by
+          have hb := hbridge (BitVec.ofNat 64 idx + 1) (by rw [htc1]; omega); rwa [htc1] at hb
+        have hv2 : inp[idx+1]! < 256 := by
+          rw [show inp[idx+1]! = inp[idx+1] from by simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt2n]]
+          exact hinp _ (List.getElem_mem hlt2n)
+        have hc2v : (st.mem (p + (BitVec.ofNat 64 idx + 1))).toNat = inp[idx+1]! := by rw [hc2eq, BitVec.toNat_ofNat]; omega
+        have hnib : Hex0.nibble inp[idx]! = some (pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat := by rw [← hcv]; exact pnibR_nibble _ hbad
+        have hdrop1 : inp.drop (idx+1) = inp[idx+1]! :: inp.drop (idx+2) := by
+          rw [List.drop_eq_getElem_cons hlt2n]; congr 1
+          simp [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hlt2n]
+        have hlsF : Hex0.isLowStop inp[idx+1]! = false := by
+          rcases Bool.eq_false_or_eq_true (Hex0.isLowStop inp[idx+1]!) with h | h
+          · exact absurd ((lowStop_iff _).mpr (by rw [hc2v]; exact h)) hls
+          · exact h
+        have hnib2 : Hex0.nibble inp[idx+1]! = some (pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).toNat := by
+          rw [← hc2v]; exact pnibR_nibble _ hbad2
+        have hbyte : ((((pnibR (st.mem (p + BitVec.ofNat 64 idx))) <<< 4)
+              ||| pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).setWidth 8).toNat
+            = (pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat * 16
+                + (pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).toNat := hexbyte_val _ _ hbad hbad2
+        -- recursion-state facts
+        have e5 : st1.rget 5 = BitVec.ofNat 64 (idx+2) := by rw [hf5]; bv_omega
+        have e6 : st1.rget 6 = BitVec.ofNat 64 (olen+1) := by rw [hf6, h6]; bv_omega
+        have e14 : st1.rget 14 = 0 := by rw [hf14, h14]
+        have ebridge : ∀ k : Word, k.toNat < inp.length → st1.mem (p+k) = BitVec.ofNat 8 (inp[k.toNat]!) := by
+          intro k hk
+          rw [hfmem]
+          rw [storeByte_preserves (s := ⟨p, inp.length⟩)
+                (a := q + st.rget 6) (a' := p + k) ?hna ⟨k.toNat, hk, by bv_omega⟩]
+          · exact hbridge k hk
+          case hna =>
+            rintro ⟨j, hj, hjeq⟩
+            exact hdisj (q + st.rget 6) ⟨j, hj, hjeq⟩ ⟨olen, holt, by rw [h6]⟩
+        have eout : regionBytes st1.mem q (olen+1)
+            = produced ++ [(pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat * 16
+                + (pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).toNat] := by
+          rw [hfmem, h6, regionBytes_snoc, regionBytes_store_self st q olen _ (by omega), hout]
+          congr 2
+          rw [show ((st.storeByte (q + BitVec.ofNat 64 olen) _).mem (q + BitVec.ofNat 64 olen))
+                = (((pnibR (st.mem (p + BitVec.ofNat 64 idx))) <<< 4)
+                    ||| pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).setWidth 8 from by
+            simp [mem_storeByte_self]]
+          exact hbyte
+        obtain ⟨fr, st', oc, her, hc14, hc6, hcreg⟩ :=
+          ih (inp.length - (idx+2)) (by omega) (idx+2) (olen+1) st1
+            (produced ++ [(pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat * 16
+                + (pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).toNat]) rfl hfregs e5 e6 e14
+            (by omega) (by omega) (by simp [holenp]) ebridge eout
+        have hbreq : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
+              (Hex0.decodeS .High (inp.drop idx)).2 capN
+            = boundedRun (produced ++ [(pnibR (st.mem (p + BitVec.ofNat 64 idx))).toNat * 16
+                + (pnibR (st.mem (p + (BitVec.ofNat 64 idx + 1)))).toNat])
+              (Hex0.decodeS .High (inp.drop (idx+2))).1 (Hex0.decodeS .High (inp.drop (idx+2))).2 capN := by
+          rw [hdropc, decodeS_high_goodhi _ _ _ hisCf hisSf hnib, hdrop1, decodeS_low_goodlo _ _ _ _ hlsF hnib2]
+          exact boundedRun_cons _ _ _ _ _ (by omega)
+        refine ⟨max fb fr + 1, st', oc, ?_, ?_, ?_, ?_⟩
+        · rw [exec_while_step _ _ _ _ _ _ _ hcond (exec_mono_le (Nat.le_max_left fb fr) heb)]
+          exact exec_mono_le (Nat.le_max_right fb fr) her
+        · rw [hbreq]; exact hc14
+        · rw [hbreq]; exact hc6
+        · rw [hbreq]; exact hcreg
+  · -- base case: idx = inp.length, loop guard false
+    have hidxlen : idx = inp.length := by omega
+    subst hidxlen
+    have hdrop : inp.drop inp.length = [] := by simp
+    have hx5 : (st.rget 5).toNat = inp.length := by rw [h5, tn inp.length (by omega)]
+    have hx11 : (st.rget 11).toNat = inp.length := by rw [hregs.h11, tn inp.length (by omega)]
+    have hcond : evalCond .lt (st.rget 5) (st.rget 11) = false :=
+      slt_false (by rw [hx5]; omega) (by rw [hx11]; omega) (by rw [hx5, hx11] <;> omega)
+    have htno : (BitVec.ofNat 64 olen).toNat = olen := tn olen (by omega)
+    have hpc : produced.length ≤ capN := by omega
+    have hbr : boundedRun produced (Hex0.decodeS .High (inp.drop inp.length)).1
+        (Hex0.decodeS .High (inp.drop inp.length)).2 capN = (0, produced, produced.length) := by
+      rw [hdrop, decodeS_high_nil]; simp [boundedRun, hpc, Hex0.statusCode]
+    refine ⟨1, st, .normal, ?_, ?_, ?_, ?_⟩
+    · rw [show (1:Nat) = 0+1 from rfl, exec_while_done _ _ _ _ _ _ hcond]
+    · rw [hbr]; simp [h14]
+    · rw [hbr, h6, htno]; exact holenp
+    · rw [hbr, h6, htno]; exact hout
+
 end LowIR.Ctrl.Hex0
