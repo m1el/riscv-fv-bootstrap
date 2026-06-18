@@ -1130,4 +1130,80 @@ theorem skipComment_run (pre rest : List Nat) (h : ∀ x ∈ pre, x ≠ 10) :
     simp only [List.cons_append, _root_.Hex0.skipComment, Hex0.c_nl, beq_iff_eq, if_neg hc]
     exact ih (fun x hx => h x (by simp [hx]))
 
+/-! ### The bounded (per-byte-capacity) run + comment-scan length (item B). -/
+
+/-- What the IL produces from the suffix `bytes` (with terminal status `dstatus`) starting at output
+    length `|produced|`, checking capacity `capN` per byte. -/
+def boundedRun (produced bytes : List Nat) (dstatus : Hex0.Status) (capN : Nat) : Nat × List Nat × Nat :=
+  if produced.length + bytes.length ≤ capN then
+    (Hex0.statusCode dstatus, produced ++ bytes, produced.length + bytes.length)
+  else
+    (2, produced ++ bytes.take (capN - produced.length), capN)
+
+theorem boundedRun_cons (produced : List Nat) (byte : Nat) (more : List Nat) (dstatus : Hex0.Status)
+    (capN : Nat) (h : produced.length < capN) :
+    boundedRun produced (byte :: more) dstatus capN
+      = boundedRun (produced ++ [byte]) more dstatus capN := by
+  unfold boundedRun
+  have e1 : produced ++ (byte :: more) = (produced ++ [byte]) ++ more := by simp
+  by_cases hc : produced.length + (byte :: more).length ≤ capN
+  · have hc2 : (produced ++ [byte]).length + more.length ≤ capN := by simp at hc ⊢; omega
+    rw [if_pos hc, if_pos hc2, e1]; congr 2; simp; omega
+  · have hc2 : ¬ (produced ++ [byte]).length + more.length ≤ capN := by simp at hc ⊢; omega
+    rw [if_neg hc, if_neg hc2]; congr 1
+    have hk : capN - produced.length = (capN - (produced.length+1)) + 1 := by omega
+    have ht : (byte::more).take (capN - produced.length) = byte :: more.take (capN - (produced.length+1)) := by
+      rw [hk, List.take_succ_cons]
+    rw [ht]; simp
+
+/-- Number of characters before the first `\n` (or the whole list if none). -/
+def commentSkip : List Nat → Nat
+  | [] => 0
+  | c :: rest => if c == 10 then 0 else commentSkip rest + 1
+
+theorem commentSkip_le (l : List Nat) : commentSkip l ≤ l.length := by
+  induction l with
+  | nil => simp [commentSkip]
+  | cons c rest ih => unfold commentSkip; split <;> simp <;> omega
+
+theorem commentSkip_get (l : List Nat) (h : commentSkip l < l.length) : l[commentSkip l]! = 10 := by
+  induction l with
+  | nil => simp [commentSkip] at h
+  | cons c rest ih =>
+    unfold commentSkip at h ⊢
+    by_cases hc : c == 10
+    · rw [if_pos hc]; simp only [List.getElem!_cons_zero]; simpa using hc
+    · rw [if_neg hc] at h ⊢
+      simp only [List.length_cons] at h
+      simp only [List.getElem!_cons_succ]; exact ih (by omega)
+
+theorem commentSkip_run_ne (l : List Nat) (j : Nat) (hj : j < commentSkip l) : l[j]! ≠ 10 := by
+  induction l generalizing j with
+  | nil => simp [commentSkip] at hj
+  | cons c rest ih =>
+    unfold commentSkip at hj
+    by_cases hc : c == 10
+    · rw [if_pos hc] at hj; omega
+    · rw [if_neg hc] at hj
+      cases j with
+      | zero => simp only [List.getElem!_cons_zero]; simpa using hc
+      | succ j => simp only [List.getElem!_cons_succ]; exact ih j (by omega)
+
+/-- Comment reconciliation: the IL stops *at* the `\n` (`commentSkip` chars in); `decodeS`'s own
+    `High` recursion then treats that `\n` as a space, so `drop (commentSkip)` ≡ `skipComment`. -/
+theorem decodeS_comment_reconcile (l : List Nat) :
+    Hex0.decodeS .High (l.drop (commentSkip l)) = Hex0.decodeS .High (_root_.Hex0.skipComment l) := by
+  induction l with
+  | nil => rfl
+  | cons c rest ih =>
+    unfold commentSkip _root_.Hex0.skipComment
+    simp only [Hex0.c_nl]
+    by_cases hc : c == 10
+    · rw [if_pos hc, if_pos hc]
+      simp only [List.drop_zero]
+      have h10 : c = 10 := by simpa using hc
+      rw [Hex0.decodeS]
+      simp [Hex0.isComment, Hex0.isSpace, Hex0.c_nl, Hex0.c_sp, Hex0.c_us, Hex0.c_hash, Hex0.c_semi, h10]
+    · rw [if_neg hc, if_neg hc, List.drop_succ_cons]; exact ih
+
 end LowIR.Ctrl.Hex0
