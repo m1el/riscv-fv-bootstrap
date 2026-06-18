@@ -17,6 +17,7 @@ New docs go in this directory; add a line for each new doc below.
 - [PROGRESS.md](PROGRESS.md) — LowIR & libc-formalize execution log (reverse-chronological).
 - [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md) — exploration + plan for formalizing & verifying libc: survey of the `third-party/` substrate (CompCert, Frama-C, CakeML/Pancake, Tree Borrows, POSIX spec, fv-libc partition), the design space, and the recommended path.
 - [MEMORY-BORROWS.md](MEMORY-BORROWS.md) — the separation discipline for libc specs: shared-input / unique-output borrows (Tree-Borrows residue), the single-threaded-errno assumption, and the `Slice`/`Borrow`/`Wf`/`Disjoint` layer.
+- [LOWIR-DESIGN.md](LOWIR-DESIGN.md) — design record for the lower IR: the decisions made (structured IL, unbounded registers + flat byte memory, non-local control flow, clocked semantics, borrows-not-blocks, single-threaded errno), the alternatives rejected, and the likely extensions (wider load/store, stack/frames, calls, `alloca`, borrow-typed higher IRs, `Ctrl` `compile_sim`).
 
 ## Status & handoffs
 
