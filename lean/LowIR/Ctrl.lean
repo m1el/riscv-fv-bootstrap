@@ -41,6 +41,7 @@ inductive Stmt where
   | brkB   (k : Nat)                               -- exit k-th enclosing block
   | contL  (k : Nat)                               -- restart k-th enclosing loop
   | ret                                            -- return from function
+  | call   (g : Stmt)                              -- call a function (its body); catches the callee's `ret`
 deriving Repr
 
 /-- Control outcome of a statement. -/
@@ -96,6 +97,10 @@ def exec : Nat → Stmt → St → Option (St × Outcome)
     | .brkB k          => some (s, .brk k)
     | .contL k         => some (s, .cont k)
     | .ret             => some (s, .ret)
+    | .call g          =>                                   -- run the callee; its `ret` returns to us
+        match exec fuel g s with
+        | some (s', .ret) => some (s', .normal)             -- callee returned → we continue normally
+        | other           => other                          -- normal / (well-formed: no free brk/cont)
 
 /-- Function-level runner: `normal` (fell off the end) and `ret` both mean "done". -/
 def run (fuel : Nat) (p : Stmt) (s : St) : Option St :=

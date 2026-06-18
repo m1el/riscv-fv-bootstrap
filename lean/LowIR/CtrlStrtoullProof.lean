@@ -114,6 +114,23 @@ theorem exec_while_ret (f : Nat) (c : Cond) (a b : Reg) (body : Stmt) (s s' : St
     (hc : evalCond c (s.rget a) (s.rget b) = true) (hb : exec f body s = some (s', .ret)) :
     exec (f+1) (.while c a b body) s = some (s', .ret) := by simp [exec, hc, hb]
 
+/-- A call whose callee falls off the end (`.normal`) continues normally. -/
+theorem exec_call_normal (f : Nat) (g : Stmt) (s s' : St) (h : exec f g s = some (s', .normal)) :
+    exec (f+1) (.call g) s = some (s', .normal) := by simp [exec, h]
+
+/-- A call whose callee `ret`s: the `ret` is caught and the caller continues normally. -/
+theorem exec_call_ret (f : Nat) (g : Stmt) (s s' : St) (h : exec f g s = some (s', .ret)) :
+    exec (f+1) (.call g) s = some (s', .normal) := by simp [exec, h]
+
+theorem exec_call_brk (f : Nat) (g : Stmt) (s s' : St) (k : Nat) (h : exec f g s = some (s', .brk k)) :
+    exec (f+1) (.call g) s = some (s', .brk k) := by simp [exec, h]
+
+theorem exec_call_cont (f : Nat) (g : Stmt) (s s' : St) (k : Nat) (h : exec f g s = some (s', .cont k)) :
+    exec (f+1) (.call g) s = some (s', .cont k) := by simp [exec, h]
+
+theorem exec_call_none (f : Nat) (g : Stmt) (s : St) (h : exec f g s = none) :
+    exec (f+1) (.call g) s = none := by simp [exec, h]
+
 /-! ### Fuel monotonicity — more fuel never changes a `some` result.
 
     The key enabler for composing clocked-exec results without exact-fuel arithmetic:
@@ -219,6 +236,21 @@ theorem exec_mono (f : Nat) : ∀ (stmt : Stmt) (s : St) (r : St × Outcome),
           | ret =>
             rw [exec_while_ret _ _ _ _ _ _ _ hc hbody] at h
             rw [exec_while_ret _ _ _ _ _ _ _ hc hb1]; exact h
+    | call g =>
+      cases hg : exec f g s with
+      | none => rw [exec_call_none _ _ _ hg] at h; exact absurd h (by simp)
+      | some r' =>
+        obtain ⟨s', o⟩ := r'
+        have hg1 := ih g s (s', o) hg
+        cases o with
+        | normal =>
+          rw [exec_call_normal _ _ _ _ hg] at h; rw [exec_call_normal _ _ _ _ hg1]; exact h
+        | ret =>
+          rw [exec_call_ret _ _ _ _ hg] at h; rw [exec_call_ret _ _ _ _ hg1]; exact h
+        | brk k =>
+          rw [exec_call_brk _ _ _ _ _ hg] at h; rw [exec_call_brk _ _ _ _ _ hg1]; exact h
+        | cont k =>
+          rw [exec_call_cont _ _ _ _ _ hg] at h; rw [exec_call_cont _ _ _ _ _ hg1]; exact h
 
 theorem exec_mono_le {f f' : Nat} (hle : f ≤ f') {stmt : Stmt} {s : St} {r : St × Outcome}
     (he : exec f stmt s = some r) : exec f' stmt s = some r := by
