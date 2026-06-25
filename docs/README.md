@@ -24,7 +24,8 @@ New docs go in this directory; add a line for each new doc below.
 - [STATUS.md](STATUS.md) — hex0 campaign status (bare-metal run + formal proof).
 - [RESUME.md](RESUME.md) — handoff for task #7 (ISA cross-check vs `riscv-coq`).
 - [RESUME-HEX1.md](RESUME-HEX1.md) — hex1 campaign handoff and wrap-up (campaign complete: `core1_refines` proved in both systems).
-- [RESUME-LOWIR.md](RESUME-LOWIR.md) — **handoff for the LowIR structured-IL effort + the in-progress hex0 functional proof** (toolbox, gotchas, the remaining body-dispatch/invariant/coreSpec plan).
+- [RESUME-LOWIR.md](RESUME-LOWIR.md) — **handoff for the LowIR structured-IL effort + the (now complete) hex0 functional proof** (toolbox, gotchas).
+- [RESUME-IR-DESIGN-SESSION.md](RESUME-IR-DESIGN-SESSION.md) — resume for the session that finished `hex0_correct`, added the `call` construct + cross-call-disjointness demo, and worked the IR design arc (memory model, borrows vs provenance/FilC/CHERI, calling conventions, `compile_sim` passes); has the open **frame-based call specs** next-step.
 - [PREV_CTX.md](PREV_CTX.md) — original project handoff context (goals of the bottom-up verified tower).
 
 ## Experiments
