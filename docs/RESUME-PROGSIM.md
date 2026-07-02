@@ -53,12 +53,19 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   frame side conditions transfer via `StInv_sp_eq`). `sorry` remains ONLY for
   control-flow (ife/while/block/ret/brk/cont/call) and memory (lbu/ld/sb/sd/cref/
   clen) — Phases 4.2–4.4.
-- **NEXT:** the toy `prog_sim`/sub3 corollary against the differential oracle
-  (sub3 is skip/arith/seq only — now fully within `lower_sim`'s proven fragment),
-  then Phase 4.2 memory ops (`ld/sd/lbu/sb` via WordMem + MachStack), 4.3 control
-  flow (branches — the outcome selects a label; needs the `Emitted` label-offset
-  algebra), Phase 2 (AsmFacts: `Emitted L pos (emit stmt)` from the real
-  pipeline), 5 (call), 6 (prog_sim).
+- **Phase 4.1 sub3 corollary — DONE, go/no-go CLOSED (sorry-free).**
+  `sub3_body_exec` (IL spec `(a+b)−c` into x10, forward via `exec_*`) +
+  `sub3_body_sim`: from a `StInv`-related state with `emit sub3.body` installed,
+  the machine runs to a `StInv`-related state for `s'` whose return register holds
+  `(a+b)−c`. Proved by driving `add` then `sub` through `two_op_sim` **directly**
+  (NOT `lower_sim` — so it is `[propext, Quot.sound]`, not inheriting the
+  control-flow `sorry`), chained with `stepN_add`. The IL result reproduces the
+  differential oracle `diff_sub3` ([30,12,2] ↦ 40), checked by a `native_decide`
+  example. The relation is validated end-to-end against the oracle.
+- **NEXT:** Phase 4.2 memory ops (`ld/sd/lbu/sb` via WordMem + MachStack), 4.3
+  control flow (branches — the outcome selects a label; needs the `Emitted`
+  label-offset algebra), Phase 2 (AsmFacts: `Emitted L pos (emit stmt)` from the
+  real pipeline), 5 (call), 6 (prog_sim).
 
 ## 0. Mission and payoff
 
@@ -447,8 +454,8 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
   end-to-end against the machine `step`, factored through `run_load`/`run_store` +
   `single_op_sim`/`two_op_sim`, all `[propext, Quot.sound]` (commits 9329154,
   e688c5a, dade03c).
-- [ ] Toy `prog_sim`/sub3 corollary against the differential oracle (sub3 is now
-  within the proven fragment).
+- [x] Toy sub3 corollary against the differential oracle — DONE, `sorry`-free
+  (`sub3_body_sim` via `two_op_sim` directly; oracle value 40 via `native_decide`).
 - [ ] Finish `lower_sim`: memory ops (ld/sd/lbu/sb/cref/clen), control flow
   (ife/while/block/ret/brk/cont/call) — Phases 4.2–4.4.
 - [ ] Then Phases 1/2 (encode/decode, assembler) in parallel-friendly chunks,
