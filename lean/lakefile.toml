@@ -24,7 +24,7 @@ roots = ["LowIR.CompileTests"]
 # the Lib module (strlen/hex0 ports + spec validation) and the core LowIR.SSA.
 [[lean_lib]]
 name = "LowIRSSA"
-roots = ["LowIR.SSADump", "LowIR.SSAProof.ExecFacts"]
+roots = ["LowIR.SSADump", "LowIR.SSAProof.ExecFacts", "LowIR.SSAProof.StrlenProof"]
 
 # The compile_sim-for-Prog proof campaign (docs/RESUME-PROGSIM.md). Rooted at
 # the Defs module for now (the top-level `LowIR.ProgSim.Main` with the payoff
