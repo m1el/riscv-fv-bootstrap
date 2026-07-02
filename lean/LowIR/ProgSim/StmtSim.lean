@@ -605,6 +605,56 @@ theorem jump_sim (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : St
   · rw [hs]; exact StInv_scratch L fd holes s m 0 (m.pc + 4) _ (by decide) hinv
   · rw [hs, pc_setPc, hpc, signExtend_ofInt_21 δ hlo hhi, hδ, jump_lands]
 
+/-! ## The three leaf control-transfer ops (`ret` / `brkB` / `contL`).
+
+    Each lowers to one `.jmp l` → `jal x0, (target − here)`, where `target` is the
+    resolved position of the epilogue / the k-th break label / the k-th continue
+    label. The IL step produces `(s, outcome)` with the state UNCHANGED, so the
+    whole obligation is `jump_sim`: the machine lands at `codeBase + target` with
+    `StInv` intact. The resolved `target` is a parameter here — the outcome-carrying
+    `lower_sim` (and Phase 2's layout) supplies it from the label environment. -/
+theorem ret_sim
+    {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
+    (L : Layout) (fd : FunDef) (holes : List Hole) (s s' : St) (m : State)
+    (fuel here epiPos : Nat)
+    (hexec : LowIR.Prog.exec P dbase pad stackLo (fuel + 1) .ret s = some (s', .ret))
+    (hinv : StInv L fd holes s m)
+    (hpc  : m.pc = L.codeBase + BitVec.ofNat 64 here)
+    (hem  : Emitted L here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 ((epiPos : Int) - here))])
+    (hlo  : -(2 ^ 20) ≤ (epiPos : Int) - here) (hhi : (epiPos : Int) - here < 2 ^ 20) :
+    StInv L fd holes s' (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 epiPos := by
+  rw [LowIR.Prog.exec_ret, Option.some.injEq, Prod.mk.injEq] at hexec
+  obtain ⟨rfl, -⟩ := hexec
+  exact jump_sim L fd holes s m here epiPos _ hinv hpc hem rfl hlo hhi
+
+theorem brkB_sim
+    {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
+    (L : Layout) (fd : FunDef) (holes : List Hole) (s s' : St) (m : State)
+    (fuel here k tgt : Nat)
+    (hexec : LowIR.Prog.exec P dbase pad stackLo (fuel + 1) (.brkB k) s = some (s', .brk k))
+    (hinv : StInv L fd holes s m)
+    (hpc  : m.pc = L.codeBase + BitVec.ofNat 64 here)
+    (hem  : Emitted L here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 ((tgt : Int) - here))])
+    (hlo  : -(2 ^ 20) ≤ (tgt : Int) - here) (hhi : (tgt : Int) - here < 2 ^ 20) :
+    StInv L fd holes s' (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 tgt := by
+  rw [LowIR.Prog.exec_brkB, Option.some.injEq, Prod.mk.injEq] at hexec
+  obtain ⟨rfl, -⟩ := hexec
+  exact jump_sim L fd holes s m here tgt _ hinv hpc hem rfl hlo hhi
+
+theorem contL_sim
+    {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
+    (L : Layout) (fd : FunDef) (holes : List Hole) (s s' : St) (m : State)
+    (fuel here k tgt : Nat)
+    (hexec : LowIR.Prog.exec P dbase pad stackLo (fuel + 1) (.contL k) s = some (s', .cont k))
+    (hinv : StInv L fd holes s m)
+    (hpc  : m.pc = L.codeBase + BitVec.ofNat 64 here)
+    (hem  : Emitted L here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 ((tgt : Int) - here))])
+    (hlo  : -(2 ^ 20) ≤ (tgt : Int) - here) (hhi : (tgt : Int) - here < 2 ^ 20) :
+    StInv L fd holes s' (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 tgt := by
+  rw [LowIR.Prog.exec_contL, Option.some.injEq, Prod.mk.injEq] at hexec
+  obtain ⟨rfl, -⟩ := hexec
+  exact jump_sim L fd holes s m here tgt _ hinv hpc hem rfl hlo hhi
+
 /-! ## `lower_sim` — the statement-level simulation (VERTICAL SLICE).
 
     If the IL says `stmt` runs `s ↦ s'` with a `.normal` outcome, and the machine
