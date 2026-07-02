@@ -1,6 +1,6 @@
 # Agent sessions for `/var/data/bootstrap`
 
-Collected **19 Claude Code** session(s) and **5 Codex** session(s) whose working directory is this project.
+Collected **24 Claude Code** session(s) and **5 Codex** session(s) whose working directory is this project.
 
 Per-session transcripts, summaries, and token costs live under `claude/` and `codex/`. Each file has a header (model, turns, token cost), a summary (first request + final response), and the full transcript (long tool outputs truncated). Personal name, email, and OS username are redacted.
 
@@ -8,21 +8,22 @@ Per-session transcripts, summaries, and token costs live under `claude/` and `co
 
 | Agent | Sessions | Output tokens | Cost (USD) |
 |---|--:|--:|--:|
-| Claude Code | 19 | 5,804,807 | **$740.25** |
+| Claude Code | 24 | 7,955,616 | **$1,111.07** |
 | Codex | 5 | 39,258 | **$4.16** |
-| **All** | **24** | **5,844,065** | **$744.42** |
+| **All** | **29** | **7,994,874** | **$1,115.23** |
 
 ## Aggregate time
 
 | Agent | Wall-clock | Model gen | Tool exec | Active | Waiting for user |
 |---|--:|--:|--:|--:|--:|
-| Claude Code | 255h21m | 22h57m | 11h47m | 34h45m | 220h36m |
+| Claude Code | 486h31m | 31h26m | 12h12m | 43h38m | 442h52m |
 | Codex | 29m36s | 17m05s | 1m13s | 18m18s | 11m17s |
 
 > Each section's time is attributed by what it is: `👤 User`→waiting-for-user, `🤖 Assistant`→model generation, `🛠️ Tool result`→tool execution; the three tile the session so they sum to wall-clock. Per-call exec times are matched (`tool_use`↔`tool_result`) and shown inline on each call line. Codex event timestamps are batch-flushed, so its splits are approximate.
 
 > **Pricing source:** openrouter.ai/api/v1/models (live). Cost is computed per token from each model's OpenRouter rates (prompt / completion / cache-read / cache-write), so cache-read tokens — re-counted every turn — are billed at their reduced rate rather than inflating the headline. Model rate matches:
 >
+> - claude-fable-5 → `anthropic/claude-fable-5`
 > - claude-opus-4-8 → `anthropic/claude-opus-4.8`
 > - deepseek/deepseek-v4-pro → `deepseek/deepseek-v4-pro`
 > - openai/gpt-5.5 → `openai/gpt-5.5`
@@ -51,7 +52,12 @@ Per-session transcripts, summaries, and token costs live under `claude/` and `co
 | 16 | 2026-06-06 09:49 | claude-opus-4-8 | 10/200 | 203 | 1h07m | 1h35m | $23.36 | Resume working on coq proof of hex1, there’s an in | [`claude/2026-06-06_09-49_cde231aebe61.md`](claude/2026-06-06_09-49_cde231aebe61.md) |
 | 17 | 2026-06-06 12:09 | claude-opus-4-8 | 4/31 | 34 | 6m30s | 18m04s | $1.66 | Regenerate sessions folder. Compare implementation | [`claude/2026-06-06_12-09_d532b0cae75d.md`](claude/2026-06-06_12-09_d532b0cae75d.md) |
 | 18 | 2026-06-06 12:31 | <synthetic>, claude-opus-4-8 | 189/551 | 395 | 7h40m | 75h18m | n/a | Let’s reproduce the implementation of hex0 and lea | [`claude/2026-06-06_12-31_549e7c04e770.md`](claude/2026-06-06_12-31_549e7c04e770.md) |
-| 19 | 2026-06-10 07:12 | <synthetic>, claude-fable-5, claude-opus-4-8 | 140/442 | 334 | 2h31m | 132h53m | n/a | Review the code and proofs in this repo. Review th | [`claude/2026-06-10_07-12_46f830f3cc10.md`](claude/2026-06-10_07-12_46f830f3cc10.md) |
+| 19 | 2026-06-10 07:12 | <synthetic>, claude-fable-5, claude-opus-4-8 | 140/445 | 336 | 2h32m | 132h53m | n/a | Review the code and proofs in this repo. Review th | [`claude/2026-06-10_07-12_46f830f3cc10.md`](claude/2026-06-10_07-12_46f830f3cc10.md) |
+| 20 | 2026-06-16 01:27 | claude-opus-4-8 | 3/12 | 9 | 2m32s | 17m18s | $0.62 | proof read pitch.md give suggestions. you may crea | [`claude/2026-06-16_01-27_c864069f1e32.md`](claude/2026-06-16_01-27_c864069f1e32.md) |
+| 21 | 2026-06-16 19:31 | <synthetic>, claude-opus-4-8 | 33/214 | 201 | 2h36m | 9h30m | n/a | Your goal is to explore and plan a path to formali | [`claude/2026-06-16_19-31_a6dd5534ebe1.md`](claude/2026-06-16_19-31_a6dd5534ebe1.md) |
+| 22 | 2026-06-17 05:31 | claude-opus-4-8 | 30/371 | 348 | 2h58m | 209h06m | $136.08 | resume from @docs/RESUME-LOWIR.md | [`claude/2026-06-17_05-31_c0dbbeeb283d.md`](claude/2026-06-17_05-31_c0dbbeeb283d.md) |
+| 23 | 2026-07-01 22:24 | claude-fable-5 | 79/215 | 197 | 1h38m | 9h31m | $153.73 | explore @third-party/RadixExperiment/ and document | [`claude/2026-07-01_22-24_201ad98939ab.md`](claude/2026-07-01_22-24_201ad98939ab.md) |
+| 24 | 2026-07-02 08:33 | claude-fable-5 | 20/197 | 249 | 1h37m | 2h44m | $80.38 | read the docs, archive outdated documents (in part | [`claude/2026-07-02_08-33_56e882796a16.md`](claude/2026-07-02_08-33_56e882796a16.md) |
 
 ## Codex sessions
 
