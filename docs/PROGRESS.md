@@ -18,8 +18,31 @@ checks that every stack byte the IL wrote agrees with the machine
 byte-for-byte. `p1_chain_userPad`/`p1_rec_userPad` pass at `pad = userPad`;
 `p1_chain_pad0_diverges`/`p1_rec_pad0_diverges` show the OLD `pad = 0` IL
 diverges from the machine as soon as a callee (depth ≥ 1) writes its frame —
-the address gap P1 closes is thus real, not vacuous. Next: `ProgSim/Defs.lean`
-(the §3 relation + sorry'd theorems), then the straight-line vertical slice.
+the address gap P1 closes is thus real, not vacuous.
+
+**`ProgSim/Defs.lean` (commits 2fa8faf + this):** the relation scaffold, all
+`sorry`-free defs + `sorry`'d statements, in the new `LowIRProgSim` lib target
+(rooted at `Defs`, in `defaultTargets`; build-root trap handled up front).
+- §3.1/§3.4: `Layout` + `layoutOf` (from the FROZEN `compileProgT`),
+  `Installed` (+ computable `codeInstalledB`/`dataInstalledB`, #guard'd by
+  loading real blobs into the trusted `Rv64i` machine), `execT` (write-
+  footprint instrumentation) + `runT` + `execT_erase` (sorry). Footprints
+  #guard'd exactly: sub3→0, frameLocal's sd→its 8 frame addresses, caller
+  inherits them.
+- §3.1 relation: `memRange`/`MachPriv` (+ computable `machPrivB`, #guard'd:
+  blob byte private, slot byte private, user-frame byte NOT — and the P1
+  tiling `sp + userOff = sp0 − frameSize`), `MachStack`, `StInv` (sp≡x2,
+  registers-in-slots, Installed, memory-off-private, current-hole shape,
+  8-align), `SimPre`, `userPad`.
+- §3.3: `prog_sim` fully stated (sorry) — the self-contained payoff every
+  ProgLib function composes with (const data at `codeBase+segStart` both
+  sides; rets in a-regs; memory agrees off blob+stack).
+
+`lower_sim`/`call_sim` (§3.2) are DEFERRED to the StmtSim/CallSim phases: their
+statements need the compile-time `Emitted` predicate that Phase 2 characterizes
+and the Phase 4.1 vertical slice validates — stating them blind is the
+expensive failure mode. Next: prove `execT_erase` (mechanical) + port the
+one-layer `exec_*` unfolder lemmas (Phase 0.2/0.3), then the vertical slice.
 
 ## 2026-07-02 (later still) — Ext. 12: const data segment + cref/clen
 

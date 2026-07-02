@@ -218,6 +218,110 @@ def runT (P : Program) (stackLo : Word) (fuel : Nat) (f : Name) (argVals : List 
     | none => none
     | some st0 => execT P dbase pad stackLo fuel fd.body st0
 
+/-! ## §3.1 — the simulation relation: `MachPriv`, `StInv`, `SimPre`.
+
+    P1 (the frame-padding oracle) makes the relation PLAIN EQUALITY: every
+    IL-visible value is numerically identical on both sides, so `StInv` needs no
+    injection — only that IL registers live in their machine slots, `sp ≡ x2`,
+    the code is installed, and memory agrees off the machine-private bytes. -/
+
+/-- Half-open byte range `[base, base+len)` in `toNat` (no wrap — all our
+    addresses sit far below 2⁶⁴). -/
+def memRange (a base : Word) (len : Nat) : Prop :=
+  base.toNat ≤ a.toNat ∧ a.toNat < base.toNat + len
+def memRangeB (a base : Word) (len : Nat) : Bool :=
+  base.toNat ≤ a.toNat && a.toNat < base.toNat + len
+
+/-- A machine-private hole: the `[ra][slots]` area an activation adds BELOW its
+    user frame — `(base = that activation's sp, len = userOff)`. Listed per live
+    activation by the `CallChain` ghost (Phase 5). -/
+abbrev Hole := Word × Nat
+
+/-- Total loadable blob length (code + zero-pad + data segment). -/
+def Layout.blobLen (L : Layout) : Nat := L.segStart + (dataSegment L.data).length
+
+/-- `MachPriv L holes a` — `a` is machine-private: inside the code+data blob, or
+    inside some live activation's `[ra][slots]` hole. The IL never writes these;
+    the footprint side condition forbids IL stores here. -/
+def MachPriv (L : Layout) (holes : List Hole) (a : Word) : Prop :=
+  memRange a L.codeBase L.blobLen ∨ ∃ h ∈ holes, memRange a h.1 h.2
+def machPrivB (L : Layout) (holes : List Hole) (a : Word) : Bool :=
+  memRangeB a L.codeBase L.blobLen || holes.any (fun h => memRangeB a h.1 h.2)
+
+/-- The whole shared stack region `[stackLo, sp0)` — used by `prog_sim`'s
+    coarse top-level memory agreement (the harness's output buffers live OUTSIDE
+    it, so "agree off blob and off stack" is the composable observable; the
+    per-hole `MachPriv` is the finer invariant `StInv` carries mid-run). -/
+def MachStack (stackLo sp0 : Word) (a : Word) : Prop :=
+  memRange a stackLo (sp0.toNat - stackLo.toNat)
+
+/-- **`StInv L fd holes s m`** — the per-statement simulation invariant
+    (RESUME-PROGSIM §3.1). At every IL statement boundary during `fd`'s body:
+    `sp ≡ x2`; each live IL register sits in its 8-byte machine slot at
+    `sp + slotOff r`; the code+data is installed; IL and machine memory agree
+    off the machine-private bytes; and the current activation's hole is
+    `[sp, sp + userOff fd)` with `sp` 8-aligned. -/
+def StInv (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State) : Prop :=
+  m.rget 2 = s.sp
+  ∧ (∀ r, 1 ≤ r → r ≤ maxRegF fd →
+        s.rget r = m.loadWord (s.sp + BitVec.ofNat 64 (slotOff r)))
+  ∧ Installed L m
+  ∧ (∀ a, ¬ MachPriv L holes a → s.mem a = m.mem a)
+  ∧ holes.head? = some (s.sp, userOff fd)
+  ∧ s.sp.toNat % 8 = 0
+
+/-- The top-level separation bundle for `prog_sim`: the entry stack `[stackLo,
+    sp0)` is well-formed and disjoint from the code+data blob, and `sp0` is
+    8-aligned. (The per-function stack budget is SUBSUMED by P1's overflow
+    check, so it is NOT a hypothesis here — that is the point of §2.) -/
+structure SimPre (L : Layout) (stackLo sp0 : Word) : Prop where
+  spAligned    : sp0.toNat % 8 = 0
+  stackNonEmpty : stackLo.toNat ≤ sp0.toNat
+  blobStackDisjoint : ∀ a, memRange a L.codeBase L.blobLen → ¬ MachStack stackLo sp0 a
+
+/-- The padding oracle `compile_sim` instantiates: `userOff` of each function.
+    With this, IL `sp` ≡ machine `x2` at every depth (validated in
+    `CompileTests.p1_*`). -/
+def userPad (env : Env) : Name → Nat := fun f => (List.lookup f env).elim 0 userOff
+
+/-! ## §3.3 — the program-level payoff `prog_sim` (statement; proof deferred).
+
+    `lower_sim`/`call_sim` (§3.2/§3.3) are the induction's workhorses; their
+    statements need the compile-time `Emitted` predicate (byte-stream ↔ lowering
+    + resolved label addresses) that Phase 2 (AsmFacts) characterizes and the
+    Phase 4.1 VERTICAL SLICE validates against the differential oracle — the
+    go/no-go checkpoint for this whole relation. They land there, not guessed
+    here. `prog_sim` below is self-contained (no `Emitted`) and is the corollary
+    every ProgLib function composes with. -/
+
+/-- **`prog_sim`** — if the D7/D8 IL says `entry(args)` computes `s'` (with the
+    P1 padding `userPad`), then the compiled RV64I blob, started at `codeBase`
+    with `args` in `a0..` and `sp = sp0`, runs to the halt pad in a state whose
+    `a0..` hold `entry`'s return values and whose memory agrees with `s'`
+    everywhere outside the blob and the stack. Const data is placed at
+    `codeBase + segStart` on BOTH sides (`dataOffsetsFrom_shift`). -/
+theorem prog_sim
+    {P : Program} {entry : Name} {fd : FunDef} {args : List Word}
+    {stackLo sp0 : Word} {fuel : Nat} {s' : St} {L : Layout} {m0 : State}
+    (hlk    : List.lookup entry P.env = some fd)
+    (hL     : layoutOf P entry L.codeBase = some L)
+    (hpre   : SimPre L stackLo sp0)
+    (hpc    : m0.pc = L.codeBase)
+    (hsp    : m0.rget 2 = sp0)
+    (hargs  : ∀ i, i < fd.argc → m0.rget (10 + i) = args.getD i 0)
+    (hinst  : Installed L m0)
+    (hmem   : ∀ a, ¬ MachPriv L [] a →
+                installData (L.codeBase + BitVec.ofNat 64 L.segStart) P.data (fun _ => 0) a
+                  = m0.mem a)
+    (hrun   : LowIR.Prog.run P stackLo fuel entry args (fun _ => 0) sp0
+                (userPad P.env) (L.codeBase + BitVec.ofNat 64 L.segStart) = some s') :
+    ∃ k, (Rv64i.runFuel L.haltPc k m0).pc = L.haltPc
+       ∧ (∀ j, j < fd.rvc →
+            (Rv64i.runFuel L.haltPc k m0).rget (10 + j) = s'.rget (fd.rets.toList.getD j 0))
+       ∧ (∀ a, ¬ memRange a L.codeBase L.blobLen → ¬ MachStack stackLo sp0 a →
+            s'.mem a = (Rv64i.runFuel L.haltPc k m0).mem a) := by
+  sorry
+
 /-! ## Executable sanity (`#guard`) — the def oracle (RESUME-PROGSIM §6). -/
 
 section Guards
@@ -258,6 +362,32 @@ private def mkM (blob : List Byte) : State :=
 -- (frameLocal's frameReg = sp0 - frameSize = SP0 - 16), in order.
 #guard (runT [("frameLocal", frameLocal)] STACK_LO 1000 "frameLocal" [0xDEAD] zeroMem SP0).map
         (fun soo => soo.2.2) = some ((List.range 8).map (fun i => SP0 - 16 + BitVec.ofNat 64 i))
+
+/-! ### `MachPriv` classification arithmetic (validated on the chain layout). -/
+
+-- Build the chain's layout at CB; classify a blob byte, a stack slot, and a
+-- user-frame byte. The entry (f3) frame: machine sp = SP0 - totalFrame, its
+-- hole = [sp, sp + userOff) is the [ra][slots] area; the user frame sits ABOVE.
+open LowIR.Prog (chainEnv chainFn)
+open LowIR.Compile (userOff totalFrame)
+
+private def Lchain : Layout := (layoutOf chainEnv "f3" CB).getD ⟨0, [], [], 0, []⟩
+private def f3fd : FunDef := chainFn (some "f2")
+private def spTop : Word := 0x8000
+private def f3sp  : Word := spTop - BitVec.ofNat 64 (totalFrame f3fd)   -- machine sp
+private def f3hole : Hole := (f3sp, userOff f3fd)                        -- [ra][slots]
+
+-- a byte inside the code blob is machine-private (holes irrelevant)
+#guard machPrivB Lchain [] (CB + 4) = true
+-- the user-frame base (frameReg = f3sp + userOff) is NOT in the hole and is off
+-- the blob ⇒ NOT private (this is where the IL legitimately writes)
+#guard machPrivB Lchain [f3hole] (f3sp + BitVec.ofNat 64 (userOff f3fd)) = false
+-- a slot byte (f3sp + 8, i.e. slot 0) IS inside the hole ⇒ private
+#guard machPrivB Lchain [f3hole] (f3sp + 8) = true
+-- the P1 frame arithmetic: hole top (sp + userOff) = user-frame base
+--   = sp0 - frameSize (frameReg's value), so the hole and user frame tile the
+--   whole machine frame with no gap or overlap.
+#guard (f3sp + BitVec.ofNat 64 (userOff f3fd)) = spTop - BitVec.ofNat 64 f3fd.frameSize
 
 end Guards
 
