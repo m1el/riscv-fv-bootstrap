@@ -21,10 +21,25 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
 - **Phase 3 (start) — WordMem DONE.** `ProgSim/WordMem.lean`: the 64-bit LE
   load/store algebra (`byte_bit`, `loadWord_storeWord_same` round-trip,
   `storeWord_mem_of_ne`/`_outside`, `loadWord_storeWord_disjoint`), sub-second.
-  Committed `f513c27`.
-- **NEXT:** rest of Phase 3 (StInv slot algebra: `rget/rset` ↔ slot-store, slot
-  disjointness, `Installed`/off-MachPriv preservation on the *`StInv` level*,
-  building on WordMem's primitives) → then the **vertical slice** (§8.3).
+  Committed `f513c27`; **axiom hygiene retrofit** since — `byte_bit`/round-trip
+  now `[propext, Quot.sound]` (were pulling `Classical.choice`): the omega-on-
+  iff/∧/∨ goals are split to atoms first (`constructor`/`repeat' apply And.intro`
+  / `exfalso`), the window tiling is the new explicit constructive `window_tiling`
+  (never `omega` on the disjunction), and `by_cases`→`cases Nat.decLe`.
+- **Phase 3 (finish) — SlotFacts DONE.** `ProgSim/SlotFacts.lean`: the StInv
+  slot algebra, `[propext, Quot.sound]`. Slot arithmetic (`slotOff_add8_le_userOff`,
+  `slotOff_disjoint`, `slotAddr_toNat`), slot read/write lifted from WordMem
+  (`loadWord_store_slot_same`/`_ne`), blob preservation (`fetch32_pc_congr`,
+  `blobAddr_toNat`, `mem_storeWord_off_blob`, `Installed_storeWord_off_blob`),
+  and the payoff **`StInv_store_slot`**: a machine slot store mirrors IL `rset r v`,
+  preserving all six `StInv` conjuncts. The frame-/blob-placement side conditions
+  (`hnw`/`hseg`/`hblob`/`hbd`) are explicit hypotheses here — Phases 4/5 discharge
+  them from `SimPre`. Reg binders are `Nat` (a `≤` at type `Reg = abbrev Nat`
+  hides from `omega`). In `defaultTargets` (added to `LowIRProgSim` roots).
+- **NEXT:** the **vertical slice** (§8.3 / Phase 4.1) — the go/no-go for the
+  relation design: state `lower_sim`/`Emitted`, prove only skip/annot/ops cases,
+  `sorry` the rest, check a toy straight-line `prog_sim` (sub3-class) against the
+  differential oracle.
 
 ## 0. Mission and payoff
 
@@ -343,7 +358,7 @@ lean/LowIR/ProgSim/ExecFacts.lean    Phase 0.2  (42 exec_* unfolders)        [DO
 lean/LowIR/ProgSim/Defs.lean         Layout/Installed/StInv/SimPre, execT     [DRAFTED]
                                        + execT_erase (0.3); prog_sim sorry'd
 lean/LowIR/ProgSim/WordMem.lean      Phase 3 start (LE load/store algebra)    [DONE]
-lean/LowIR/ProgSim/SlotFacts.lean    Phase 3 finish (StInv slot algebra)      ← NEXT
+lean/LowIR/ProgSim/SlotFacts.lean    Phase 3 finish (StInv slot algebra)      [DONE]
 lean/LowIR/ProgSim/EncodeFacts.lean  Phase 1
 lean/LowIR/ProgSim/AsmFacts.lean     Phase 2
 lean/LowIR/ProgSim/StmtSim.lean      Phase 4 (the induction)
@@ -403,10 +418,10 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
 - [x] `ProgSim/Defs.lean` §3 statements: real defs `#guard`'d, `prog_sim`
   `sorry`'d, `LowIRProgSim` lib target in `defaultTargets`.
 - [x] Phase 3 (start): `ProgSim/WordMem.lean` — LE load/store algebra. `f513c27`.
-- [ ] **Phase 3 (finish): StInv slot algebra** — `rget/rset` ↔ slot-store,
-  8-byte slot disjointness lifted to `StInv`, `Installed`/off-MachPriv
-  preservation under a slot store. Built on WordMem; `SlotFacts.lean` (or fold
-  into WordMem if small). This is the immediate task.
+- [x] **Phase 3 (finish): StInv slot algebra** — `ProgSim/SlotFacts.lean`:
+  `rget/rset` ↔ slot-store (`StInv_store_slot`), 8-byte slot disjointness,
+  `Installed`/off-MachPriv preservation under a slot store. All `[propext,
+  Quot.sound]` (retrofitted the same onto WordMem's `byte_bit`/round-trip).
 - [ ] **Vertical slice** (Phase 4.1 → toy `prog_sim` for straight-line
   sub3-class): the go/no-go checkpoint for the whole relation design. Prove
   only skip/annot/ops cases of `lower_sim`, leave the rest `sorry`, check the

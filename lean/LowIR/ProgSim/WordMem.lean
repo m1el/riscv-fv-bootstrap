@@ -9,13 +9,17 @@
   Proof note: `bv_decide` in this toolchain (Lean 4.30) cannot handle `>>>`
   (right shift), so the byte-reconstruction is done by `getLsbD` extensionality.
   The reusable lemma is `byte_bit` (one shifted byte, one window); the round-trip
-  is then just the OR of eight windows tiling `[0, 64)`, closed by `omega`. Two
-  gotchas the fast proof turns on: `omega` rejects a *Bool*-valued goal, so the
-  `Bool` equation is turned into a `Prop` via `Bool.eq_iff_iff` first; and that
-  `rw` leaves an `↔ True` wrapper `omega` cannot strip, so `iff_true` must be in
-  the `simp` set. The store addresses `a … a+7` differ by DISTINCT `BitVec`
-  literals, so they are automatically pairwise distinct — the round-trip needs no
-  no-overflow hypothesis; only the disjoint case (two independent bases) does.
+  is then the OR of eight windows tiling `[0, 64)` (`window_tiling`). The `Bool`
+  equations are turned into `Prop` via `Bool.eq_iff_iff` first (`omega` rejects a
+  Bool-valued goal). AXIOM HYGIENE (`[propext, Quot.sound]`, no `Classical`): bare
+  `omega` on an iff / conjunction / disjunction goal pulls in `Classical.choice`,
+  so every such goal is split to ATOMS before `omega` — `constructor`/`And.intro`
+  for the iff+conjunction cases, `exfalso` for the vacuous ones, and the tiling
+  disjunction is closed by the explicit constructive `window_tiling` (never
+  `omega`). `by_cases` likewise routes through `Classical`; use `cases Nat.decLe`.
+  The store addresses `a … a+7` differ by DISTINCT `BitVec` literals, so they are
+  automatically pairwise distinct — the round-trip needs no no-overflow
+  hypothesis; only the disjoint case (two independent bases) does.
 -/
 import Hex0.Rv64i
 
@@ -33,17 +37,55 @@ theorem byte_bit (v : Word) (c i : Nat) :
     (((v >>> c).setWidth 8).setWidth 64 <<< c).getLsbD i
       = (decide (i < 64) && decide (c ≤ i) && decide (i < c + 8) && v.getLsbD i) := by
   simp only [BitVec.getLsbD_shiftLeft, BitVec.getLsbD_setWidth, BitVec.getLsbD_ushiftRight]
-  by_cases h : c ≤ i
-  · -- inside/above the window: normalise `c + (i - c)` to `i`, then it is a pure
+  -- decidable case split (bare `by_cases` routes through `Classical`)
+  cases Nat.decLe c i with
+  | isTrue h =>
+    -- inside/above the window: normalise `c + (i - c)` to `i`, then it is a pure
     -- `decide`-arith identity once the (shared) data bit is case-split off.
     rw [Nat.add_sub_cancel' h]
     cases v.getLsbD i <;> simp only [Bool.and_true, Bool.and_false] <;>
       first
         | rfl
+        -- split the `↔` AND its conjunction goals to atoms before `omega`: bare
+        -- `omega` on an iff/conjunction goal pulls in `Classical.choice`.
         | (rw [Bool.eq_iff_iff]; simp only [Bool.and_eq_true, decide_eq_true_eq,
-            Bool.not_eq_true', decide_eq_false_iff_not]; omega)
-  · -- below the window (`i < c`): both guards are false, so both sides are `false`.
-    have hlt : i < c := Nat.not_le.mp h; simp [hlt, h]
+            Bool.not_eq_true', decide_eq_false_iff_not]
+           constructor <;> intro h <;> (repeat' apply And.intro) <;> omega)
+  | isFalse h =>
+    -- below the window (`i < c`): both guards are false, so both sides are `false`.
+    -- The iff's two directions are each vacuous (`i < c` vs `c ≤ i`); `exfalso`
+    -- turns the (opaque data-bit) goal into `False`, closed constructively.
+    have hlt : i < c := Nat.not_le.mp h
+    rw [Bool.eq_iff_iff]
+    simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true', decide_eq_false_iff_not]
+    constructor <;> intro hyp <;> exfalso <;> omega
+
+/-- The eight byte windows `[8k, 8k+8)` (k = 0..7) tile `[0, 64)`: any `i < 64`
+    lands in exactly one. This is the OR that the round-trip reduces to once the
+    (shared) data bit is factored out. Proved by an explicit constructive case
+    walk — `omega` on a *disjunction* goal pulls in `Classical.choice`. -/
+theorem window_tiling (i : Nat) (hi : i < 64) :
+    ((((((i < 64 ∧ i < 8 ∨ (i < 64 ∧ 8 ≤ i) ∧ i < 8 + 8) ∨ (i < 64 ∧ 16 ≤ i) ∧ i < 16 + 8) ∨
+            (i < 64 ∧ 24 ≤ i) ∧ i < 24 + 8) ∨
+          (i < 64 ∧ 32 ≤ i) ∧ i < 32 + 8) ∨
+        (i < 64 ∧ 40 ≤ i) ∧ i < 40 + 8) ∨
+      (i < 64 ∧ 48 ≤ i) ∧ i < 48 + 8) ∨
+    (i < 64 ∧ 56 ≤ i) ∧ i < 56 + 8 := by
+  rcases Nat.lt_or_ge i 8 with h|h
+  · exact Or.inl (Or.inl (Or.inl (Or.inl (Or.inl (Or.inl (Or.inl ⟨hi, h⟩))))))
+  rcases Nat.lt_or_ge i 16 with h2|h2
+  · exact Or.inl (Or.inl (Or.inl (Or.inl (Or.inl (Or.inl (Or.inr ⟨⟨hi, by omega⟩, h2⟩))))))
+  rcases Nat.lt_or_ge i 24 with h3|h3
+  · exact Or.inl (Or.inl (Or.inl (Or.inl (Or.inl (Or.inr ⟨⟨hi, by omega⟩, h3⟩)))))
+  rcases Nat.lt_or_ge i 32 with h4|h4
+  · exact Or.inl (Or.inl (Or.inl (Or.inl (Or.inr ⟨⟨hi, by omega⟩, h4⟩))))
+  rcases Nat.lt_or_ge i 40 with h5|h5
+  · exact Or.inl (Or.inl (Or.inl (Or.inr ⟨⟨hi, by omega⟩, h5⟩)))
+  rcases Nat.lt_or_ge i 48 with h6|h6
+  · exact Or.inl (Or.inl (Or.inr ⟨⟨hi, by omega⟩, h6⟩))
+  rcases Nat.lt_or_ge i 56 with h7|h7
+  · exact Or.inl (Or.inr ⟨⟨hi, by omega⟩, h7⟩)
+  · exact Or.inr ⟨⟨hi, by omega⟩, by omega⟩
 
 /-- **Round-trip**: storing the word `v` at `a` and loading it straight back
     returns `v`. (The eight byte addresses `a … a+7` differ by distinct literals,
@@ -60,8 +102,10 @@ theorem byte_bit (v : Word) (c i : Nat) :
   cases v.getLsbD i <;> simp only [Bool.and_true, Bool.and_false, Bool.or_false] <;>
     first
       | rfl
+      -- the data-bit-true case reduces to the window tiling; `iff_true` collapses
+      -- the `↔ True`, leaving the pure disjunction for `window_tiling` to close.
       | (rw [Bool.eq_iff_iff]; simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq,
-          iff_true]; omega)
+          iff_true]; exact window_tiling i hi)
 
 /-- A `storeWord` at `a` leaves `mem x` untouched for any `x` outside the eight
     stored addresses (stated with the exact literal forms so `simp` fires). -/
@@ -98,3 +142,4 @@ theorem loadWord_storeWord_disjoint (s : State) (a a' v : Word)
     omega)
 
 end Rv64i
+

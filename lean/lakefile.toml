@@ -24,4 +24,4 @@ roots = ["LowIR.CompileTests"]
 # defaultTargets while it does (revisit if it crosses ~1 min — §5).
 [[lean_lib]]
 name = "LowIRProgSim"
-roots = ["LowIR.ProgSim.Defs"]
+roots = ["LowIR.ProgSim.Defs", "LowIR.ProgSim.SlotFacts"]
