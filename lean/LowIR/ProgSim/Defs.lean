@@ -20,6 +20,7 @@
   statements arrive in a follow-up commit.
 -/
 import LowIR.Compile
+import LowIR.ProgSim.ExecFacts
 
 namespace LowIR.ProgSim
 
