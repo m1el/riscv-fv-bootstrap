@@ -13,6 +13,7 @@
   big for kernel `#guard`).
 -/
 import LowIR.Compile
+import LowIR.ProgLib
 
 namespace LowIR.CompileTests
 
@@ -177,5 +178,61 @@ theorem diff_rec0       : diffOk recSum "rec" [0] = true := by native_decide
 -- sanity: the pipeline REFUSES what it must (hog's frame > imm12; missing entry)
 #guard LowIR.Compile.compileProg LowIR.Prog.testEnv "sub3" = none  -- hog in env
 #guard LowIR.Compile.compileProg denv "nosuch" = none
+
+/-! ### Stage 5 — the library (`LowIR/ProgLib.lean`) through the compiler:
+    strlen, strtoull, hex0, hex1 individually (inputs staged at DATA, hex
+    outputs at DATA+64, compared byte-for-byte), and the `main` driver that
+    stages everything in its own frame — 8 observables at once. -/
+
+open LowIR.Prog.Lib (libEnv sbytes asBytes)
+
+theorem diff_lib_strlen : diffOk libEnv "strlen" [DATA]
+    (data := asBytes (sbytes "Hello, differential world!" ++ [0])) = true := by
+  native_decide
+
+theorem diff_lib_strtoull_ok : diffOk libEnv "strtoull" [DATA]
+    (data := asBytes (sbytes "123456789x"))
+    (ilFuel := 100000) = true := by native_decide
+
+-- 2^64 exactly: saturates to ULLONG_MAX with errno ERANGE on BOTH altitudes
+theorem diff_lib_strtoull_ovf : diffOk libEnv "strtoull" [DATA]
+    (data := asBytes (sbytes "18446744073709551616"))
+    (ilFuel := 100000) = true := by native_decide
+
+/-- Args for a hex-decoder call: input at DATA (length computed from the
+    string — no hand-counted lengths), output at DATA+64. -/
+def hexArgs (s : String) (cap : Nat) : List Word :=
+  [DATA, BitVec.ofNat 64 (sbytes s).length, DATA + 64, BitVec.ofNat 64 cap]
+
+theorem diff_lib_hex0 : memDiffOk 80 libEnv "hex0"
+    (hexArgs "48 65 6C 6C 6F" 8) (data := asBytes (sbytes "48 65 6C 6C 6F"))
+    (ilFuel := 100000) = true := by native_decide
+
+theorem diff_lib_hex0_err : diffOk libEnv "hex0"
+    (hexArgs "4_2" 8) (data := asBytes (sbytes "4_2"))
+    (ilFuel := 100000) = true := by native_decide
+
+theorem diff_lib_hex1 : memDiffOk 80 libEnv "hex1"
+    (hexArgs ":A 00 %A" 8) (data := asBytes (sbytes ":A 00 %A"))
+    (ilFuel := 100000) = true := by native_decide
+
+-- backward AND forward refs, comments, a '\n' label — the busy case
+theorem diff_lib_hex1_fwd : memDiffOk 80 libEnv "hex1"
+    (hexArgs "%B 41 :B 42 #x\n:\n 00 %\n" 16)
+    (data := asBytes (sbytes "%B 41 :B 42 #x\n:\n 00 %\n"))
+    (ilFuel := 100000) = true := by native_decide
+
+theorem diff_lib_hex1_undef : memDiffOk 80 libEnv "hex1"
+    (hexArgs "00 %Z" 8) (data := asBytes (sbytes "00 %Z"))
+    (ilFuel := 100000) = true := by native_decide
+
+theorem diff_lib_hex1_dup : diffOk libEnv "hex1"
+    (hexArgs ":A 00 :A" 8) (data := asBytes (sbytes ":A 00 :A"))
+    (ilFuel := 100000) = true := by native_decide
+
+/-- The driver: stages all inputs in its own frame, calls strlen + strtoull +
+    hex0 + hex1, returns 8 observables — IL and compiled-machine agree on all. -/
+theorem diff_lib_main : diffOk libEnv "main" []
+    (ilFuel := 200000) (mcFuel := 1000000) = true := by native_decide
 
 end LowIR.CompileTests
