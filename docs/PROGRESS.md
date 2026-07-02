@@ -17,6 +17,15 @@ saturation), and differential through the compiler onto `Rv64i.step` bytes
 green, sorry-free, in the default build. This is the pre-verification
 baseline the correctness work will target.
 
+**QEMU smoke test (aa76f9d):** the compiled blob also runs on real
+`qemu-system-riscv64 -M virt -bios none` — `lean/DumpProgMain.lean` emits
+`bare/progmain.{bin,inc,expected}`, `bare/shellmain.s` (unverified shell)
+calls `main` inside the blob (it's position-independent) and prints the 8
+observables over the UART: output matches the IL-computed expectation byte
+for byte (`cd bare && make run-progmain`). Three altitudes now agree on the
+full library run: IL semantics ≡ compiled bytes on the Lean Rv64i model ≡
+QEMU.
+
 Reverse-chronological execution log for the libc-formalization effort (design doc:
 [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md); status: [archive/STATUS.md](archive/STATUS.md) §LowIR).
 
