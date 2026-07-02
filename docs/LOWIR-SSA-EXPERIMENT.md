@@ -25,6 +25,13 @@ constructs *produce values* and registers are single-assignment:
 Omitted as orthogonal (would port verbatim from Prog): const data
 (`cref`/`clen`/`Program.data`), the P1 `pad` oracle, `execT` footprints.
 
+Tooling: `lean/LowIR/SSADump.lean` (the `LowIR.Dump` sibling, reusing its
+rendering helpers) pretty-prints SSA functions/envs as WAST-flavoured
+s-expressions — `brk`/`ret` as multi-value `(br k v…)`/`(return v…)`,
+`block`/`if` results as named `(outs $rN…)` binders, `while` with its
+`(init …) (args …)` block-parameter plumbing and `(default …)` body. The
+SSA IR sits noticeably closer to the Wasm text idiom than Prog does.
+
 ## Decisions made where the sketch was ambiguous
 
 1. **`defaultBody` runs on EVERY guard-false, with the current `args` in
