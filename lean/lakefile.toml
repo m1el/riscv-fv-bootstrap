@@ -1,5 +1,5 @@
 name = "hex0"
-defaultTargets = ["Hex0", "Hex1", "LowIRCompile"]
+defaultTargets = ["Hex0", "Hex1", "LowIRCompile", "LowIRProgSim"]
 
 [[lean_lib]]
 name = "Hex0"
@@ -17,3 +17,11 @@ name = "LowIR"
 [[lean_lib]]
 name = "LowIRCompile"
 roots = ["LowIR.CompileTests"]
+
+# The compile_sim-for-Prog proof campaign (docs/RESUME-PROGSIM.md). Rooted at
+# the Defs module for now (the top-level `LowIR.ProgSim.Main` with the payoff
+# theorems arrives later — reroot then). Elaborates fast; stays in
+# defaultTargets while it does (revisit if it crosses ~1 min — §5).
+[[lean_lib]]
+name = "LowIRProgSim"
+roots = ["LowIR.ProgSim.Defs"]
