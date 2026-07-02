@@ -395,6 +395,15 @@ is to make them *specifiable*.
       mode); absolute data addresses chosen at compile time (breaks position independence AND
       the ∀-`dbase` quantification); in-frame staging as the permanent answer (what this
       extension replaces — ~2 instructions per byte of rodata).
+    - **Layout single-sourced + PROVED (2026-07-02, same day):** the segment layout
+      (`pad8`/`dataOffsetsFrom`/`dataSegment`) lives once in `Prog`; the IL harness
+      (`dbaseOf`/`installData`) and the compiler (`dataOffsetsFrom segStart`, blob append)
+      both consume it, and the correspondence is a proved lemma set — `dataSegment_at`
+      (byte `i` of object `n` sits at `offset n + i` in the segment), `installData_at`
+      (the IL read, BitVec-level), `dataOffsetsFrom_shift` (the compiler's shifted table =
+      the harness's table + segStart), plus `_le`/`_fits`. The first sorry-free theorems
+      about the Prog layer; the future data half of `compile_sim` reduces to "the blob
+      contains `dataSegment` at `segStart`".
 
 **Priorities (agreed 2026-07):** Ext. 8 first (cheapest, pays in every proof *and* in pass 2);
 then D7's `FunDef` implementation including the `Vect` arities and `BorrowSig` (the scaling

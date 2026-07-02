@@ -257,18 +257,140 @@ def wfProgram (P : Program) : Bool :=
 /-- Data-free convenience (pre-data name, used by the existing tests). -/
 def wfEnv (env : Env) : Bool := wfProgram env
 
-/-- Sequential 8-aligned placement of the data objects from `base`: the
-    address map and the memory overlaid with the objects' bytes. The base is
-    the harness's choice — programs never depend on it (`dbase` semantics). -/
-def layoutData (base : Word) (mem : Word → Byte) :
-    Data → (Name → Option Word) × (Word → Byte)
-  | [] => (fun _ => none, mem)
-  | (n, bs) :: rest =>
-      let next := base + BitVec.ofNat 64 ((bs.length + 7) / 8 * 8)
-      let (dbase, mem') := layoutData next mem rest
-      (fun d => if d = n then some base else dbase d,
-       fun a => if base ≤ a ∧ a < base + BitVec.ofNat 64 bs.length
-                then (bs[(a - base).toNat]?).getD 0 else mem' a)
+/-! ### Data-segment layout — the SINGLE source of truth.
+
+    Both altitudes consume these: the IL harness places `dataSegment` at a
+    chosen base (`installData`) with addresses from `dataOffsetsFrom 0`
+    (`dbaseOf`); the compiler appends the SAME `dataSegment` to the blob with
+    addresses from `dataOffsetsFrom segStart`. There is no second layout
+    convention to keep in sync — and `dataSegment_at`/`installData_at` below
+    PROVE the offsets↔bytes correspondence once, for both. -/
+
+/-- Round up to 8. -/
+def pad8 (n : Nat) : Nat := (n + 7) / 8 * 8
+
+/-- Byte offset of each object, packed 8-aligned starting at `start`. -/
+def dataOffsetsFrom (start : Nat) : Data → List (Name × Nat)
+  | [] => []
+  | (n, bs) :: rest => (n, start) :: dataOffsetsFrom (start + pad8 bs.length) rest
+
+/-- The flat data segment: each object zero-padded to 8 (offsets are exactly
+    `dataOffsetsFrom 0`). -/
+def dataSegment : Data → List Byte
+  | [] => []
+  | (_, bs) :: rest =>
+      bs ++ List.replicate (pad8 bs.length - bs.length) 0 ++ dataSegment rest
+
+/-- The address map when the segment sits at `base`. -/
+def dbaseOf (base : Word) (data : Data) : Name → Option Word := fun d =>
+  (List.lookup d (dataOffsetsFrom 0 data)).map (fun off => base + BitVec.ofNat 64 off)
+
+/-- Memory with the segment installed at `base` (out of range → `mem`). -/
+def installData (base : Word) (data : Data) (mem : Word → Byte) : Word → Byte :=
+  fun a => (((dataSegment data)[(a - base).toNat]?).getD (mem a))
+
+/-! #### The correspondence lemmas (proved once, used by both altitudes). -/
+
+theorem pad8_ge (n : Nat) : n ≤ pad8 n := by unfold pad8; omega
+
+/-- Offsets are monotone in the start. -/
+theorem dataOffsetsFrom_le {n : Name} :
+    ∀ (start : Nat) (data : Data) {off : Nat},
+      List.lookup n (dataOffsetsFrom start data) = some off → start ≤ off
+  | _, [], _, h => by simp [dataOffsetsFrom] at h
+  | start, (n', bs') :: rest, off, h => by
+      simp only [dataOffsetsFrom, List.lookup] at h
+      split at h
+      · cases h; exact Nat.le_refl _
+      · exact Nat.le_trans (by omega)
+          (dataOffsetsFrom_le (start + pad8 bs'.length) rest h)
+
+/-- Shifting the start shifts every offset — the compiler's table
+    (`dataOffsetsFrom segStart`) IS the harness's (`dataOffsetsFrom 0`)
+    translated by `segStart`; no separate convention. -/
+theorem dataOffsetsFrom_shift (s : Nat) {n : Name} :
+    ∀ (start : Nat) (data : Data),
+      List.lookup n (dataOffsetsFrom (s + start) data)
+        = (List.lookup n (dataOffsetsFrom start data)).map (s + ·)
+  | _, [] => by simp [dataOffsetsFrom]
+  | start, (n', bs') :: rest => by
+      simp only [dataOffsetsFrom, List.lookup]
+      split
+      · rfl
+      · rw [Nat.add_assoc]; exact dataOffsetsFrom_shift s (start + pad8 bs'.length) rest
+
+/-- An object's bytes fit inside the segment at its offset. -/
+theorem dataOffsetsFrom_fits {n : Name} {bs : List Byte} :
+    ∀ (start : Nat) (data : Data) {off : Nat},
+      List.lookup n data = some bs →
+      List.lookup n (dataOffsetsFrom start data) = some off →
+      off - start + bs.length ≤ (dataSegment data).length
+  | _, [], _, hn, _ => by simp [List.lookup] at hn
+  | start, (n', bs') :: rest, off, hn, ho => by
+      simp only [dataOffsetsFrom, List.lookup] at hn ho
+      simp only [dataSegment, List.length_append, List.length_replicate]
+      split at hn
+      · cases hn
+        split at ho
+        · cases ho; have := pad8_ge bs.length; omega
+        · simp_all
+      · split at ho
+        · simp_all
+        · have hle := dataOffsetsFrom_le (start + pad8 bs'.length) rest ho
+          have := dataOffsetsFrom_fits (start + pad8 bs'.length) rest hn ho
+          have := pad8_ge bs'.length
+          omega
+
+/-- THE correspondence: byte `i` of object `n` sits at `offset n + i` in the
+    segment — whoever placed the segment (IL harness or compiler blob). -/
+theorem dataSegment_at {n : Name} {bs : List Byte} :
+    ∀ (start : Nat) (data : Data) {off i : Nat},
+      List.lookup n data = some bs →
+      List.lookup n (dataOffsetsFrom start data) = some off →
+      (h : i < bs.length) →
+      (dataSegment data)[off - start + i]? = some bs[i]
+  | _, [], _, _, hn, _, _ => by simp [List.lookup] at hn
+  | start, (n', bs') :: rest, off, i, hn, ho, hi => by
+      simp only [dataOffsetsFrom, List.lookup] at hn ho
+      simp only [dataSegment]
+      split at hn
+      · cases hn
+        split at ho
+        · cases ho
+          rw [Nat.sub_self, Nat.zero_add,
+              List.getElem?_append_left (by simp; omega),
+              List.getElem?_append_left hi,
+              List.getElem?_eq_getElem hi]
+        · simp_all
+      · split at ho
+        · simp_all
+        · have hle := dataOffsetsFrom_le (start + pad8 bs'.length) rest ho
+          have hrec := dataSegment_at (start + pad8 bs'.length) rest hn ho hi
+          have hp := pad8_ge bs'.length
+          rw [List.append_assoc, List.getElem?_append_right (by omega),
+              List.getElem?_append_right (by simp [List.length_replicate]; omega)]
+          simp only [List.length_replicate]
+          have heq : off - start + i - bs'.length - (pad8 bs'.length - bs'.length)
+              = off - (start + pad8 bs'.length) + i := by omega
+          rw [heq]; exact hrec
+
+/-- The IL-side read: `installData` returns exactly the object's byte at any
+    in-range index (no side conditions beyond the segment fitting in 2⁶⁴ —
+    BitVec cancellation handles the base). -/
+theorem installData_at (base : Word) {data : Data} (mem : Word → Byte)
+    {n : Name} {bs : List Byte} {off i : Nat}
+    (hn : List.lookup n data = some bs)
+    (ho : List.lookup n (dataOffsetsFrom 0 data) = some off)
+    (hi : i < bs.length) (hsz : (dataSegment data).length < 2 ^ 64) :
+    installData base data mem (base + BitVec.ofNat 64 (off + i)) = bs[i] := by
+  have hfits := dataOffsetsFrom_fits 0 data hn ho
+  have hseg := dataSegment_at 0 data hn ho hi
+  unfold installData
+  have hcancel : base + BitVec.ofNat 64 (off + i) - base = BitVec.ofNat 64 (off + i) := by
+    rw [BitVec.add_comm base, BitVec.add_sub_cancel]
+  rw [hcancel, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega)]
+  simp only [Nat.sub_zero] at hseg
+  rw [hseg]; rfl
 
 /-- Top-level entry: install the data objects at `dataBase`, then call `f`
     with argument VALUES on a fresh machine — memory `mem`, stack top `sp0`.
@@ -278,7 +400,8 @@ def run (P : Program) (stackLo : Word) (fuel : Nat) (f : Name) (argVals : List W
   match List.lookup f P.env with
   | none => none
   | some fd =>
-    let (dbase, mem') := layoutData dataBase mem P.data
+    let dbase := dbaseOf dataBase P.data
+    let mem'  := installData dataBase P.data mem
     match frameEnter stackLo fd argVals mem' sp0 with
     | none => none
     | some st0 =>

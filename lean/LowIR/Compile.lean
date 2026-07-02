@@ -34,7 +34,7 @@ import LowIR.Prog
 namespace LowIR.Compile
 
 open LowIR (Cond condInstr jal0)
-open LowIR.Prog (Reg Name FunDef Env Data Program wfProgram)
+open LowIR.Prog (Reg Name FunDef Env Data Program wfProgram pad8 dataOffsetsFrom dataSegment)
 open Rv64i (Word Byte Instr)
 
 /-- The IL being compiled (the parent `LowIR.Stmt` also exists — be explicit). -/
@@ -313,7 +313,9 @@ def compileProgT (P : Program) (entry : Name) :
       (P.env.mapM (fun nf => do pure (nf.1, ← compileFun P.data nf.2)) : M _).run' 0
     let (flat, lbls, fns, codeEnd) :=
       layout (("", [.callf entry, .ins (jal0 0)]) :: segs) 0
-    let dats := dataOffsets (pad8 codeEnd) P.data
+    -- SAME layout function as the IL harness (`Prog.dbaseOf`/`installData`
+    -- use `dataOffsetsFrom 0`); correspondence proved in `Prog.dataSegment_at`.
+    let dats := dataOffsetsFrom (pad8 codeEnd) P.data
     ((flat.mapM (resolveOne lbls fns dats)).map List.flatten).map
       (fun is => (is, fns.filter (fun f => f.1 != ""), dats))
 
@@ -326,6 +328,6 @@ def compileProg (P : Program) (entry : Name) : Option (List Instr) :=
 def progBytes (P : Program) (entry : Name) : Option (List Byte) :=
   (compileProg P entry).map fun is =>
     let code := LowIR.asmBytes is
-    code ++ List.replicate (pad8 code.length - code.length) 0 ++ dataBytes P.data
+    code ++ List.replicate (pad8 code.length - code.length) 0 ++ dataSegment P.data
 
 end LowIR.Compile

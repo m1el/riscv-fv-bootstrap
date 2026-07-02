@@ -14,6 +14,13 @@ three altitudes again (IL `cmain_il_ok`, differential `diff_lib_cmain` +
 too (`<hex1src>` shows its ASCII in place). Design record: LOWIR-DESIGN.md
 Ext. 12.
 
+**Layout convention discharged (same day):** the data-segment layout is now
+ONE definition (`Prog.dataOffsetsFrom`/`dataSegment`) consumed by both the
+IL harness and the compiler, with the correspondence PROVED
+(`dataSegment_at`, `installData_at`, `dataOffsetsFrom_shift` — the first
+sorry-free theorems about the Prog layer; blob byte-identical before/after
+the refactor).
+
 ## 2026-07-02 (later) — the library on Prog: strlen/strtoull/hex0/hex1 + driver
 
 `lean/LowIR/ProgLib.lean` (commit 8ba9a8f): the four programs as real D7/D8
