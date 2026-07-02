@@ -1,10 +1,30 @@
 # RESUME — proving `compile_sim` for Prog (D7/D8 compiler correctness)
 
-Plan written 2026-07-02, immediately after the executable cut landed. Nothing
-here is started; this is the handoff for the verification campaign. Read with
+Plan written 2026-07-02, immediately after the executable cut landed. Read with
 [LOWIR-DESIGN.md](LOWIR-DESIGN.md) (D7/D8, Ext. 12, §4 pass decomposition),
 [PROGRESS.md](PROGRESS.md) (what exists), [archive/RESUME-LOWIR.md](archive/RESUME-LOWIR.md)
 (the hex0-era proof toolbox and gotchas — much of it ports).
+
+**Status (updated 2026-07-02).** Phase 0 is essentially done and the relation
+skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
+- **Phase 0.1 (P1 oracle) — DONE.** `pad : Name → Nat` in `frameEnter`/`exec`/
+  `run` (default `fun _ => 0`, everything re-greens); `CompileTests.lean` has
+  the `pad = userOff` frame-memory differential tests validating P1. Committed.
+- **Phase 0.2 (unfolders) — DONE.** `ProgSim/ExecFacts.lean`: 42 one-layer
+  `exec_*` lemmas in `namespace LowIR.Prog`. Committed.
+- **Phase 0.3 (execT + erasure) — DONE.** `execT`/`execT_map_exec`/`execT_erase`
+  in `ProgSim/Defs.lean`, axioms `[propext, Quot.sound]`. Committed.
+- **Defs (§3 statements) — DRAFTED.** `Layout`/`Installed`/`StInv`/`SimPre`/
+  `userPad` real, `#guard`'d; `prog_sim` is the standing `sorry` (Phase 4/5/6
+  target). `lean_lib LowIRProgSim` (root `LowIR.ProgSim.Defs`) in
+  `defaultTargets`, builds in ~2.6 s.
+- **Phase 3 (start) — WordMem DONE.** `ProgSim/WordMem.lean`: the 64-bit LE
+  load/store algebra (`byte_bit`, `loadWord_storeWord_same` round-trip,
+  `storeWord_mem_of_ne`/`_outside`, `loadWord_storeWord_disjoint`), sub-second.
+  Committed `f513c27`.
+- **NEXT:** rest of Phase 3 (StInv slot algebra: `rget/rset` ↔ slot-store, slot
+  disjointness, `Installed`/off-MachPriv preservation on the *`StInv` level*,
+  building on WordMem's primitives) → then the **vertical slice** (§8.3).
 
 ## 0. Mission and payoff
 
@@ -319,14 +339,21 @@ no Coq port planned for this layer).
 ## 5. File & build plan
 
 ```
-lean/LowIR/ProgSim/Defs.lean       Layout/Installed/Regions/StInv/SimPre, execT
+lean/LowIR/ProgSim/ExecFacts.lean    Phase 0.2  (42 exec_* unfolders)        [DONE]
+lean/LowIR/ProgSim/Defs.lean         Layout/Installed/StInv/SimPre, execT     [DRAFTED]
+                                       + execT_erase (0.3); prog_sim sorry'd
+lean/LowIR/ProgSim/WordMem.lean      Phase 3 start (LE load/store algebra)    [DONE]
+lean/LowIR/ProgSim/SlotFacts.lean    Phase 3 finish (StInv slot algebra)      ← NEXT
 lean/LowIR/ProgSim/EncodeFacts.lean  Phase 1
 lean/LowIR/ProgSim/AsmFacts.lean     Phase 2
-lean/LowIR/ProgSim/SlotFacts.lean    Phase 3
 lean/LowIR/ProgSim/StmtSim.lean      Phase 4 (the induction)
 lean/LowIR/ProgSim/CallSim.lean      Phase 5
 lean/LowIR/ProgSim/Main.lean         Phase 6 (prog_sim + corollaries)
 ```
+
+The lib root is currently `LowIR.ProgSim.Defs` (not `Main.lean` yet, which
+doesn't exist); it transitively pulls ExecFacts + WordMem. Repoint the root to
+`Main.lean` when Phase 6 lands.
 
 ⚠ Build-root trap: add a `lean_lib LowIRProgSim` with
 `roots = ["LowIR.ProgSim.Main"]` to `lakefile.toml` **in the same commit
@@ -369,12 +396,20 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
 
 ## 8. Immediate next actions (cold-start order)
 
-1. Phase 0.1: implement the P1 pad oracle in Prog (compiler untouched);
-   re-green with `pad 0`; add the `pad = userOff` frame-memory differential
-   tests; commit.
-2. Write `ProgSim/Defs.lean` complete with all §3 statements (`sorry`'d
-   theorems, real defs) + lib target; `#guard` the defs on harness states;
-   commit.
-3. Vertical slice (Phase 4.1 through `prog_sim` for straight-line): the
-   go/no-go checkpoint for the whole relation design.
-4. Then Phases 1/2/3 in parallel-friendly chunks, 4, 5, 6 in order.
+- [x] Phase 0.1: P1 pad oracle in Prog (compiler untouched); re-green with
+  `pad 0`; `pad = userOff` frame-memory differential tests. Committed.
+- [x] Phase 0.2: 42 one-layer `exec_*` unfolders (`ProgSim/ExecFacts.lean`).
+- [x] Phase 0.3: `execT` + `execT_erase` (`ProgSim/Defs.lean`).
+- [x] `ProgSim/Defs.lean` §3 statements: real defs `#guard`'d, `prog_sim`
+  `sorry`'d, `LowIRProgSim` lib target in `defaultTargets`.
+- [x] Phase 3 (start): `ProgSim/WordMem.lean` — LE load/store algebra. `f513c27`.
+- [ ] **Phase 3 (finish): StInv slot algebra** — `rget/rset` ↔ slot-store,
+  8-byte slot disjointness lifted to `StInv`, `Installed`/off-MachPriv
+  preservation under a slot store. Built on WordMem; `SlotFacts.lean` (or fold
+  into WordMem if small). This is the immediate task.
+- [ ] **Vertical slice** (Phase 4.1 → toy `prog_sim` for straight-line
+  sub3-class): the go/no-go checkpoint for the whole relation design. Prove
+  only skip/annot/ops cases of `lower_sim`, leave the rest `sorry`, check the
+  end-to-end corollary against the differential oracle.
+- [ ] Then Phases 1/2 (encode/decode, assembler) in parallel-friendly chunks,
+  the rest of 4, 5, 6 in order.
