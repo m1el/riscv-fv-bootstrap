@@ -3,7 +3,7 @@
 Status: design record. Captures *why* the lower IR looks the way it does, what was rejected,
 and where it's expected to grow. Companions: [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md) (altitude
 survey), [MEMORY-BORROWS.md](MEMORY-BORROWS.md) (separation discipline),
-[RESUME-LOWIR.md](RESUME-LOWIR.md) (proof status), [TCB.md](TCB.md) (trust base).
+[RESUME-LOWIR.md](archive/RESUME-LOWIR.md) (proof status), [TCB.md](TCB.md) (trust base).
 
 ## Purpose
 

@@ -2,6 +2,8 @@
 
 Documentation for the verified bootstrap tower (`/var/data/bootstrap`).
 New docs go in this directory; add a line for each new doc below.
+Outdated/inactive docs (completed handoffs, superseded plans, frozen status
+snapshots) move to [archive/](archive/README.md) — see the archive index there.
 
 ## Specs
 
@@ -11,8 +13,6 @@ New docs go in this directory; add a line for each new doc below.
 ## Proof methodology & plans
 
 - [PROOF.md](PROOF.md) — how the hex0 verification is structured (refinement methodology; served as the Coq-port blueprint).
-- [REFINE1.md](REFINE1.md) — plan and progress for `core1_refines` (hex1 general refinement), including the Coq-port gotcha log (lia/OOM, `clia`, Equations traps).
-- [CROSSCHECK.md](CROSSCHECK.md) — task #7: cross-checking the ISA model against `riscv-coq` (decode + step agreement, transport corollary).
 - [TCB.md](TCB.md) — the Trusted Computing Base: what you must trust for the bare-metal bytes to implement the spec.
 - [PROGRESS.md](PROGRESS.md) — LowIR & libc-formalize execution log (reverse-chronological).
 - [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md) — exploration + plan for formalizing & verifying libc: survey of the `third-party/` substrate (CompCert, Frama-C, CakeML/Pancake, Tree Borrows, POSIX spec, fv-libc partition), the design space, and the recommended path.
@@ -22,23 +22,23 @@ New docs go in this directory; add a line for each new doc below.
 
 ## Status & handoffs
 
-- [STATUS.md](STATUS.md) — hex0 campaign status (bare-metal run + formal proof).
-- [RESUME.md](RESUME.md) — handoff for task #7 (ISA cross-check vs `riscv-coq`).
-- [RESUME-HEX1.md](RESUME-HEX1.md) — hex1 campaign handoff and wrap-up (campaign complete: `core1_refines` proved in both systems).
-- [RESUME-LOWIR.md](RESUME-LOWIR.md) — **handoff for the LowIR structured-IL effort + the (now complete) hex0 functional proof** (toolbox, gotchas).
-- [RESUME-IR-DESIGN-SESSION.md](RESUME-IR-DESIGN-SESSION.md) — resume for the session that finished `hex0_correct`, added the `call` construct + cross-call-disjointness demo, and worked the IR design arc (memory model, borrows vs provenance/FilC/CHERI, calling conventions, `compile_sim` passes); has the open **frame-based call specs** next-step.
-- [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) — **handoff for the executable LowIR compiler cut** (post-D7/D8 design session): survey findings (Rv64i model already has all 16 needed encodings; build-root trap), and the detailed plan — Prog.lean IR core, memory-locals compilation strategy, differential-testing regime, commit milestones.
-- [PREV_CTX.md](PREV_CTX.md) — original project handoff context (goals of the bottom-up verified tower).
+- [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) — **the ACTIVE handoff: the executable LowIR compiler cut** (post-D7/D8 design session): survey findings (Rv64i model already has all 16 needed encodings; build-root trap), and the detailed plan — Prog.lean IR core, memory-locals compilation strategy, differential-testing regime, commit milestones.
+
+(Handoffs for completed campaigns — hex0/hex1 status, task-#7 cross-check, the
+LowIR structured-IL effort, the IR design session, and the original project
+context — are in [archive/](archive/README.md).)
 
 ## Experiments
 
-- [REPRO-FINDINGS.md](REPRO-FINDINGS.md) — the full reproduction study: can open models reproduce verified hex0? Five phases (deepseek A/B/C clean-room → minimax-m3 → deepseek+`PREV_CTX` head-start → Kimi 2.7 → gpt-5.5-plans-kimi-executes) that progressively isolate the wall. Result: every model reproduces the engineering and (with the head-start) can *plan* the proof, but **none executes** the loop-simulation lemma — the wall is **raw proof-engineering execution under kernel-elaboration**, not comprehension.
-- [REPRO-SUPERVISOR.md](REPRO-SUPERVISOR.md) — supervisor handbook for the clean-room hex0 reproduction (codex + ds4-pro in docker): session loop, steering-integrity levels, acceptance gate, stop conditions.
+- [REPRO-FINDINGS.md](REPRO-FINDINGS.md) — the full reproduction study: can open models reproduce verified hex0? Five phases (deepseek A/B/C clean-room → minimax-m3 → deepseek+`PREV_CTX` head-start → Kimi 2.7 → gpt-5.5-plans-kimi-executes) that progressively isolate the wall. Result: every model reproduces the engineering and (with the head-start) can *plan* the proof, but **none executes** the loop-simulation lemma — the wall is **raw proof-engineering execution under kernel-elaboration**, not comprehension. (Method/steering handbook: [archive/REPRO-SUPERVISOR.md](archive/REPRO-SUPERVISOR.md).)
 
 ## Analyses
 
 - [LEAN-VS-COQ.md](LEAN-VS-COQ.md) — implementation-difficulty comparison of the Lean vs Coq proofs, measured from the recorded [agent sessions](../sessions/README.md).
-- [PITCH-REVIEW.md](PITCH-REVIEW.md) — proofread and review of the root `pitch.md` (spelling/grammar fixes, argument clarity, structural suggestions).
+
+## Archive
+
+- [archive/README.md](archive/README.md) — index of outdated/inactive docs: the original project context (`PREV_CTX.md`), handoffs and plans for the completed hex0/hex1/cross-check campaigns, frozen status snapshots, the concluded reproduction experiment's supervisor handbook, and one-shot reviews.
 
 ## Third-party design reviews
 

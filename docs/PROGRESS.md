@@ -1,7 +1,7 @@
 # PROGRESS — LowIR & libc-formalize
 
 Reverse-chronological execution log for the libc-formalization effort (design doc:
-[LIBC-FORMALIZE.md](LIBC-FORMALIZE.md); status: [STATUS.md](STATUS.md) §LowIR).
+[LIBC-FORMALIZE.md](LIBC-FORMALIZE.md); status: [archive/STATUS.md](archive/STATUS.md) §LowIR).
 
 ## In progress (current turn)
 

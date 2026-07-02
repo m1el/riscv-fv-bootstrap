@@ -129,7 +129,7 @@ survey argues against "dead end":
   subset is the road.
 
 `strtoull` (already the named next step in
-[RESUME-LOWIR](RESUME-LOWIR.md)) is the right probe: it exercises borrows,
+[RESUME-LOWIR](archive/RESUME-LOWIR.md)) is the right probe: it exercises borrows,
 errno-as-ghost-state, and saturation/overflow contracts without touching
 any blocker.
 

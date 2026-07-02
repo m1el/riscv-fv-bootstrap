@@ -5,8 +5,8 @@ Handoff for the session that (1) finished the hex0 functional-correctness proof,
 through a long design discussion on the memory model, borrows vs provenance, calling
 conventions, the stack, and the `compile_sim` pass decomposition.
 
-Companions: [LOWIR-DESIGN.md](LOWIR-DESIGN.md) (decisions/alternatives/extensions + §4 compiler
-passes), [MEMORY-BORROWS.md](MEMORY-BORROWS.md) (separation discipline), [RESUME-LOWIR.md](RESUME-LOWIR.md)
+Companions: [LOWIR-DESIGN.md](../LOWIR-DESIGN.md) (decisions/alternatives/extensions + §4 compiler
+passes), [MEMORY-BORROWS.md](../MEMORY-BORROWS.md) (separation discipline), [RESUME-LOWIR.md](RESUME-LOWIR.md)
 (proof toolbox/gotchas). Build (from `lean/`): `lake build LowIR.CtrlHex0Proof LowIR.CtrlCall`.
 Everything below is **sorry-free** (only sanctioned `sorry`: `compile_sim` in `LowIR.lean:370`).
 

@@ -106,8 +106,8 @@ TCB.md ...... the trusted base
 # Status — LowIR control-flow IL (libc-formalize frontier)
 
 The active frontier: a structured near-assembly IL (`lean/LowIR/`) for proving libc
-functions and compiling them to RV64I. Design + survey in [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md);
-execution log in [PROGRESS.md](PROGRESS.md).
+functions and compiling them to RV64I. Design + survey in [LIBC-FORMALIZE.md](../LIBC-FORMALIZE.md);
+execution log in [PROGRESS.md](../PROGRESS.md).
 
 | Item | Artifact | Strength |
 |---|---|---|

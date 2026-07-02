@@ -3,7 +3,7 @@
 The question: can a non-Claude coding agent reproduce, from a requirements-only
 spec, the verified-hex0 artifact — a bare-metal RV64 decoder on `qemu virt`
 **plus a sorry-free, axiom-clean, universally-quantified Lean 4 proof that the
-running bytes implement the spec**? Method and steering policy: `REPRO-SUPERVISOR.md`.
+running bytes implement the spec**? Method and steering policy: [archive/REPRO-SUPERVISOR.md](archive/REPRO-SUPERVISOR.md).
 
 Run across 2026-06-06 → 06-15 at `/var/data/hex0-repro/` (per-arm `work-*/`,
 ledgers `runs/*ledger.csv`, archives `archive/<arm>/` with git bundles + session

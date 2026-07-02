@@ -2,8 +2,8 @@
 
 Handoff for the **LowIR structured-IL** effort (prove libc functions, compile to RV64I).
 The **hex0 functional-correctness proof is COMPLETE and sorry-free** (`hex0_correct`). Read with
-[LIBC-FORMALIZE.md](LIBC-FORMALIZE.md) (design/altitude survey), [PROGRESS.md](PROGRESS.md)
-(log), [STATUS.md](STATUS.md) §LowIR (table), [MEMORY-BORROWS.md](MEMORY-BORROWS.md) (separation).
+[LIBC-FORMALIZE.md](../LIBC-FORMALIZE.md) (design/altitude survey), [PROGRESS.md](../PROGRESS.md)
+(log), [STATUS.md](STATUS.md) §LowIR (table), [MEMORY-BORROWS.md](../MEMORY-BORROWS.md) (separation).
 
 ## 0. hex0 — DONE
 
