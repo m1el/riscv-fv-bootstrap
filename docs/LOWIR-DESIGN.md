@@ -259,6 +259,26 @@ One-line summary: **the IL owns functional meaning over flat state; everything a
 (N1, N2, N11), everything about *discipline* (N3, N4, N5), and everything about the *world*
 (N6, N8) is someone else's job, on purpose.**
 
+## 2c. Low-level boundary catalog — where machine magic is still needed
+
+Cases the D7/D8 fiction cannot express, each handled by one of three mechanisms — none of which
+is an IL statement: **(a)** a hand-verified machine-level stub below `compile_sim` with an
+IL-visible spec (the seL4 `MachineOps` pattern); **(b)** an external-call node with
+pre/post + frame + event spec (the CompCert `external_call` / CakeML FFI / bedrock2
+`mGive`/`mReceive` pattern, §4); **(c)** a design dodge that converts the hard case into an easy
+one (seL4's signature move). The IL's job is to make these *inexpressible*; the boundary's job
+is to make them *specifiable*.
+
+| # | Case | Mechanism | Precedent | Status / trigger |
+|---|---|---|---|---|
+| B1 | **Program entry** (`_start`): convention established out of nothing — no caller, junk registers, no `sp` yet | (a) one verified prologue stub: from loader guarantees, establish `machine_ok` + D8's stack hypothesis, enter `main` under the `cc_spec` contract | bedrock2 `ToplevelLoop` preamble; CakeML startup/heap init | needed with `compile_sim` passes 4–5 |
+| B2 | **Syscalls** (`ecall`) | (b) external-call node; the *world-fixed* register convention (`a7` number, args `a0..a5`, result `a0`) is marshalled in the lowering, proved once per external. "Kernel touches only the passed buffers" is a **named TCB axiom**. Nondeterministic results (`read`) need the oracle (C2 retrofit) | CompCert `external_call`; CakeML FFI oracle; bedrock2 `mGive`/`mReceive` | needed with the first I/O-bearing libc function |
+| B3 | **Interrupt handlers**: async entry at arbitrary machine state, no caller-saved contract, CSRs, `mret` | (c) **dodge**: interrupts disabled during verified execution — a config-level TCB assumption (seL4-style). If ever needed: (a) a save-everything trampoline whose *body* is an ordinary IL function. Handler/main **interleaving is concurrency** — out of scope with N6 | seL4 preemption points + verified-config matrix | keep interrupts off; revisit never, ideally |
+| B4 | **Context capture** — `setjmp`/`longjmp`, coroutines, OS context switch: reifies exactly what D7/D8 made fictional (activation-local registers, LIFO frames) | refuse at the IL. Legal-`longjmp` error unwinding and generators get **structured, correct-by-construction replacements** — Ext. 11. A scheduler's context switch, if ever, is an (a) stub with a save-exactly-these-registers spec | rustc coroutine transform; seL4 TCB switch | Ext. 11, later; variadics/stack-walking stay non-goals |
+| B5 | **MMIO / volatile device access**: two reads of a device register disagree — plain `lbu` on it violates `mem`-purity | (b) event-bearing external ops, *never* raw loads/stores. Sharpest near-term item if bare-metal I/O appears; blocked on the C2 oracle/trace retrofit | Pancake ShMem-as-FFI; bedrock2 MMIO → exactly one instruction | before any device code exists |
+| B6 | **Executing emitted code** — the bootstrap's own case: hex0 writes bytes that later run | (c) **separate-runs assumption**: emitted code executes in a fresh machine run; theorem composition is meta-level. Same-run execution would need the CakeML-`Install` problem set (`fence.i`, W^X, code memory in `match_states`) | CakeML `Install` (the hard version we avoid) | name the separate-runs assumption in [TCB.md](TCB.md) now |
+| B7 | **Privileged/CSR/cache ops** (`csrr/csrw`, `fence`, `sfence.vma`) | (a) an axiomatized machine-ops module: each op a verified stub or a named assumption | seL4 `MachineOps` / `machine_op_lift` | only if machine mode / paging ever |
+
 ---
 
 ## 3. Likely extensions (roughly in order of when they'll be forced)
@@ -337,10 +357,36 @@ One-line summary: **the IL owns functional meaning over flat state; everything a
     temp-freshness subtleties thanks to infinite registers. Comfort until the HIR exists;
     schedule together with Ext. 5.
 
+11. **Structured replacements for `setjmp`/`longjmp` (B4) — not now, maybe later.** Two halves,
+    for the two features hiding inside `setjmp`/`longjmp`:
+    - *Unwind outcomes* (the error-handling 90%): defined-behavior `longjmp` only jumps *up* to a
+      live activation — "return through k frames at once". Add an `Outcome.throw` that (unlike
+      `brk`/`cont`, which `wf` bans from crossing calls) **propagates through `call` boundaries**
+      until absorbed by a `catch` construct. The D8 payoff: `sp` restoration is structural in the
+      call semantics, so a throw crossing k frames restores `sp` k times **by construction** —
+      resuming a dead frame or corrupting the stack is unrepresentable. Cost: one outcome
+      constructor + one catch construct + propagation cases, same shape as the existing `ret`
+      plumbing.
+    - *Stackless coroutines* (`co_suspend`/`co_resume` — generators, cooperative scheduling):
+      **zero new IL semantics.** IL-level suspension would force `exec` to return a reified
+      continuation (statement context + register file + frame chain) — precisely the machinery
+      D7/D8 keep fictional. Instead, the rustc coroutine transform at a higher IR: liveness
+      across suspension points determines a **state struct**; suspended-live locals move into a
+      caller-provided unique `Slice` in `mem` (*off* the stack — the LIFO discipline never sees
+      them); `co_resume` lowers to an ordinary D7 call `resume(statePtr, input) → output ⊕ Done`;
+      soundness is one checker rule — **no borrows of coroutine-locals across a suspension
+      point** (rustc's movable-coroutine rule) — emitted by the future borrow checker like any
+      other hypothesis. Verified once as a higher-IR lowering (engine × instances).
+    - *Rejected*: stackful fibers (per-coroutine stacks + machine-level context switch) — breaks
+      the single-`sp` model, needs per-stack discipline lemmas and a B7-style switch stub; no
+      libc-relevant benefit.
+
 **Priorities (agreed 2026-07):** Ext. 8 first (cheapest, pays in every proof *and* in pass 2);
 then D7's `FunDef` implementation including the `Vect` arities and `BorrowSig` (the scaling
 decision — design the env once); then Ext. 1 (`ld`/`sd`, compiler-forced). Ext. 9 is the
 "cheap now, expensive later" sleeper — do it alongside Ext. 8. Ext. 10 waits for the HIR.
+Ext. 11 is explicitly *later* — the unwind-outcome half is cheap and may come early if error-path
+ergonomics demand it; the coroutine half waits for the HIR + borrow checker.
 
 ---
 
