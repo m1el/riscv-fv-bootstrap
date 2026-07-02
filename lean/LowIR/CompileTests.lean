@@ -68,6 +68,43 @@ def memDiffOk (n : Nat) (P : Program) (entry : Name) (args : List Word)
         s.mem (DATA + BitVec.ofNat 64 k) == m.mem (DATA + BitVec.ofNat 64 k)
   | _, _ => false
 
+/-! ### The P1 frame-padding oracle, executably (RESUME-PROGSIM §2, Phase 0.1)
+
+    The compiler places each user frame `[ra][slots]` bytes ABOVE the machine
+    `sp`, so with the IL's `pad` set to `Compile.userOff` per function the IL
+    `sp` coincides with the machine `x2` at EVERY call depth and every user
+    frame lands at the SAME address on both sides. Below we check that
+    byte-for-byte: at `pad = userOff` every stack byte the IL wrote agrees with
+    the machine; at `pad = 0` (today's default) it diverges as soon as a callee
+    (depth ≥ 1) writes its frame. The `pad = 0` divergence being observable is
+    the point — it is exactly the address gap P1 closes. -/
+
+/-- Per-function padding oracle: `userOff` of the looked-up function (`0` for
+    an unknown name — never hit for a wf call). `compile_sim` instantiates
+    `pad := userPad P.env`. -/
+def userPad (env : Env) : Name → Nat := fun f =>
+  (List.lookup f env).elim 0 userOff
+
+/-- IL final state with an explicit padding oracle (else identical to `ilFinal`). -/
+def ilFinalPad (P : Program) (entry : Name) (args : List Word) (data : List Byte)
+    (fuel : Nat) (pad : Name → Nat) : Option LowIR.Prog.St :=
+  LowIR.Prog.run P 0 fuel entry args (LowIR.memOf DATA data) SPTOP pad
+
+/-- Every stack byte the IL wrote (nonzero, so distinguishable from the zero
+    background) within `bound` bytes below `SPTOP` matches the machine. The IL
+    never writes machine-private bytes (saved ra, spill slots), so restricting
+    to IL-nonzero addresses probes exactly the shared user-frame region — no
+    per-frame address bookkeeping needed. -/
+def framesAgree (bound : Nat) (P : Program) (entry : Name) (args : List Word)
+    (pad : Name → Nat) (data : List Byte := []) (ilFuel : Nat := 1000)
+    (mcFuel : Nat := 200000) : Bool :=
+  match ilFinalPad P entry args data ilFuel pad, mcFinal P entry args data mcFuel with
+  | some s, some m =>
+      (List.range bound).all fun k =>
+        let a := SPTOP - BitVec.ofNat 64 (k + 1)
+        s.mem a == 0 || s.mem a == m.mem a
+  | _, _ => false
+
 /-! ### Test programs (beyond the fixtures exposed by `Prog`) -/
 
 open LowIR.Prog (sub3 sumTo frameLocal caller early chainEnv recSum)
@@ -174,6 +211,24 @@ theorem diff_chain3     : diffOk chainEnv "f3" [40] = true := by native_decide
 theorem diff_rec10      : diffOk recSum "rec" [10] (mcFuel := 200000) = true := by
   native_decide
 theorem diff_rec0       : diffOk recSum "rec" [0] = true := by native_decide
+
+/-! ### Stage 4c — the P1 frame-padding oracle validated byte-for-byte.
+    `pad = userPad` makes IL frame memory coincide with the machine at every
+    call depth; `pad = 0` diverges once a callee writes its frame. The pair of
+    theorems (agree at `userPad`, DISAGREE at `0`) is the executable evidence
+    that P1 is both correct and non-vacuous — the address gap it closes is real. -/
+
+-- 3-deep chain, each activation parks its argument in its own user frame.
+theorem p1_chain_userPad :
+    framesAgree 512 chainEnv "f3" [40] (userPad chainEnv) = true := by native_decide
+theorem p1_chain_pad0_diverges :
+    framesAgree 512 chainEnv "f3" [40] (fun _ => 0) = false := by native_decide
+
+-- recursion: one function, five activations, each parks `n` in its frame.
+theorem p1_rec_userPad :
+    framesAgree 512 recSum "rec" [5] (userPad recSum) = true := by native_decide
+theorem p1_rec_pad0_diverges :
+    framesAgree 512 recSum "rec" [5] (fun _ => 0) = false := by native_decide
 
 -- sanity: the pipeline REFUSES what it must (hog's frame > imm12; missing entry)
 #guard LowIR.Compile.compileProg LowIR.Prog.testEnv "sub3" = none  -- hog in env

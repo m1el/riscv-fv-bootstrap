@@ -1,5 +1,26 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-02 (compile_sim campaign) — Phase 0.1: the P1 frame-padding oracle
+
+First step of the `compile_sim`-for-Prog campaign (docs/RESUME-PROGSIM.md).
+Implemented decision **P1** (§2): `Prog.frameEnter`/`exec`/`run` gain a
+`pad : Name → Nat` semantics oracle (∀-quantifiable like `dbase`/`sp₀`). The
+IL-observable frame base (`frameReg`) stays at `spCaller − frameSize`
+UNCHANGED; the propagated `sp` drops an extra `pad` bytes — the hole the IL
+skips so that, at `pad := userOff`, IL `sp` coincides with the machine `x2` at
+every call depth. The IL overflow check absorbs the hole (stack budget
+subsumed). **Compiler/shim/QEMU untouched (FROZEN)**; `pad = fun _ => 0`
+reproduces the old semantics exactly — the entire differential suite +
+`Prog.lean` #guards re-green unchanged.
+
+New executable validation in `CompileTests.lean` (Stage 4c): `framesAgree`
+checks that every stack byte the IL wrote agrees with the machine
+byte-for-byte. `p1_chain_userPad`/`p1_rec_userPad` pass at `pad = userPad`;
+`p1_chain_pad0_diverges`/`p1_rec_pad0_diverges` show the OLD `pad = 0` IL
+diverges from the machine as soon as a callee (depth ≥ 1) writes its frame —
+the address gap P1 closes is thus real, not vacuous. Next: `ProgSim/Defs.lean`
+(the §3 relation + sorry'd theorems), then the straight-line vertical slice.
+
 ## 2026-07-02 (later still) — Ext. 12: const data segment + cref/clen
 
 Commits ff8867c + (this): `Program := { env, data }`; `cref`/`clen` give

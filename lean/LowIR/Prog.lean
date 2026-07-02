@@ -129,16 +129,27 @@ def St.storeWord (s : St) (a : Word) (v : Word) : St :=
 /-- Build the callee's entry state (D7/D8): check stack overflow against
     `stackLo`, fresh zero registers with params bound to the argument VALUES,
     frame base in `frameReg` (binds after params — `wf` keeps them disjoint),
-    callee `sp` dropped by `frameSize`, caller's memory.  `none` = overflow. -/
-def frameEnter (stackLo : Word) (fd : FunDef) (argVals : List Word)
+    callee `sp` dropped by `frameSize` PLUS the padding oracle `pad`, caller's
+    memory.  `none` = overflow.
+
+    **P1 — the frame-padding oracle** (RESUME-PROGSIM §2): `frameReg` (the only
+    IL-observable frame base) sits at `spCaller − frameSize`, its position
+    UNCHANGED by `pad`; the propagated `sp` drops an extra `pad` bytes — the
+    hole the IL skips over so that, instantiating `pad f := userOff f` at
+    `compile_sim`, IL `sp` coincides with the machine `x2` at every call depth
+    (the `[ra][slots]` overhead the compiler adds below each user frame). The
+    overflow check accounts for the hole too, subsuming the stack budget.
+    `pad = fun _ => 0` reproduces the pre-P1 semantics exactly. -/
+def frameEnter (stackLo : Word) (fd : FunDef) (pad : Nat) (argVals : List Word)
     (mem : Word → Byte) (spCaller : Word) : Option St :=
-  if spCaller.toNat < stackLo.toNat + fd.frameSize then none
+  if spCaller.toNat < stackLo.toNat + fd.frameSize + pad then none
   else
-    let newSp := spCaller - BitVec.ofNat 64 fd.frameSize
+    let frameBase := spCaller - BitVec.ofNat 64 fd.frameSize
+    let newSp := frameBase - BitVec.ofNat 64 pad
     let withParams : Reg → Word :=
       (fd.params.toList.zip argVals).foldl
         (fun rf pv => fun r => if r = pv.1 then pv.2 else rf r) (fun _ => 0)
-    some { regs := fun r => if r = fd.frameReg then newSp else withParams r
+    some { regs := fun r => if r = fd.frameReg then frameBase else withParams r
            mem  := mem
            sp   := newSp }
 
@@ -150,7 +161,8 @@ def frameEnter (stackLo : Word) (fd : FunDef) (argVals : List Word)
     (an escaping brk/cont is `none` — `wf` bans it), then return to the CALLER's
     registers and `sp` (structural restore), with only `rets` copied back and
     the callee's memory kept. -/
-def exec (P : Program) (dbase : Name → Option Word) (stackLo : Word) :
+def exec (P : Program) (dbase : Name → Option Word) (pad : Name → Nat)
+    (stackLo : Word) :
     Nat → Stmt → St → Option (St × Outcome)
   | 0,      _,    _ => none
   | fuel+1, stmt, s =>
@@ -181,13 +193,13 @@ def exec (P : Program) (dbase : Name → Option Word) (stackLo : Word) :
                           some (s.storeWord a (s.rget rv), .normal)
     | .ife c a b t e   =>
         if evalCond c (s.rget a) (s.rget b)
-        then exec P dbase stackLo fuel t s else exec P dbase stackLo fuel e s
+        then exec P dbase pad stackLo fuel t s else exec P dbase pad stackLo fuel e s
     | .seq a b         =>
-        match exec P dbase stackLo fuel a s with
-        | some (s', .normal) => exec P dbase stackLo fuel b s'
+        match exec P dbase pad stackLo fuel a s with
+        | some (s', .normal) => exec P dbase pad stackLo fuel b s'
         | other              => other
     | .block body      =>
-        match exec P dbase stackLo fuel body s with
+        match exec P dbase pad stackLo fuel body s with
         | some (s', .normal)     => some (s', .normal)
         | some (s', .brk 0)      => some (s', .normal)
         | some (s', .brk (k+1))  => some (s', .brk k)
@@ -196,9 +208,9 @@ def exec (P : Program) (dbase : Name → Option Word) (stackLo : Word) :
         | none                   => none
     | .while c a b body =>
         if evalCond c (s.rget a) (s.rget b) then
-          match exec P dbase stackLo fuel body s with
-          | some (s', .normal)     => exec P dbase stackLo fuel (.while c a b body) s'
-          | some (s', .cont 0)     => exec P dbase stackLo fuel (.while c a b body) s'
+          match exec P dbase pad stackLo fuel body s with
+          | some (s', .normal)     => exec P dbase pad stackLo fuel (.while c a b body) s'
+          | some (s', .cont 0)     => exec P dbase pad stackLo fuel (.while c a b body) s'
           | some (s', .cont (k+1)) => some (s', .cont k)
           | some (s', .brk k)      => some (s', .brk k)
           | some (s', .ret)        => some (s', .ret)
@@ -212,10 +224,10 @@ def exec (P : Program) (dbase : Name → Option Word) (stackLo : Word) :
         | none => none
         | some fd =>
           if fd.argc == argc && fd.rvc == rvc then
-            match frameEnter stackLo fd (args.toList.map s.rget) s.mem s.sp with
+            match frameEnter stackLo fd (pad f) (args.toList.map s.rget) s.mem s.sp with
             | none => none                                       -- stack overflow
             | some callee =>
-              match exec P dbase stackLo fuel fd.body callee with
+              match exec P dbase pad stackLo fuel fd.body callee with
               | some (s1, .normal) | some (s1, .ret) =>
                   let retVals := fd.rets.toList.map s1.rget
                   some ((rets.toList.zip retVals).foldl
@@ -396,16 +408,17 @@ theorem installData_at (base : Word) {data : Data} (mem : Word → Byte)
     with argument VALUES on a fresh machine — memory `mem`, stack top `sp0`.
     Returns the callee's final state (read results from `f`'s `rets`). -/
 def run (P : Program) (stackLo : Word) (fuel : Nat) (f : Name) (argVals : List Word)
-    (mem : Word → Byte) (sp0 : Word) (dataBase : Word := 0x30000) : Option St :=
+    (mem : Word → Byte) (sp0 : Word) (pad : Name → Nat := fun _ => 0)
+    (dataBase : Word := 0x30000) : Option St :=
   match List.lookup f P.env with
   | none => none
   | some fd =>
     let dbase := dbaseOf dataBase P.data
     let mem'  := installData dataBase P.data mem
-    match frameEnter stackLo fd argVals mem' sp0 with
+    match frameEnter stackLo fd (pad f) argVals mem' sp0 with
     | none => none
     | some st0 =>
-      match exec P dbase stackLo fuel fd.body st0 with
+      match exec P dbase pad stackLo fuel fd.body st0 with
       | some (s1, .normal) | some (s1, .ret) => some s1
       | _ => none
 
