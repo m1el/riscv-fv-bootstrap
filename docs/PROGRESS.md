@@ -1,5 +1,22 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-02 (later) — the library on Prog: strlen/strtoull/hex0/hex1 + driver
+
+`lean/LowIR/ProgLib.lean` (commit 8ba9a8f): the four programs as real D7/D8
+FUNCTIONS (params/rets/frames) + a `main` driver staging all inputs in its own
+frame and calling all of them (8 observables). hex0/strtoull/strlen are ports
+of the Ctrl versions; **hex1 is new, written from HEX1.md** — two-phase
+scan/emit, rel32 refs, and the 256-entry label table in hex1's OWN frame
+(4-byte LE entries = pos+1; 0 = undefined; zeroed by unrolled `sd x0` since
+frame memory is not implicitly zero) — the D8 frame design carrying real
+weight for the first time. Validation both ways: IL vs specs
+(`Hex0.coreSpec` full battery, `Hex1.coreSpec1` 23-case battery + hex0's
+battery for the shared-input promise, `strtoullConfSpec` incl. 2⁶⁴
+saturation), and differential through the compiler onto `Rv64i.step` bytes
+(each function + byte-for-byte output regions + the whole driver). All
+green, sorry-free, in the default build. This is the pre-verification
+baseline the correctness work will target.
+
 Reverse-chronological execution log for the libc-formalization effort (design doc:
 [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md); status: [archive/STATUS.md](archive/STATUS.md) §LowIR).
 
