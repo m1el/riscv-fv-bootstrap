@@ -13,6 +13,7 @@
   (Phase 3), `body_step` (Phase 4), `main_loop` (Phase 5), assembly (Phase 6).
 -/
 import LowIR.SSAProof.ExecFacts
+import LowIR.SSAProof.StrlenProof
 import LowIR.SSALib
 import LowIR.CtrlHex0Proof
 
@@ -139,5 +140,123 @@ theorem exec_lit (fuel r v : Nat) (s : St) (hv : v < 2048) :
   unfold Lib.lit
   rw [exec_addi, rget_zero, signExtend_ofNat_small v hv, show (0 : Word) + BitVec.ofNat 64 v
         = BitVec.ofNat 64 v from by bv_omega]
+
+/-! ### Char-class condition lemmas (`.ife .eq` / `.ife .geu` over registers).
+    Ported from `CtrlHex0Proof`'s `ceq`/`weq`/`geu_ww`; the proofs are
+    IL-independent (only `evalCond`/`BitVec`), retargeted at `Prog.St.rget`. -/
+
+/-- `eq (char reg = b widened) (const reg = n)`: true iff `b.toNat = n`. -/
+theorem ceqS_true {s : St} {b : Byte} {cr r : Reg} {k : Word} (n : Nat)
+    (hc : s.rget cr = b.setWidth 64) (hr : s.rget r = k) (hk : k.toNat = n)
+    (h : b.toNat = n) : evalCond .eq (s.rget cr) (s.rget r) = true := by
+  rw [hc, hr]; simp only [evalCond, decide_eq_true_eq]
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_setWidth, Nat.mod_eq_of_lt (by have := b.isLt; omega), hk]; exact h
+
+theorem ceqS_false {s : St} {b : Byte} {cr r : Reg} {k : Word} (n : Nat)
+    (hc : s.rget cr = b.setWidth 64) (hr : s.rget r = k) (hk : k.toNat = n)
+    (h : b.toNat ≠ n) : evalCond .eq (s.rget cr) (s.rget r) = false := by
+  rw [hc, hr]; simp only [evalCond, decide_eq_false_iff_not]
+  intro hcc; apply h
+  have := congrArg BitVec.toNat hcc
+  rw [BitVec.toNat_setWidth, Nat.mod_eq_of_lt (by have := b.isLt; omega), hk] at this
+  exact this
+
+/-- Raw word-equality dispatch (compares two registers' contents). -/
+theorem weqS_true {s : St} {a b : Reg} {x y : Word} (ha : s.rget a = x) (hb : s.rget b = y)
+    (h : x = y) : evalCond .eq (s.rget a) (s.rget b) = true := by
+  rw [ha, hb]; simp only [evalCond, decide_eq_true_eq]; exact h
+theorem weqS_false {s : St} {a b : Reg} {x y : Word} (ha : s.rget a = x) (hb : s.rget b = y)
+    (h : x ≠ y) : evalCond .eq (s.rget a) (s.rget b) = false := by
+  rw [ha, hb]; simp only [evalCond, decide_eq_false_iff_not]; exact h
+
+/-- Unsigned `≥` between two registers' word contents. -/
+theorem geu_wwS_true {s : St} {a b : Reg} {x y : Word} (ha : s.rget a = x) (hb : s.rget b = y)
+    (h : y.toNat ≤ x.toNat) : evalCond .geu (s.rget a) (s.rget b) = true := by
+  rw [ha, hb]; simp only [evalCond]
+  rw [show x.ult y = decide (x.toNat < y.toNat) from rfl]
+  simp only [Bool.not_eq_true', decide_eq_false_iff_not]; omega
+theorem geu_wwS_false {s : St} {a b : Reg} {x y : Word} (ha : s.rget a = x) (hb : s.rget b = y)
+    (h : x.toNat < y.toNat) : evalCond .geu (s.rget a) (s.rget b) = false := by
+  rw [ha, hb]; simp only [evalCond]
+  rw [show x.ult y = decide (x.toNat < y.toNat) from rfl]
+  simp only [Bool.not_eq_false', decide_eq_true_eq]; omega
+
+/-! ### The constant/param register context (SSA analogue of Ctrl's `Regs`,
+    minus the status/guard/`1` registers). Re-established across the loop by the
+    generic frame theorem `exec_frame_rget` — NOT by a bespoke `Pres`/`transfer`
+    (P2, the headline claim). -/
+
+structure RegsS (s : St) (p L q cap : Word) : Prop where
+  h10 : s.rget 10 = p
+  h11 : s.rget 11 = L
+  h12 : s.rget 12 = q
+  h13 : s.rget 13 = cap
+  h17 : s.rget 17 = 55
+  h18 : s.rget 18 = 59
+  h19 : s.rget 19 = 255
+  h20 : s.rget 20 = 48
+  h21 : s.rget 21 = 57
+  h22 : s.rget 22 = 65
+  h23 : s.rget 23 = 70
+  h24 : s.rget 24 = 10
+  h25 : s.rget 25 = 32
+  h26 : s.rget 26 = 95
+  h27 : s.rget 27 = 35
+
+/-- `RegsS` transfers across any state agreeing on the 15 const/param registers. -/
+theorem RegsS.of_agree {s s' : St} {p L q cap : Word} (hr : RegsS s p L q cap)
+    (h : ∀ r, r ∈ ([10,11,12,13,17,18,19,20,21,22,23,24,25,26,27] : List Reg) →
+      s'.rget r = s.rget r) : RegsS s' p L q cap where
+  h10 := by rw [h 10 (by decide)]; exact hr.h10
+  h11 := by rw [h 11 (by decide)]; exact hr.h11
+  h12 := by rw [h 12 (by decide)]; exact hr.h12
+  h13 := by rw [h 13 (by decide)]; exact hr.h13
+  h17 := by rw [h 17 (by decide)]; exact hr.h17
+  h18 := by rw [h 18 (by decide)]; exact hr.h18
+  h19 := by rw [h 19 (by decide)]; exact hr.h19
+  h20 := by rw [h 20 (by decide)]; exact hr.h20
+  h21 := by rw [h 21 (by decide)]; exact hr.h21
+  h22 := by rw [h 22 (by decide)]; exact hr.h22
+  h23 := by rw [h 23 (by decide)]; exact hr.h23
+  h24 := by rw [h 24 (by decide)]; exact hr.h24
+  h25 := by rw [h 25 (by decide)]; exact hr.h25
+  h26 := by rw [h 26 (by decide)]; exact hr.h26
+  h27 := by rw [h 27 (by decide)]; exact hr.h27
+
+/-- `RegsS` survives one execution of the loop body (none of the 15 registers is
+    a def site of `hex0BodyS`; frame theorem). -/
+theorem RegsS.frame {s s' : St} {p L q cap : Word} {f : Nat} {oc : Outcome}
+    (hr : RegsS s p L q cap)
+    (h : exec env sl f Lib.hex0BodyS s = some (s', oc)) : RegsS s' p L q cap :=
+  hr.of_agree (fun r hrmem => exec_frame_rget env sl f _ s s' oc h r (by
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hrmem
+    rcases hrmem with h|h|h|h|h|h|h|h|h|h|h|h|h|h|h <;> subst h <;> decide))
+
+/-! ### The read-char prefix of `hex0BodyS`: `add 40 10 5; lbu 7 40 0; addi 41 5 1`.
+    Loads the char at `p+idx` into reg 7 and computes `idx+1` into reg 41. -/
+
+/-- The post-prefix state: reg 40 = p+idx, reg 7 = char, reg 41 = idx+1. -/
+def prefSt (s0 : St) (p idx : Word) : St :=
+  ((s0.rset 40 (p+idx)).rset 7 ((s0.mem (p+idx)).setWidth 64)).rset 41 (idx+1)
+
+theorem hexPrefix_exec (f : Nat) (s0 : St) (p idx : Word) (rest : Stmt)
+    (h10 : s0.rget 10 = p) (h5 : s0.rget 5 = idx) :
+    exec env sl (f+4) (.seq (.add 40 10 5) (.seq (.lbu 7 40 0) (.seq (.addi 41 5 1) rest))) s0
+      = exec env sl (f+1) rest (prefSt s0 p idx) := by
+  have ha : exec env sl (f+3) (.add 40 10 5) s0 = some (s0.rset 40 (p+idx), .normal) := by
+    rw [show f+3=(f+2)+1 from rfl, exec_add, h10, h5]
+  have hl : exec env sl (f+2) (.lbu 7 40 0) (s0.rset 40 (p+idx))
+      = some ((s0.rset 40 (p+idx)).rset 7 ((s0.mem (p+idx)).setWidth 64), .normal) := by
+    rw [show f+2=(f+1)+1 from rfl, exec_lbu]
+    simp only [rget_rset_eq _ 40 _ (by decide), zero_signExtend, wadd_zero, loadByte_eq, rset_mem]
+  have haa : exec env sl (f+1) (.addi 41 5 1)
+        ((s0.rset 40 (p+idx)).rset 7 ((s0.mem (p+idx)).setWidth 64))
+      = some (prefSt s0 p idx, .normal) := by
+    rw [exec_addi, one_signExtend, prefSt]
+    simp only [rget_rset_ne _ 7 5 _ (by decide), rget_rset_ne _ 40 5 _ (by decide), h5]
+  rw [show f+4=(f+3)+1 from rfl, exec_seq_normal (h := ha),
+      show f+3=(f+2)+1 from rfl, exec_seq_normal (h := hl),
+      show f+2=(f+1)+1 from rfl, exec_seq_normal (h := haa)]
 
 end LowIR.SSA
