@@ -167,3 +167,6 @@ returned value list, no boundary register convention. What the port showed:
    lowering + its simulation proof, (c) porting one ProgLib function as the
    pilot. Until something needs (a)–(c), this stays a frozen experiment;
    D7's "explicitly not SSA" decision for *Prog itself* stands unrevised.
+   The proof half of the graduation test now has a written plan:
+   [RESUME-SSA-HEX0.md](RESUME-SSA-HEX0.md) — prove `hex0S` ≡ `Hex0.coreSpec`
+   and measure the proof section-by-section against `CtrlHex0Proof.lean`.
