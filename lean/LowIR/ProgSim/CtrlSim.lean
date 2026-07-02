@@ -161,6 +161,17 @@ def landPos (brkPos contPos : List Nat) (epiPos ft : Nat) : Outcome → Nat
 def LabelsOk (brkPos contPos : List Nat) (epiPos : Nat) : Prop :=
   (∀ p ∈ brkPos, p < 2 ^ 20) ∧ (∀ p ∈ contPos, p < 2 ^ 20) ∧ epiPos < 2 ^ 20
 
+/-- A `getD` into an all-bounded list is bounded (the default `0` is too). Used to
+    keep `brkB`/`contL`'s jump target inside the offset window. -/
+theorem getD_lt (l : List Nat) (k b : Nat) (hb : 0 < b) (h : ∀ p ∈ l, p < b) :
+    l.getD k 0 < b := by
+  induction l generalizing k with
+  | nil => simpa using hb
+  | cons x t ih =>
+    cases k with
+    | zero => simpa using h x (by simp)
+    | succ k => simpa using ih k (fun p hp => h p (by simp [hp]))
+
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat}
@@ -251,6 +262,88 @@ theorem lower_sim_cf
                   Option.some.injEq, Prod.mk.injEq] at hexec
               obtain ⟨rfl, rfl⟩ := hexec
               exact ⟨k, hst, by rw [hpck]; simp only [landPos]⟩
+    case ret =>
+      rw [LowIR.Prog.exec_ret, Option.some.injEq, Prod.mk.injEq] at hexec
+      obtain ⟨rfl, rfl⟩ := hexec
+      have he : here < 2 ^ 20 := by simp only [csize] at hbnd; omega
+      have hep : epiPos < 2 ^ 20 := hlbl.2.2
+      simp only [emitCF] at hem
+      obtain ⟨hst, hpcr⟩ :=
+        jump_sim L fd holes s m here epiPos _ hinv hpc hem rfl (by omega) (by omega)
+      exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos]⟩
+    case brkB k =>
+      rw [LowIR.Prog.exec_brkB, Option.some.injEq, Prod.mk.injEq] at hexec
+      obtain ⟨rfl, rfl⟩ := hexec
+      have he : here < 2 ^ 20 := by simp only [csize] at hbnd; omega
+      have htgt : brkPos.getD k 0 < 2 ^ 20 := getD_lt brkPos k _ (by omega) hlbl.1
+      simp only [emitCF] at hem
+      obtain ⟨hst, hpcr⟩ :=
+        jump_sim L fd holes s m here (brkPos.getD k 0) _ hinv hpc hem rfl (by omega) (by omega)
+      exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos]⟩
+    case contL k =>
+      rw [LowIR.Prog.exec_contL, Option.some.injEq, Prod.mk.injEq] at hexec
+      obtain ⟨rfl, rfl⟩ := hexec
+      have he : here < 2 ^ 20 := by simp only [csize] at hbnd; omega
+      have htgt : contPos.getD k 0 < 2 ^ 20 := getD_lt contPos k _ (by omega) hlbl.2.1
+      simp only [emitCF] at hem
+      obtain ⟨hst, hpcr⟩ :=
+        jump_sim L fd holes s m here (contPos.getD k 0) _ hinv hpc hem rfl (by omega) (by omega)
+      exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos]⟩
+    case seq a b =>
+      simp only [maxRegS] at hreg
+      obtain ⟨haccA, haccB⟩ := haccess
+      have hemA : Emitted L here (emitCF brkPos contPos epiPos here a) :=
+        Emitted_append_left L here _ _ hem
+      have hemB : Emitted L (here + 4 * csize a)
+          (emitCF brkPos contPos epiPos (here + 4 * csize a) b) := by
+        have h := Emitted_append_right L here (emitCF brkPos contPos epiPos here a)
+                    (emitCF brkPos contPos epiPos (here + 4 * csize a) b) hem
+        rwa [emitCF_length] at h
+      have hregA : maxRegS a ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
+      have hregB : maxRegS b ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
+      have hbndA : here + 4 * csize a < 2 ^ 20 := by simp only [csize] at hbnd; omega
+      cases hea : LowIR.Prog.exec P dbase pad stackLo fuel a s with
+      | none => rw [LowIR.Prog.exec_seq_none (h := hea)] at hexec; simp at hexec
+      | some r =>
+        obtain ⟨s1, o⟩ := r
+        cases o with
+        | normal =>
+            rw [LowIR.Prog.exec_seq_normal (h := hea)] at hexec
+            have hbndB : (here + 4 * csize a) + 4 * csize b < 2 ^ 20 := by
+              simp only [csize] at hbnd; omega
+            obtain ⟨k1, hinvA, hpcA⟩ :=
+              ih a s s1 .normal m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
+                hlbl hbndA
+            have hsp : s1.sp = s.sp := StInv_sp_eq L fd holes s s1 m (stepN k1 m) hinv hinvA
+            obtain ⟨k2, hinvB, hpcB⟩ :=
+              ih b s1 s' oc (stepN k1 m) (here + 4 * csize a) brkPos contPos hexec hinvA
+                (by rw [hpcA]; simp only [landPos]) hemB hregB (by rw [hsp]; exact hnw)
+                (by rw [hsp]; exact hbd) (haccB s1 hea) hlbl hbndB
+            refine ⟨k1 + k2, by rw [stepN_add]; exact hinvB, ?_⟩
+            have hft : (here + 4 * csize a) + 4 * csize b
+                = here + 4 * csize (LowIR.Prog.Stmt.seq a b) := by simp only [csize]; omega
+            rw [stepN_add, hpcB, hft]
+        | brk k =>
+            rw [LowIR.Prog.exec_seq_brk (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
+            obtain ⟨rfl, rfl⟩ := hexec
+            obtain ⟨k1, hinvA, hpcA⟩ :=
+              ih a s s1 (.brk k) m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
+                hlbl hbndA
+            exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos]⟩
+        | cont k =>
+            rw [LowIR.Prog.exec_seq_cont (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
+            obtain ⟨rfl, rfl⟩ := hexec
+            obtain ⟨k1, hinvA, hpcA⟩ :=
+              ih a s s1 (.cont k) m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
+                hlbl hbndA
+            exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos]⟩
+        | ret =>
+            rw [LowIR.Prog.exec_seq_ret (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
+            obtain ⟨rfl, rfl⟩ := hexec
+            obtain ⟨k1, hinvA, hpcA⟩ :=
+              ih a s s1 .ret m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
+                hlbl hbndA
+            exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos]⟩
     all_goals sorry
 
 end LowIR.ProgSim
