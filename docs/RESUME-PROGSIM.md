@@ -99,6 +99,19 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   conditional branch (`step_beq`… + `evalCond`) selecting then/else or loop
   body/exit, and the back-edge `jmp lTop` (a backward `jump_sim`). All the atoms
   (branch/jump steps, offset arithmetic, `jump_sim`) are already in place.
+- **Phase 4.3 label-aware emit — DONE + VALIDATED (`CtrlSim.lean`).** `emitCF`
+  (`brkPos contPos : List Nat`, `epiPos here : Nat → PStmt → List Instr`): the
+  position/label-resolved extension of `emit` to control flow — the concrete stream
+  `Compile.lower ▸ layoutItems ▸ resolveOne` emits, every `.jmp`/`.br` a single
+  `jal x0`/branch at offset `target − here`, every label 0 bytes. Straight-line
+  cases delegate to `emit`; the `ife`/`while` internal offsets are
+  position-independent (size-relative via `csize`), only `ret`/`brkB`/`contL`
+  targets depend on `here`. `csize` (position-independent instruction count,
+  `ife = 4+|t|+|e|`, `while = 5+|b|`) + `emitCF_length : (emitCF …).length = csize`
+  (`[propext, Quot.sound]`). **Validated**: `#guard realResolve == emitCF` for
+  strlen/strtoull/hex0/hex1 (all control-flow constructs + nestings) — the concrete
+  decidable IR↔assembly mapping. This is the emit the outcome-carrying `lower_sim`
+  inducts over.
 - **Phase 4.1 sub3 corollary — DONE, go/no-go CLOSED (sorry-free).**
   `sub3_body_exec` (IL spec `(a+b)−c` into x10, forward via `exec_*`) +
   `sub3_body_sim`: from a `StInv`-related state with `emit sub3.body` installed,
