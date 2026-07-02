@@ -36,10 +36,24 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   (`hnw`/`hseg`/`hblob`/`hbd`) are explicit hypotheses here — Phases 4/5 discharge
   them from `SimPre`. Reg binders are `Nat` (a `≤` at type `Reg = abbrev Nat`
   hides from `omega`). In `defaultTargets` (added to `LowIRProgSim` roots).
-- **NEXT:** the **vertical slice** (§8.3 / Phase 4.1) — the go/no-go for the
-  relation design: state `lower_sim`/`Emitted`, prove only skip/annot/ops cases,
-  `sorry` the rest, check a toy straight-line `prog_sim` (sub3-class) against the
-  differential oracle.
+- **Phase 4.1 vertical slice — GO (design validated).** `ProgSim/StmtSim.lean`:
+  `emit` (resolved straight-line lowering, `#guard`'d == real `Compile.lower` of
+  `sub3.body`), `Emitted` (+ append-split), `decode_emitted`/`decode_at` (fetch
+  bridge from `Installed`), `stepN`/`stepN_add`, the `step_*` one-instruction
+  lemmas, `signExtend_ofNat_lt` (slot immediates, `[propext, Quot.sound]` via
+  `toInt_eq_toNat_bmod`), `StInv_congr`/`StInv_scratch` (StInv insensitive to
+  scratch regs + pc), `load_step`, `pc_add4`. **`lower_sim`** (the `.normal`
+  simulation, fuel induction) has skip/annot and the **`addi` (rs,rd ≠ 0)** case
+  fully proven end-to-end — the go/no-go: the plain-equality `StInv` relation +
+  `StInv_store_slot` compose across a real ld/addi/sd instruction sequence. The
+  design works. `sorry` remains for addi's r=0 subcases, the other ops, seq, and
+  control-flow/memory (Phases 4.2–4.4).
+- **NEXT:** finish `lower_sim` — the addi r=0 subcases (load_step already handles
+  rs=0; rd=0 = skip the store, s'=s), then add/sub/orr/slli/srli (same shape,
+  add/sub/orr have two `load_step`s), then **seq** (the composition case — split
+  `Emitted` via `Emitted_append_*`, `stepN_add`, apply `ih` twice). Then the toy
+  `prog_sim` corollary against the sub3 oracle, then Phases 2 (AsmFacts:
+  `Emitted L pos (emit stmt)` from the real pipeline), 5 (call), 6 (prog_sim).
 
 ## 0. Mission and payoff
 
@@ -422,9 +436,10 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
   `rget/rset` ↔ slot-store (`StInv_store_slot`), 8-byte slot disjointness,
   `Installed`/off-MachPriv preservation under a slot store. All `[propext,
   Quot.sound]` (retrofitted the same onto WordMem's `byte_bit`/round-trip).
-- [ ] **Vertical slice** (Phase 4.1 → toy `prog_sim` for straight-line
-  sub3-class): the go/no-go checkpoint for the whole relation design. Prove
-  only skip/annot/ops cases of `lower_sim`, leave the rest `sorry`, check the
-  end-to-end corollary against the differential oracle.
+- [x] **Vertical slice (Phase 4.1) — GO.** `ProgSim/StmtSim.lean`: `emit`/
+  `Emitted`/`lower_sim` stated; skip/annot + `addi` (rs,rd ≠ 0) proven end-to-end
+  against the machine `step`. The relation design is validated (commit 9329154).
+- [ ] Finish `lower_sim`: addi r=0 subcases, add/sub/orr/slli/srli, seq; then the
+  toy `prog_sim`/sub3 corollary.
 - [ ] Then Phases 1/2 (encode/decode, assembler) in parallel-friendly chunks,
   the rest of 4, 5, 6 in order.
