@@ -64,8 +64,41 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   `single_op_sim`; sd/sb are two loads then the machine store, with the toNat
   range-disjointness derived from `MemAccOff`'s pointwise form by the constructive
   `range_disjoint_of_bytes`. `#guard`: `emit frameLocal.body` (sd+ld) == real
-  lowering. `sorry` remains ONLY for control-flow (ife/while/block/ret/brk/cont/
-  call) and cref/clen — Phase 4.3.
+  lowering.
+- **Phase 4.3 control flow — foundation + the three LEAF ops DONE.** All
+  `[propext, Quot.sound]`, in `StmtSim.lean`:
+  - **machine steps** `step_jal` / `step_beq` / `step_blt` / `step_bge` /
+    `step_bgeu` (the `jal x0` and four positive-form branches);
+  - **offset arithmetic** `signExtend_ofInt_21` / `_13` (a signed offset
+    `δ = target − here` within `resolveOne`'s emit guard sign-extends to itself —
+    `toInt = bmod`, `Int.bmod_def; split <;> omega` at the concrete modulus) and
+    `jump_lands` (a PC-relative transfer from `codeBase + here` by `δ` lands at
+    `codeBase + target`, either direction, wrap-safe);
+  - **`jump_sim`** — the leaf unconditional jump: `jal x0, (target − here)`
+    preserves `StInv` (jumps don't mutate IL state; `StInv_scratch` on x0) and
+    lands at `codeBase + target`;
+  - **`ret_sim` / `brkB_sim` / `contL_sim`** — the three leaf control-transfer ops,
+    each `jump_sim` + extracting `s' = s` from `exec_ret`/`exec_brkB`/`exec_contL`.
+    The resolved `target` (epilogue / k-th break / k-th continue label position) is
+    a parameter, supplied later by the label environment / Phase-2 layout.
+  `sorry` remains for the COMPOUND control-flow ops (ife/while/block), cref/clen,
+  and call.
+
+  **Framework needed for ife/while/block** (next): an *outcome-carrying* `lower_sim`
+  generalization — conclusion carries the `Outcome` and lands at
+  `codeBase + landPos(outcome)` where `landPos` maps `.normal ↦ fall-through`,
+  `.brk k ↦ brkPos[k]`, `.cont k ↦ contPos[k]`, `.ret ↦ epiPos`. It threads a
+  label environment `(brkPos contPos : List Nat) (epiPos : Nat)`. Cleanest design:
+  parameterize by an abstract label→position map `lpos` with a consistency
+  hypothesis (each `.label l` marker sits at `lpos l`; jumps to `l` use offset
+  `lpos l − here`), so the simulation proof is decoupled from the layout; Phase 2
+  discharges consistency against the real `layout`/`layoutItems`/`resolveOne`.
+  `block body` = `emit_cf body (lEnd::brks)` then the 0-byte `lEnd` marker; case on
+  body's outcome (a `.brk 0` lands at `lEnd` = fall-through, the block's normal
+  continuation; `.brk (k+1)`/`.cont`/`.ret` propagate). `ife`/`while` add the
+  conditional branch (`step_beq`… + `evalCond`) selecting then/else or loop
+  body/exit, and the back-edge `jmp lTop` (a backward `jump_sim`). All the atoms
+  (branch/jump steps, offset arithmetic, `jump_sim`) are already in place.
 - **Phase 4.1 sub3 corollary — DONE, go/no-go CLOSED (sorry-free).**
   `sub3_body_exec` (IL spec `(a+b)−c` into x10, forward via `exec_*`) +
   `sub3_body_sim`: from a `StInv`-related state with `emit sub3.body` installed,
@@ -475,7 +508,11 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
   (StInv_store{Word,Byte}_user, loadWord_agree_off, range_disjoint_of_bytes) +
   the four `lower_sim` cases via a `MemAccOff` access side-condition, all
   `[propext, Quot.sound]`. `#guard` on frameLocal.body.
-- [ ] Finish `lower_sim`: cref/clen, control flow (ife/while/block/ret/brk/cont/
-  call) — Phases 4.3–4.4.
+- [x] **Phase 4.3 control-flow foundation + leaf ops — DONE (ret/brkB/contL).**
+  `step_{jal,beq,blt,bge,bgeu}`, `signExtend_ofInt_{21,13}`, `jump_lands`,
+  `jump_sim`, and `ret_sim`/`brkB_sim`/`contL_sim`, all `[propext, Quot.sound]`.
+- [ ] Finish `lower_sim`: the COMPOUND control-flow ops (ife/while/block) via the
+  outcome-carrying generalization + label-position map (design in the Phase-4.3
+  status entry above), then cref/clen, then call.
 - [ ] Then Phases 1/2 (encode/decode, assembler) in parallel-friendly chunks,
   the rest of 4, 5, 6 in order.
