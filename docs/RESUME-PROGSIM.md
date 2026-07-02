@@ -32,7 +32,7 @@ executable oracle to test against while it is being stated.
   brks/conts/epi), `prologue`/`epilogue`, `synthConst`, `layout`/`layoutItems`
   (`symSize`), `resolveOne` (range-checked), `compileProgT`/`progBytes`,
   entry stub + halt pad. Physical regs: x1=ra, x2=sp, x5/x6=t0/t1, x10..x17=a*.
-  **x3 is free** (see P1 below — it will be taken).
+  The compiler is FROZEN as-is for this campaign (P1 needs no change to it).
 - `LowIR/ProgLib.lean` + `CompileTests.lean` — the programs and the
   differential batteries (the regression oracle for any compiler change).
 - Prior art to port: one-layer `exec_*` unfolder lemmas
@@ -56,36 +56,78 @@ injection (per-value address translation) is unsound on our flat `BitVec 64`
 words without provenance — you cannot tell a pointer from an integer. That
 is the borrow layer's future job, not this cut's.
 
-**Decision P1 — two-stack lowering: make the addresses EQUAL by construction.**
-Change the compiler so the machine keeps:
+**Decision P1 — the frame-padding oracle: make the addresses EQUAL by
+∀-quantified padding, with the compiler UNCHANGED.**
 
-- **x2** = the *machine* stack: `[saved ra][slots]` only
-  (`slotArea fd = 8*(maxRegF+2)`), a region the IL cannot name;
-- **x3** = the *IL semantic sp*, exactly mirroring D8: prologue
-  `addi x3, x3, -frameSize`, `frameReg` slot := x3; epilogue
-  `addi x3, x3, +frameSize`. User frames live in the x3 stack at
-  **exactly the IL's addresses** (same `sp₀` given to both sides).
+The key arithmetic fact (verify in the code: `Compile.lean` prologue,
+`Prog.frameEnter`): the compiler already places the user frame at the TOP of
+the machine frame, so its addresses are `[entry_sp − frameSize, entry_sp)` —
+**identical to the IL's frame for the first activation**. Divergence is
+purely the cumulative `[ra][slots]` overhead of ancestor activations. So:
+extend `frameEnter` with a padding oracle `pad : Name → Nat` (a semantics
+parameter alongside `dbase`/`stackLo`, ∀-quantifiable exactly like `sp₀`):
 
-Additionally instantiate the IL's `dbase` at composition time as
-`fun d => codeBase + segStart + off d` (legitimate — the IL theorem
-∀-quantifies `dbase`; `dataOffsetsFrom_shift` says this IS the compiler's
-table). Consequences:
+```
+frameReg := sp − frameSize                 -- frame position UNCHANGED
+sp'      := sp − frameSize − pad f         -- the hole the IL skips over
+```
 
-- Every IL-visible value (registers, frame pointers, cref pointers, anything
-  stored in memory) is **numerically identical** on both sides. The
-  simulation relation is plain equality on registers-in-slots and on memory
-  outside the machine-private regions. No injection, no provenance.
-- Const-data writes stay COHERENT (both sides write the same address), so
-  the no-write side condition shrinks to: no store into the code region
-  `[codeBase, codeBase+segStart)` or the machine x2-stack region.
-- Cost: 2 extra instructions per prologue/epilogue; harness/shim set x3;
-  `fnOk` splits into `slotArea ≤ 2000 ∧ frameSize ≤ 2000` (looser than
-  today). All differential tests + QEMU must be re-validated after the
-  change (mechanical; blob changes).
+`compile_sim` instantiates `pad f := userOff f = 8*(maxRegF f + 2)`, and
+then **IL `sp` = machine `x2` at every moment**, every frame coincides at
+every depth, and the pad hole is byte-for-byte the machine's `[ra][slots]`
+area. Also instantiate `dbase := fun d => codeBase + segStart + off d`
+(`dataOffsetsFrom_shift` says this IS the compiler's table). Consequences:
 
-*Rejected:* memory injection (needs provenance = borrow layer; revisit when
-BorrowSig lands); observable-only equivalence (too weak to compose);
-address-translating relation chosen per-execution (not stateable).
+- Every IL-visible value (registers, frame pointers, cref pointers,
+  anything stored) is **numerically identical** on both sides: the relation
+  is plain equality. No injection, no provenance, no value translation.
+- **Zero compiler/shim/QEMU changes.** The change is confined to the IL
+  semantics, and `pad := fun _ => 0` reproduces today's behavior exactly —
+  every existing #guard/theorem re-greens with the default.
+- The IL's own overflow check (`sp ≥ stackLo + frameSize + pad f`) now
+  accounts for the machine's overhead too — the separate "stack budget"
+  hypothesis this plan previously needed **disappears**.
+- The differential harness gains a new power: instantiating `pad = userOff`
+  in the IL side makes frame memory comparable BYTE-FOR-BYTE between
+  altitudes (previously only rets/data regions were comparable). Add such
+  tests in Phase 0 — they are the executable check of the whole P1 idea.
+- IL-level program proofs quantify over `pad` (frames stay disjoint —
+  padding only adds separation; frame-local reasoning is frameReg-relative
+  and unaffected). ∀-`pad` is also future-proof: a later register allocator
+  shrinking `userOff` changes only the instantiation, not program proofs.
+- Const-data writes stay COHERENT (same addresses both sides); the
+  footprint side condition shrinks to: no store into the code region or
+  into the pad holes (the holes are listed by the `CallChain` ghost, §4
+  Phase 5).
+
+**Alternatives considered and rejected** (analyses from the 2026-07-02
+design discussion — kept because the next reader will re-derive them):
+
+- *Two-stack lowering* (x2 = ra+slots, new x3 mirroring IL sp): achieves the
+  same equality but by CHANGING the compiler — burns a register, adds
+  2 instrs/function, touches shim/harness/QEMU, and still needs the stack
+  budget hypothesis (machine x2 use invisible to the IL check). The padding
+  oracle dominates it on every axis; superseded.
+- *Memory injection / two-way frame mapping*: needs to translate VALUES,
+  not just addresses. σ must commute with `add`/`sub` (pointer arithmetic
+  and integer arithmetic are the same instructions) ⇒ σ is a single global
+  additive shift — but each activation needs a different shift. Per-value
+  relational (CompCert-style) needs to know which words are pointers:
+  untyped `BitVec 64` cannot say, and a disjunctive relation can't support
+  the load case. Becomes expressible only when BorrowSig/typing lands —
+  the right formulation for the TYPED IR above Prog, not for this cut.
+- *Block-structured frames in the IL* (St carries a frame list; pointers
+  become fat `(frameId, offset)` values — the CakeML stackLang / CompCert
+  road): dissolves divergence and makes frames born-disjoint (killing the
+  footprint side conditions), but it is a semantics rewrite (values become
+  an ADT, every exec equation, program, harness changes), reverses recorded
+  decisions D2/D5, narrows expressiveness (int↔ptr punning, byte-copying
+  pointers become stuck), and RELOCATES rather than eliminates the
+  correspondence work into a flattening/erasure pass of the same difficulty
+  class (CakeML `stack_remove`, CompCert stacking). Right shape for the
+  typed IR one rung up; wrong trade at the flat bottom rung. This plan
+  harvests its benefit as ghost structure only (`CallChain`).
+- *Observable-only equivalence*: too weak to compose across calls.
 
 ## 3. Theorem statements (write these FIRST, as `sorry`-free defs + sorry'd theorems)
 
@@ -104,16 +146,17 @@ Installed L m : Prop            -- code: fetch32 at codeBase+4j decodes to instr
                                 -- (data half via dataSegment_at — already proved)
 
 structure Regions where         -- the disjointness bundle (SimPre)
-  mstackLo mstackHi : Word      -- x2 stack (machine-private)
-  -- disjoint from: blob [codeBase, codeBase+segStart+|segment|),
-  -- the IL stack [stackLo, sp₀), and every harness data region
+  -- the ONE stack [stackLo, sp₀) is shared (P1: same addresses); machine-
+  -- private bytes are the pad holes inside it (listed by CallChain) plus
+  -- the blob [codeBase, codeBase+segStart+|segment|); disjoint from every
+  -- harness data region
 
 StInv L fd (s : Prog.St) (m : Rv64i.State) : Prop :=
-  (∀ r, 1 ≤ r → r ≤ maxRegF fd → s.rget r = m.loadWord (m.rget 2 + slotOff r))
-  ∧ m.rget 3 = s.sp                       -- the two-stack payoff
+  m.rget 2 = s.sp                         -- the P1 payoff: sp ≡ x2, always
+  ∧ (∀ r, 1 ≤ r → r ≤ maxRegF fd → s.rget r = m.loadWord (s.sp + slotOff r))
   ∧ Installed L m
-  ∧ (∀ a, ¬ MachPriv a → s.mem a = m.mem a)   -- MachPriv = x2 region ∪ code region
-  ∧ (frame-shape facts: m.rget 2 in the x2 region, aligned, …)
+  ∧ (∀ a, ¬ MachPriv a → s.mem a = m.mem a)   -- MachPriv = pad holes ∪ code region
+  ∧ (frame-shape facts: alignment, current hole = [s.sp, s.sp + userOff fd), …)
 ```
 
 ### 3.2 The workhorse (statement-level, fuel-indexed)
@@ -172,10 +215,13 @@ memory-safety statements anyway.
 
 ## 4. Proof architecture — phases, deliverables, risk
 
-**Phase 0 — freeze the compiler + toolkit.** (blocks everything)
-1. Implement P1 (two-stack). Re-green: Prog #guards, all differential
-   theorems, QEMU (regen dump; shim sets x3). Commit. The compiler is then
-   FROZEN for the campaign — any change re-opens every phase.
+**Phase 0 — P1 + toolkit.** (blocks everything)
+1. Implement P1: add the `pad : Name → Nat` oracle to `frameEnter`/`exec`/
+   `run` (default `fun _ => 0` — everything existing re-greens unchanged;
+   the compiler, shim, and QEMU artifacts are untouched and hereby FROZEN).
+   Add the new differential tests with `pad := userOff`-instantiated IL
+   runs comparing FRAME memory byte-for-byte — the executable validation of
+   the whole P1 idea, before any lemma depends on it. Commit.
 2. Port the one-layer unfolder lemmas to Prog: `exec_seq_normal`,
    `exec_block_*`, `exec_while_*`, `exec_call_*`, per-op equations
    (from `CtrlStrtoullProof.lean`, mostly mechanical renames + dbase/env
@@ -249,11 +295,9 @@ this order (each case = commit):
   activation, strictly decreasing, pairwise disjoint). Prior art: CakeML
   stackLang, bedrock2 — but our D7/D8 (no alloca, structural restore,
   activation-local registers) is deliberately the easy case.
-- Stack budget: machine x2 use = Σ slotArea over the active chain, NOT
-  visible to the IL's overflow check. Hypothesis in `SimPre`:
-  `activationBound × maxSlotArea ≤ mstack size` with
-  `activationBound := fuel` (crude, sound: each activation costs ≥1 fuel).
-  Refine later if it pinches.
+- Stack budget: SOLVED by P1 — with `pad = userOff` the IL's own overflow
+  check (`sp ≥ stackLo + frameSize + pad f`) already accounts for the
+  machine's slot overhead; no separate hypothesis.
   *Risk: HIGH — this is where the unknown unknowns live. Size: ~1500 lines.
   De-risk by proving `prologue_sim`/`epilogue_sim` standalone against the
   differential oracle before touching the induction case.*
@@ -308,11 +352,11 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
 
 ## 7. Open questions (decide during Phase 0, none block the statement work)
 
-1. **x3 choice**: gp is ABI-reserved but we own the whole machine; x3 vs x4
-   — pick x3, document in Compile.lean header. Any objection dissolves at
-   bare-metal.
-2. **fnOk freeze**: split bound (`slotArea ≤ 2000 ∧ frameSize ≤ 2000`) —
-   settle exact constants in P1.
+1. **pad signature**: `Name → Nat` (per-function, matches the compiler) vs
+   a per-activation oracle. Per-function suffices for this compiler; keep
+   the simpler form until something forces generality.
+2. **fnOk freeze**: unchanged by P1 (`totalFrame ≤ 2000` stands — the pad
+   equals `userOff`, already inside `totalFrame`).
 3. **Footprint granularity**: global `ws.all (¬ MachPriv ·)` first;
    per-activation refinement only if the caller-slot-preservation proof
    wants it (Phase 5 will tell).
@@ -325,7 +369,9 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
 
 ## 8. Immediate next actions (cold-start order)
 
-1. Phase 0.1: implement P1 two-stack lowering; re-green everything; commit.
+1. Phase 0.1: implement the P1 pad oracle in Prog (compiler untouched);
+   re-green with `pad 0`; add the `pad = userOff` frame-memory differential
+   tests; commit.
 2. Write `ProgSim/Defs.lean` complete with all §3 statements (`sorry`'d
    theorems, real defs) + lib target; `#guard` the defs on harness states;
    commit.
