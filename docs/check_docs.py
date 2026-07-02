@@ -9,9 +9,10 @@ Checks:
      (a link counts as an edge only if the target lives in the linking
      file's own directory or below — e.g. archive/* -> ../* is a valid
      link but not a reachability edge)
-  5. every archived doc is listed in archive/README.md
-  6. every active doc (outside archive/) is linked directly from README.md
-     (the index must be complete, per the project doc rule)
+  5. every doc is indexed by the README.md of its own directory (each
+     directory with docs must have a README.md linking every sibling —
+     this is what makes archive/README.md the archive index, docs/README.md
+     the root index, etc.; no per-directory special cases)
 
 Exit code 0 = all green, 1 = at least one error. Run from anywhere:
     ./docs/check_docs.py
@@ -26,8 +27,6 @@ from pathlib import Path
 
 DOCS = Path(__file__).resolve().parent
 README = DOCS / "README.md"
-ARCHIVE_DIR = DOCS / "archive"
-ARCHIVE_INDEX = ARCHIVE_DIR / "README.md"
 
 LINK_RE = re.compile(r'!?\[[^\]]*\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)')
 HEADING_RE = re.compile(r"(#{1,6})\s+(.*)")
@@ -129,24 +128,19 @@ def main() -> int:
                 err(p, None, "not reachable from README.md via down-links "
                              "(add an index entry along the directory path)")
 
-    # -- check 5: archive index completeness ----------------------------------
-    if ARCHIVE_DIR.is_dir():
-        if ARCHIVE_INDEX not in parsed:
-            err(ARCHIVE_DIR, None, "archive/README.md missing")
-        else:
-            listed = resolved_links[ARCHIVE_INDEX]
-            for p in sorted(ARCHIVE_DIR.glob("*.md")):
-                if p != ARCHIVE_INDEX and p not in listed:
-                    err(p, None, "archived doc not listed in archive/README.md")
-
-    # -- check 6: root index lists every active doc ---------------------------
-    if README in parsed:
-        indexed = resolved_links[README]
-        for p in corpus:
-            if p == README or ARCHIVE_DIR in p.parents:
-                continue
-            if p not in indexed:
-                err(p, None, "active doc not linked from README.md (index it)")
+    # -- check 5: every doc is indexed by its own directory's README.md ------
+    by_dir: dict[Path, list[Path]] = {}
+    for p in corpus:
+        by_dir.setdefault(p.parent, []).append(p)
+    for directory, files in sorted(by_dir.items()):
+        index = directory / "README.md"
+        if index not in parsed:
+            err(directory, None, "directory has docs but no README.md index")
+            continue
+        listed = resolved_links[index]
+        for p in files:
+            if p != index and p not in listed:
+                err(p, None, f"not indexed in {index.relative_to(DOCS)}")
 
     if errors:
         print(f"FAIL — {len(errors)} problem(s):")
