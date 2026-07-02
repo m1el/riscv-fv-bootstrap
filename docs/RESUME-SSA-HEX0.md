@@ -4,7 +4,52 @@ Plan written 2026-07-02, right after the strlen/hex0 ports landed. Read with
 [LOWIR-SSA-EXPERIMENT.md](LOWIR-SSA-EXPERIMENT.md) (the IR's design record —
 scopes, `defaultBody`, never/thru typing) and the baseline this campaign is
 measured against: `lean/LowIR/CtrlHex0Proof.lean` (1703 lines, sorry-free,
-the Ctrl-IL hex0 proof). Status: **not started** — this file is the plan.
+the Ctrl-IL hex0 proof).
+
+## STATUS (updated 2026-07-02) — Phases 0, 1 DONE; Phase 2 underway
+
+All landed code is sorry-free, builds under `lake build LowIRSSA`, and its
+axioms track the Ctrl baseline `[propext, Classical.choice, Quot.sound]`
+(no `native_decide` anywhere in the chain).
+
+- **Phase 0 DONE** — `lean/LowIR/SSAProof/ExecFacts.lean` (~640 lines). All
+  one-layer unfolders (leaf ops, `seq`, `catch0`, `block`, `ife`, the
+  block-parameter `while` via `exec_while_unfold` + resolved
+  `cont0`/`brk0`/`ret`/`contS`/`F_*` lemmas, `call`), `exec_mono`/`_le` (P4,
+  guard-agnostic while handling), `exec_frame` + `exec_frame_rget` (P2 — the
+  syntactic frame theorem, `catch0_frame` factors the break-scope analysis),
+  `rget`/`rset`/`bindOuts`/`storeByte` helpers (P3 support; the `Slice`/`Wf`
+  borrow layer is reused from `CtrlHex0Proof`). Commit `cb04884`.
+- **Phase 1 DONE — GO** — `lean/LowIR/SSAProof/StrlenProof.lean` (214 lines).
+  `strlen_loop` (args-tuple invariant, induction on distance-to-NUL, `inits`
+  parametrized by `inits.map (evalOpnd s) = [cur, mem cur]` so it survives the
+  const-rebuilt back-edge; existential fuel + `exec_mono_le`) and the run-level
+  `strlenS_correct` vs `IsLen`. **The GO/NO-GO passed**: the args-tuple
+  invariant carries NO register-file clauses, exactly the experiment's claim.
+  Commit `42de9b0`.
+- **Phase 2 UNDERWAY** — `lean/LowIR/SSAProof/Hex0Proof.lean`. Landed:
+  `pnibS_eff` (the value-producing nibble `ife` → `pnibR c` in `dst`, all 5
+  leaves threaded through the nested `catch0` scopes; frame NOT baked in — it
+  comes from `exec_frame`), `signExtend_ofNat_small` + `exec_lit`. Commit
+  `f567a00`.
+
+### Frontier (next, in order)
+- Phase 2 tail: the read-char triple (`add`/`lbu`/`addi`), the `.ife .eq`
+  char-class dispatch lemmas (restated over `Prog.St`'s `rget`).
+- Phase 3 `skipCommentS_eff`: the inner scan `while`, exit via `cont 1` →
+  outer `cont 0` at position `i1 + commentSkip (inp.drop i1)`. Inner induction
+  on the skip distance; reuse `commentSkip`/`commentSkip_le/get/run_ne`.
+- Phase 4 `body_step` (the 3 char-classes; the 12-`ife` hexPath cascade uses
+  `pnibS_eff` twice + `hexbyte_val`).
+- Phase 5 `main_loop` (strong induction on `|inp| − idx`; the invariant is a
+  function of `(idx, olen, mem)` + the frame side-conditions discharged once by
+  `exec_frame` — NO `Regs`/`Pres`, NO status register).
+- Phase 6 assembly (`run` unfold, 11-`lit` prelude peel via `exec_lit`,
+  `boundedRun_nil_coreSpec`, `#print axioms hex0S_correct`).
+
+The Phase-1 pattern (existential fuel, `obtain ⟨x,h⟩ : ∃ y, y = E := ⟨_,rfl⟩`
+to name states without Mathlib's `set`, `generalize … at h ⊢` for the
+guard-agnostic while step) transfers directly to Phases 3–5.
 
 ## 0. Mission and the metric
 
@@ -200,14 +245,21 @@ with `lake env lean` while working). Keep `SSADump` a root too.
 
 | item | Ctrl baseline (lines) | SSA (lines) | notes |
 |---|---|---|---|
-| cond/BitVec bridges | ~90 | reused + ~40 St-tax | |
-| pnib | ~45 + model | | ife-outs vs assign-and-fall-through |
-| comment skip | ~170 (guard reg + poison) | | direct `cont 1` |
-| register context | ~45 (`Regs`/`Pres`/`transfer`) | ~0 + frame thm (once) | the headline claim |
-| body dispatch + hexPath | ~420 | | status reg gone |
-| main loop | ~380 | | invariant hypothesis count |
-| assembly | ~100 | | valued `run` results |
-| one-time toolbox | (amortized in Ctrl file) | ~500 reusable | exec_mono, frame, unfolders |
+| cond/BitVec bridges | ~90 | reused verbatim + ~16 (`geuR_*`) | Ctrl's `geuL/slt/tn/pnibR*` import as-is |
+| pnib | ~45 + `pnibR` model | `pnibS_eff` ~85 (5 leaves) | ife-outs+`catch0` vs assign-and-fall-through; `pnibR` model reused |
+| comment skip | ~170 (guard reg + poison) | *(pending)* | direct `cont 1`, no flag reg |
+| register context | ~45 (`Regs`/`Pres`/`transfer`) | **~0** + `exec_frame` (once, in toolbox) | the headline claim — CONFIRMED so far |
+| body dispatch + hexPath | ~420 | *(pending)* | status reg gone |
+| main loop | ~380 | *(pending)* — Phase-1 `strlen_loop` (args-tuple) is the template | invariant has no `Regs`/`rget-5/6`/status clauses |
+| assembly | ~100 | *(pending)* — Phase-1 `strlenS_correct` run-peel is the template | valued `run` results |
+| one-time toolbox | (amortized in Ctrl file) | ~640 reusable (`ExecFacts.lean`) | `exec_mono`, `exec_frame`, all unfolders |
+| **Phase 1 strlen (whole)** | flat `StrlenProof` ~200 | **214** | args-tuple invariant, no register-file clauses |
+
+Early read: the frame theorem does replace the `Regs`/`Pres` machinery with a
+single once-proved metatheorem (P2 confirmed). The `catch0` break-scope
+threading in `pnibS_eff` is new tax the Ctrl fall-through model avoids, but the
+`pnibR` decode model and all cond/decodeS/boundedRun lemmas import verbatim.
+Final totals pending Phases 3–6.
 
 Honest expectation: total in the same 1.4–1.9k band, with the *per-program*
 part smaller and ~500 lines being reusable SSA infrastructure; the win, if
