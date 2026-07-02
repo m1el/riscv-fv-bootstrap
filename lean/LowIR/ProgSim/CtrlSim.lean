@@ -21,10 +21,11 @@ import LowIR.ProgLib
 
 namespace LowIR.ProgSim
 
-open Rv64i (Instr State step Word)
+open Rv64i (Instr State step Word decode fetch32)
 open LowIR.Compile (T0 T1 userOff slotOff maxRegF maxRegS)
 open LowIR.Ctrl (Outcome)
 open LowIR.Prog (St Program Name FunDef dbaseOf)
+open LowIR (Cond evalCond condInstr jal0)
 
 local notation "PStmt" => LowIR.Prog.Stmt
 
@@ -161,6 +162,49 @@ def landPos (brkPos contPos : List Nat) (epiPos ft : Nat) : Outcome → Nat
 def LabelsOk (brkPos contPos : List Nat) (epiPos : Nat) : Prop :=
   (∀ p ∈ brkPos, p < 2 ^ 20) ∧ (∀ p ∈ contPos, p < 2 ^ 20) ∧ epiPos < 2 ^ 20
 
+/-- Every `ife`'s else-skip branch fits the 13-bit branch window (`8 + 4·csize e`
+    = the compiler's `resolveOne` guard `δ ≤ 4094`). `while`'s branch is a fixed
+    `+8`, always fine. A structural side condition, discharged per-program by the
+    real layout (branches that don't fit make `Compile` return `none`). -/
+def BranchOk : PStmt → Prop
+  | .seq a b          => BranchOk a ∧ BranchOk b
+  | .block body       => BranchOk body
+  | .ife _ _ _ t e    => 8 + 4 * csize e < 2 ^ 12 ∧ BranchOk t ∧ BranchOk e
+  | .while _ _ _ body => BranchOk body
+  | _                 => True
+
+/-- A conditional branch `condInstr c T0 T1 δ` whose registers hold `x`, `y`: when
+    `evalCond c x y` holds the branch is taken (`pc += δ`), matching the compiler's
+    positive-form encoding (`.ge`/`.geu` take the *else* arm of `bge`/`bgeu`). -/
+theorem cond_taken (m : State) (c : Cond) (δ : Int) (x y : Word)
+    (hd : decode (fetch32 m) = condInstr c T0 T1 δ)
+    (hx : m.rget T0 = x) (hy : m.rget T1 = y) (hev : evalCond c x y = true) :
+    step m = m.setPc (m.pc + (BitVec.ofInt 13 δ).signExtend 64) := by
+  cases c <;> simp only [condInstr] at hd
+  · have h : x = y := by simpa [evalCond] using hev
+    rw [step_beq m T0 T1 _ hd, hx, hy, if_pos h]
+  · have h : x.slt y = true := by simpa [evalCond] using hev
+    rw [step_blt m T0 T1 _ hd, hx, hy, if_pos h]
+  · have h : x.slt y = false := by simpa [evalCond] using hev
+    rw [step_bge m T0 T1 _ hd, hx, hy, if_neg (by simp [h])]
+  · have h : x.ult y = false := by simpa [evalCond] using hev
+    rw [step_bgeu m T0 T1 _ hd, hx, hy, if_neg (by simp [h])]
+
+/-- …and when `evalCond c x y` fails the branch falls through (`pc += 4`). -/
+theorem cond_not_taken (m : State) (c : Cond) (δ : Int) (x y : Word)
+    (hd : decode (fetch32 m) = condInstr c T0 T1 δ)
+    (hx : m.rget T0 = x) (hy : m.rget T1 = y) (hev : evalCond c x y = false) :
+    step m = m.setPc (m.pc + 4) := by
+  cases c <;> simp only [condInstr] at hd
+  · have h : ¬ x = y := by simpa [evalCond] using hev
+    rw [step_beq m T0 T1 _ hd, hx, hy, if_neg h]
+  · have h : x.slt y = false := by simpa [evalCond] using hev
+    rw [step_blt m T0 T1 _ hd, hx, hy, if_neg (by simp [h])]
+  · have h : x.slt y = true := by simpa [evalCond] using hev
+    rw [step_bge m T0 T1 _ hd, hx, hy, if_pos h]
+  · have h : x.ult y = true := by simpa [evalCond] using hev
+    rw [step_bgeu m T0 T1 _ hd, hx, hy, if_pos h]
+
 /-- A `getD` into an all-bounded list is bounded (the default `0` is too). Used to
     keep `brkB`/`contL`'s jump target inside the offset window. -/
 theorem getD_lt (l : List Nat) (k b : Nat) (hb : 0 < b) (h : ∀ p ∈ l, p < b) :
@@ -188,6 +232,7 @@ theorem lower_sim_cf
     (haccess : MemAccOff L holes P dbase pad stackLo fuel stmt s)
     (hlbl  : LabelsOk brkPos contPos epiPos)
     (hbnd  : here + 4 * csize stmt < 2 ^ 20)
+    (hbr   : BranchOk stmt)
     (hframe : userOff fd ≤ 2000)
     (hseg  : 4 * L.instrs.length ≤ L.segStart)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64) :
@@ -225,6 +270,7 @@ theorem lower_sim_cf
       have hreg' : maxRegS body ≤ maxRegF fd := hreg
       have hacc' : MemAccOff L holes P dbase pad stackLo fuel body s := by
         simpa only [MemAccOff] using haccess
+      have hbr' : BranchOk body := hbr
       cases hb : LowIR.Prog.exec P dbase pad stackLo fuel body s with
       | none =>
           rw [LowIR.Prog.exec_block_none P dbase pad stackLo fuel body s hb] at hexec
@@ -233,7 +279,7 @@ theorem lower_sim_cf
           obtain ⟨s'', ocb⟩ := pr
           obtain ⟨k, hst, hpck⟩ :=
             ih body s s'' ocb m here ((here + 4 * csize body) :: brkPos) contPos
-              hb hinv hpc hem' hreg' hnw hbd hacc' hlbl' hbnd'
+              hb hinv hpc hem' hreg' hnw hbd hacc' hlbl' hbnd' hbr'
           cases ocb with
           | normal =>
               rw [LowIR.Prog.exec_block_normal P dbase pad stackLo fuel body s s'' hb,
@@ -292,6 +338,7 @@ theorem lower_sim_cf
     case seq a b =>
       simp only [maxRegS] at hreg
       obtain ⟨haccA, haccB⟩ := haccess
+      obtain ⟨hbrA, hbrB⟩ := hbr
       have hemA : Emitted L here (emitCF brkPos contPos epiPos here a) :=
         Emitted_append_left L here _ _ hem
       have hemB : Emitted L (here + 4 * csize a)
@@ -313,12 +360,12 @@ theorem lower_sim_cf
               simp only [csize] at hbnd; omega
             obtain ⟨k1, hinvA, hpcA⟩ :=
               ih a s s1 .normal m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
-                hlbl hbndA
+                hlbl hbndA hbrA
             have hsp : s1.sp = s.sp := StInv_sp_eq L fd holes s s1 m (stepN k1 m) hinv hinvA
             obtain ⟨k2, hinvB, hpcB⟩ :=
               ih b s1 s' oc (stepN k1 m) (here + 4 * csize a) brkPos contPos hexec hinvA
                 (by rw [hpcA]; simp only [landPos]) hemB hregB (by rw [hsp]; exact hnw)
-                (by rw [hsp]; exact hbd) (haccB s1 hea) hlbl hbndB
+                (by rw [hsp]; exact hbd) (haccB s1 hea) hlbl hbndB hbrB
             refine ⟨k1 + k2, by rw [stepN_add]; exact hinvB, ?_⟩
             have hft : (here + 4 * csize a) + 4 * csize b
                 = here + 4 * csize (LowIR.Prog.Stmt.seq a b) := by simp only [csize]; omega
@@ -328,21 +375,21 @@ theorem lower_sim_cf
             obtain ⟨rfl, rfl⟩ := hexec
             obtain ⟨k1, hinvA, hpcA⟩ :=
               ih a s s1 (.brk k) m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
-                hlbl hbndA
+                hlbl hbndA hbrA
             exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos]⟩
         | cont k =>
             rw [LowIR.Prog.exec_seq_cont (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
             obtain ⟨rfl, rfl⟩ := hexec
             obtain ⟨k1, hinvA, hpcA⟩ :=
               ih a s s1 (.cont k) m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
-                hlbl hbndA
+                hlbl hbndA hbrA
             exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos]⟩
         | ret =>
             rw [LowIR.Prog.exec_seq_ret (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
             obtain ⟨rfl, rfl⟩ := hexec
             obtain ⟨k1, hinvA, hpcA⟩ :=
               ih a s s1 .ret m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
-                hlbl hbndA
+                hlbl hbndA hbrA
             exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos]⟩
     case addi rd rs imm =>
       rw [LowIR.Prog.exec_addi, Option.some.injEq, Prod.mk.injEq] at hexec
