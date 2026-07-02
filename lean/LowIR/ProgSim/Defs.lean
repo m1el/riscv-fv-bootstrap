@@ -21,6 +21,7 @@
 -/
 import LowIR.Compile
 import LowIR.ProgSim.ExecFacts
+import LowIR.ProgSim.WordMem
 
 namespace LowIR.ProgSim
 

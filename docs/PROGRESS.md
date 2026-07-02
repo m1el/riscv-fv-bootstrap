@@ -32,6 +32,27 @@ the address gap P1 closes is thus real, not vacuous.
   `Option.map` yields `exec` exactly — a structural fuel induction, both
   functions recursing only at `fuel`). Axioms: `[propext, Quot.sound]` only,
   no `sorryAx`. The Phase 0.3 footprint-erasure obligation is discharged.
+
+**Phase 0.2 — `ProgSim/ExecFacts.lean`:** 42 one-layer `exec_*` unfolder lemmas
+for `Prog.exec` (ported from the Ctrl set, retargeted for dbase/pad/the real
+`call`/ld/sd/cref/clen), each a one-line `simp [exec, …]`, in `namespace
+LowIR.Prog`. They peel exactly one fuel layer so no downstream proof runs
+`simp [exec]` with an IH in scope (the OOM trap).
+
+**Phase 3 (start) — `ProgSim/WordMem.lean`:** the 64-bit LE load/store algebra
+on the trusted `Rv64i.State` — the reusable heart of the frame-slot facts.
+`loadWord_storeWord_same` (round-trip, no overflow hypothesis: the 8 byte
+addresses differ by distinct literals), `storeWord_mem_of_ne`/`_outside`, and
+`loadWord_storeWord_disjoint` (a store to `[a,a+8)` leaves a load at a
+non-overlapping `[a',a'+8)` untouched). Proof note: `bv_decide` can't handle
+`>>>` in this toolchain, so byte reconstruction goes via `getLsbD`
+extensionality. Factored through one reusable lemma `byte_bit` (bit `i` of the
+shifted byte `c` = `v`'s bit `i` iff `i ∈ [c,c+8)`); the round-trip is then the
+OR of eight windows tiling `[0,64)`, closed by `omega`. Two toolchain gotchas
+the speed turns on: `omega` rejects a *Bool*-valued goal (convert via
+`Bool.eq_iff_iff` first) and that `rw` leaves an `↔ True` wrapper `omega` can't
+strip (`iff_true` in the `simp` set). ~sub-second, no raised heartbeats
+(down from a 12 s / 128-way bit-blast first cut).
 - §3.1 relation: `memRange`/`MachPriv` (+ computable `machPrivB`, #guard'd:
   blob byte private, slot byte private, user-frame byte NOT — and the P1
   tiling `sp + userOff = sp0 − frameSize`), `MachStack`, `StInv` (sp≡x2,
