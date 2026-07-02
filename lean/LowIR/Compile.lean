@@ -243,15 +243,22 @@ def resolveOne (lbls : List (Nat × Nat)) (fns : List (Name × Nat)) :
     address, occupied by a real instruction so no function entry can collide
     with it — then every function in env order. Run the result with
     `runFuel (codeBase+4)`. `none` = ill-formed env, per-function limits
-    exceeded, missing entry, or a branch/jump out of range. -/
-def compileProg (env : Env) (entry : Name) : Option (List Instr) :=
+    exceeded, missing entry, or a branch/jump out of range. The `T` variant
+    also returns the function→byte-offset table (e.g. for an external shim
+    that calls a function inside the blob directly). -/
+def compileProgT (env : Env) (entry : Name) :
+    Option (List Instr × List (Name × Nat)) :=
   if !(wfEnv env && env.all (fun nf => fnOk nf.2) && (List.lookup entry env).isSome)
   then none
   else
     let segs : List (Name × List SymInstr) :=
       (env.mapM (fun nf => do pure (nf.1, ← compileFun nf.2)) : M _).run' 0
     let (flat, lbls, fns) := layout (("", [.callf entry, .ins (jal0 0)]) :: segs) 0
-    (flat.mapM (resolveOne lbls fns)).map List.flatten
+    ((flat.mapM (resolveOne lbls fns)).map List.flatten).map
+      (fun is => (is, fns.filter (fun f => f.1 != "")))
+
+def compileProg (env : Env) (entry : Name) : Option (List Instr) :=
+  (compileProgT env entry).map (·.1)
 
 /-- Program bytes (little-endian), ready to load at a code base. -/
 def progBytes (env : Env) (entry : Name) : Option (List Byte) :=

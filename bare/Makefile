@@ -45,7 +45,15 @@ run: hex0.elf
 run1: hex1.elf
 	$(RUNENV) $(QEMU) $(QFLAGS) hex1.elf
 
-clean:
-	rm -f hex0.elf hex0.bin hex1.elf hex1.bin
+# The LowIR-compiled library blob. progmain.bin/.inc/.expected are emitted by
+#   cd ../lean && lake env lean --run DumpProgMain.lean
+progmain.elf: shellmain.s progmain.bin progmain.inc link.ld
+	$(CC) $(ASFLAGS) $(LDFLAGS) -o $@ shellmain.s
 
-.PHONY: all dis dis1 run run1 clean
+run-progmain: progmain.elf
+	$(RUNENV) $(QEMU) $(QFLAGS) progmain.elf
+
+clean:
+	rm -f hex0.elf hex0.bin hex1.elf hex1.bin progmain.elf
+
+.PHONY: all dis dis1 run run1 run-progmain clean
