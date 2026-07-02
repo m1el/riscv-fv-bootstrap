@@ -166,13 +166,55 @@ Two flavors exist:
   fiction — argument passing, callee-saved discipline, frame slots — which is exactly pass 4's
   job and is now *located* there rather than added.
 
+### D8. Per-function frames: `frameSize` in `FunDef`, semantic `sp` in `St` — no alloca statement
+- **Decision** (2026-07, not yet implemented). `FunDef` gains `frameSize : Nat`. `St` gains
+  `sp : Word` — a **semantic component programs cannot write** (it is not a register). Call
+  semantics: check `sp − frameSize ≥ stackLo` (else `none` — the same "didn't complete" channel
+  as fuel exhaustion), run the body with `sp := sp − frameSize` and the **frame base bound into
+  a designated register** of the fresh file (an implicit extra parameter alongside `params`);
+  on `ret` the caller resumes with its own `sp` — restoration is structural, never
+  program-visible. **No new statements**: the frame is accessed through the existing
+  loads/stores (Ext. 1's `ld/sd` included) off the frame-base register, by plain address
+  arithmetic. **Dynamic-size stack allocation (`alloca`/VLAs) is explicitly disallowed**; heap
+  allocation (`malloc`/`calloc`/`free`) remains non-primitive per N7 — libc functions verified
+  on top, never IR constructs.
+- **Rationale.**
+  - *Frame lifetime = activation* ⇒ deallocation coincides with the existing `ret` boundary —
+    zero interaction with the `Outcome` machinery. (A scoped `stackalloc` statement would put a
+    pop obligation into every early-exit case: `ret`/`brkB`/`contL` crossing the scope.)
+  - *Freshness ⇒ disjointness by construction*: a once-proved **stack-discipline lemma** (frames
+    nest downward from `sp₀`; live frames are pairwise-disjoint unique `Slice`s) plus one global
+    hypothesis "the stack region `[stackLo, sp₀)` is disjoint from program data" (bedrock2's
+    `machine_ok` has literally this conjunct) makes every frame automatically disjoint from
+    heap, caller buffers, and sibling frames — Ext. 4's goal, without block memory and without
+    per-call proofs.
+  - *Address-independence without nondeterminism*: `sp₀` is **universally quantified in every
+    theorem** (as all of `St` already is — hex0 quantifies `inBase`/`outBase` the same way), so
+    programs provably cannot depend on concrete frame addresses. bedrock2 buys this guarantee
+    with a nondeterministic address pick; ∀-quantification buys it while keeping `exec`
+    deterministic.
+  - *Precedents*: CompCert Cminor's `fn_stackspace` and Caesium's `CallS` stack blocks
+    (per-function, signature-declared); bedrock2's statement-level `stackalloc` rejected here
+    for its nondeterminism (breaks `Option`-deterministic `exec`) and scope/outcome
+    interactions.
+- **Alternatives rejected.** (a) SP-as-register convention (Ext. 2's original sketch) — dead
+  after D7: registers are function-local, so an SP would be an explicit argument to every
+  function and frame disjointness manual bookkeeping. (b) Statement-level scoped `stackalloc` —
+  see above. (c) Dynamic `alloca` — excluded outright.
+- **Status / caveat.** End-to-end theorems gain the static precondition "total frame usage
+  along the call tree ≤ stack size" — computable without recursion (the recursion policy itself
+  is still the open C5 decision). Compile-side: pass 4 lays out **one** physical frame =
+  `frameSize` + spill slots + saved `ra`; `match_states` relates semantic `sp` to the real `sp`
+  register; passes 2–3 never see frames at all.
+
 ---
 
 ## 2. Current non-features (deliberate gaps)
 
 - **No stack / SP / frames / `alloca`.** Stack data is *representable* (a `mem` region off a chosen SP
   register, addressed by arithmetic) but unsupported by convention or sugar. Address-taken/aggregate locals
-  would have to be placed in `mem` by hand.
+  would have to be placed in `mem` by hand. **Decided (D8):** per-function frames via
+  `FunDef.frameSize` + a semantic, program-unwritable `sp` in `St`; awaiting implementation.
 - **`call` is a `ret`-boundary, not an activation boundary.** `Ctrl.call g` (added `d7f8298`,
   worked example in `CtrlCall.lean`) runs the callee body in the *same* state — shared register
   file, shared memory — and catches the callee's `ret`. There is no argument passing, no fresh
@@ -227,18 +269,22 @@ One-line summary: **the IL owns functional meaning over flat state; everything a
    **Priority bump (2026-07): compiler-forced.** `compile_sim` pass 4 spills 64-bit registers;
    synthesizing an 8-byte spill from eight `sb`s is absurd, so `ld`/`sd` must exist in the IL
    *before* pass 4 regardless of what source programs need.
-2. **Stack as a `mem` region + SP convention.** Pick a register as SP; frames are decrements. Each frame /
-   stack struct is a **unique `Slice`** in the borrow layer — disjoint from heap, caller buffers, and
-   sibling frames. Then "the callee's locals don't alias the caller's `&out`" is the *same* separation
-   theorem as hex0's input/output disjointness — no new machinery. Forced by the first address-taken local
-   or non-caller-provided buffer.
+2. **Stack as a `mem` region + SP convention.** ~~Pick a register as SP; frames are decrements.~~
+   **Resolved by D8** (the register-convention sketch died with D7's function-local registers):
+   per-function `frameSize` + semantic `sp` in `St`; each frame is a unique `Slice` minted by the
+   call rule, disjoint by the once-proved stack-discipline lemma. Implementation forced by the
+   first address-taken local or non-caller-provided buffer.
 3. **`call`/return with return-address** (vs. whole-program inlining). Needed for *compositional*
    per-function verification of non-leaf functions. Brings a calling convention; locals-as-stack-slots
    becomes natural. Until then, inline.
-4. **`alloca` / fresh-region primitive.** If manual per-frame/per-object disjointness bookkeeping comes to
-   dominate proofs (it will, once many frames + heap objects coexist), add a primitive that mints a
-   *provably-fresh, disjoint* `Slice` — recovering block-memory's "freshness ⇒ disjointness for free"
-   *locally*, without switching the whole memory model. The escape hatch toward block memory if D5 strains.
+4. **`alloca` / fresh-region primitive.** ~~Add a primitive that mints a provably-fresh, disjoint
+   `Slice`.~~ **Resolved by D8 for stack objects**: the call rule mints the frame as a fresh
+   unique `Slice`, disjointness from the once-proved stack-discipline lemma + the single
+   stack-region-⊥-data hypothesis — block-memory's "freshness ⇒ disjointness" recovered locally,
+   no new statement. **Residual scope: heap objects** — when a verified `malloc` arrives (a libc
+   function per N7, not a primitive), *its spec* plays this role (returns a fresh unique `Slice`
+   disjoint from all live borrows); if that spec's bookkeeping strains D5, this entry revives as
+   the escape hatch toward block memory.
 5. **Borrow-typed higher IRs (the strategic direction).** Promote the `Wf` precondition from a loose `Prop`
    into pointer *types*. Pipeline:
    - **HIR (Tree Borrows, temporal):** `&'a [u8]` / `&'a mut [u8]`; validity time-varying (reborrow,
