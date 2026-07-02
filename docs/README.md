@@ -25,7 +25,8 @@ indexed by the README.md of its own directory.
 
 ## Status & handoffs
 
-- [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) — **the ACTIVE handoff: the executable LowIR compiler cut** (post-D7/D8 design session): survey findings (Rv64i model already has all 16 needed encodings; build-root trap), and the detailed plan — Prog.lean IR core, memory-locals compilation strategy, differential-testing regime, commit milestones.
+- [RESUME-PROGSIM.md](RESUME-PROGSIM.md) — **the ACTIVE handoff: proving `compile_sim` for Prog** (compiler correctness for the D7/D8 IR): the address-divergence obstacle and the P1 two-stack lowering decision, the simulation relation and theorem statements, the footprint side-condition design, six proof phases with risk/size estimates, file/build plan, and the vertical-slice go/no-go checkpoint.
+- [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) — handoff for the executable LowIR compiler cut (**DONE 2026-07-02**; kept for the design rationale): survey findings, Prog.lean IR core, memory-locals compilation strategy, differential-testing regime.
 
 (Handoffs for completed campaigns — hex0/hex1 status, task-#7 cross-check, the
 LowIR structured-IL effort, the IR design session, and the original project
