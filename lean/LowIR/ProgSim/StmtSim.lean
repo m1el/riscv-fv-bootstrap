@@ -158,6 +158,36 @@ theorem step_sb (m : State) (rs1 rs2 : Nat) (imm : BitVec 12)
                (m.pc + 4) := by
   simp only [step, h]
 
+/-! ## Control-transfer machine steps (branches + `jal`).
+
+    `jal x0` (the `.jmp` lowering) writes x0 (discarded) and jumps `pc + off`; the
+    four branches jump `pc + off` when their condition holds, else fall through to
+    `pc + 4`. The offset is `imm.signExtend 64` with `imm` the resolved byte delta
+    `target − here`. -/
+theorem step_jal (m : State) (rd : Nat) (imm : BitVec 21)
+    (h : decode (fetch32 m) = .jal rd imm) :
+    step m = (m.rset rd (m.pc + 4)).setPc (m.pc + imm.signExtend 64) := by simp only [step, h]
+
+theorem step_beq (m : State) (a b : Nat) (imm : BitVec 13)
+    (h : decode (fetch32 m) = .beq a b imm) :
+    step m = m.setPc (if m.rget a = m.rget b then m.pc + imm.signExtend 64 else m.pc + 4) := by
+  simp only [step, h]
+
+theorem step_blt (m : State) (a b : Nat) (imm : BitVec 13)
+    (h : decode (fetch32 m) = .blt a b imm) :
+    step m = m.setPc (if (m.rget a).slt (m.rget b) then m.pc + imm.signExtend 64 else m.pc + 4) := by
+  simp only [step, h]
+
+theorem step_bge (m : State) (a b : Nat) (imm : BitVec 13)
+    (h : decode (fetch32 m) = .bge a b imm) :
+    step m = m.setPc (if (m.rget a).slt (m.rget b) then m.pc + 4 else m.pc + imm.signExtend 64) := by
+  simp only [step, h]
+
+theorem step_bgeu (m : State) (a b : Nat) (imm : BitVec 13)
+    (h : decode (fetch32 m) = .bgeu a b imm) :
+    step m = m.setPc (if (m.rget a).ult (m.rget b) then m.pc + 4 else m.pc + imm.signExtend 64) := by
+  simp only [step, h]
+
 /-! ## Immediate roundtrip for slot offsets. -/
 
 /-- A small non-negative 12-bit immediate sign-extends to itself: the machine's
@@ -171,6 +201,40 @@ theorem signExtend_ofNat_lt (v : Nat) (h : v < 2 ^ 11) :
     rw [BitVec.toInt_eq_toNat_bmod, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega)]
     rw [Int.bmod_eq_emod_of_lt] <;> simp <;> omega
   simp only [BitVec.signExtend, ht, BitVec.ofInt_natCast]
+
+/-! ## Signed branch/jump offsets sign-extend to themselves.
+
+    The control-transfer offset `δ = target − here` is a signed byte delta laid
+    into a 21-bit (`jal`) or 13-bit (branch) immediate; `resolveOne` only emits it
+    when it fits. Then `imm.signExtend 64` recovers `δ` as a 64-bit value. Same
+    `toInt = bmod` route as `signExtend_ofNat_lt`, staying `[propext, Quot.sound]`
+    (the `bmod` identity closes by `Int.bmod_def; split <;> omega` at the concrete
+    modulus). -/
+theorem signExtend_ofInt_21 (δ : Int) (hlo : -(2 ^ 20) ≤ δ) (hhi : δ < 2 ^ 20) :
+    (BitVec.ofInt 21 δ).signExtend 64 = BitVec.ofInt 64 δ := by
+  have ht : (BitVec.ofInt 21 δ).toInt = δ := by
+    rw [BitVec.toInt_ofInt]; show Int.bmod δ (2 ^ 21) = δ
+    rw [Int.bmod_def]; split <;> omega
+  simp only [BitVec.signExtend, ht]
+
+theorem signExtend_ofInt_13 (δ : Int) (hlo : -(2 ^ 12) ≤ δ) (hhi : δ < 2 ^ 12) :
+    (BitVec.ofInt 13 δ).signExtend 64 = BitVec.ofInt 64 δ := by
+  have ht : (BitVec.ofInt 13 δ).toInt = δ := by
+    rw [BitVec.toInt_ofInt]; show Int.bmod δ (2 ^ 13) = δ
+    rw [Int.bmod_def]; split <;> omega
+  simp only [BitVec.signExtend, ht]
+
+/-- Landing arithmetic: a PC-relative transfer from `codeBase + here` by the
+    signed delta `target − here` lands at `codeBase + target` — regardless of
+    direction (forward or backward), in `BitVec 64` (wrap-safe). -/
+theorem jump_lands (cb : Word) (here tgt : Nat) :
+    cb + BitVec.ofNat 64 here + BitVec.ofInt 64 ((tgt : Int) - (here : Int))
+      = cb + BitVec.ofNat 64 tgt := by
+  rw [BitVec.add_assoc]; congr 1
+  rw [show (BitVec.ofNat 64 here) = BitVec.ofInt 64 (here : Int) from by simp [BitVec.ofInt_natCast],
+      show (BitVec.ofNat 64 tgt) = BitVec.ofInt 64 (tgt : Int) from by simp [BitVec.ofInt_natCast],
+      ← BitVec.ofInt_add]
+  congr 1; omega
 
 /-! ## `StInv` is insensitive to scratch registers and `pc`.
 
@@ -513,6 +577,33 @@ def MemAccOff (L : Layout) (holes : List Hole)
         (∀ s1, LowIR.Prog.exec P dbase pad stackLo fuel a s = some (s1, .normal) →
            MemAccOff L holes P dbase pad stackLo fuel b s1)
   | _, _, _ => True
+
+/-! ## `jump_sim` — the leaf unconditional jump (the `ret`/`brkB`/`contL` atom).
+
+    An unconditional `jal x0, δ` at `codeBase + here` (the resolution of `.jmp l`,
+    with `δ = target − here`) leaves the IL state untouched (jumps don't mutate
+    state — `exec` gives `(s, .ret/.brk/.cont)`) and lands the machine at
+    `codeBase + target`, preserving `StInv`. This is the whole content of the three
+    leaf control-transfer ops; the outcome-carrying `lower_sim` will invoke it once
+    the label environment resolves `target` (epilogue / break / continue label).
+    `δ`'s range is exactly `resolveOne`'s `jmp` guard. -/
+theorem jump_sim (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State)
+    (here tgt : Nat) (δ : Int)
+    (hinv : StInv L fd holes s m)
+    (hpc  : m.pc = L.codeBase + BitVec.ofNat 64 here)
+    (hem  : Emitted L here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 δ)])
+    (hδ   : δ = (tgt : Int) - (here : Int))
+    (hlo  : -(2 ^ 20) ≤ δ) (hhi : δ < 2 ^ 20) :
+    StInv L fd holes s (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 tgt := by
+  have hinst : Installed L m := hinv.2.2.1
+  have hd : decode (fetch32 m) = Rv64i.Instr.jal 0 (BitVec.ofInt 21 δ) := by
+    have h := decode_at L m m here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 δ)] hem hinst 0
+                (by simp) (by rw [hpc, Nat.mul_zero, Nat.add_zero]) rfl
+    simpa using h
+  have hs := step_jal m 0 (BitVec.ofInt 21 δ) hd
+  refine ⟨?_, ?_⟩
+  · rw [hs]; exact StInv_scratch L fd holes s m 0 (m.pc + 4) _ (by decide) hinv
+  · rw [hs, pc_setPc, hpc, signExtend_ofInt_21 δ hlo hhi, hδ, jump_lands]
 
 /-! ## `lower_sim` — the statement-level simulation (VERTICAL SLICE).
 
