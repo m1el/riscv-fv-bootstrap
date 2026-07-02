@@ -106,6 +106,32 @@ theorem State_storeByte_rget (m : State) (addr : Word) (b : Byte) (r : Nat) :
     (m.storeByte addr b).rget r = m.rget r := by
   simp [State.storeByte, State.rget]
 
+/-! ## §2.5 — pointwise-off ⇒ range-disjoint (feeds §3/§4 from `MemAccOff`).
+
+    `MemAccOff` gives "each of the 8 (or 1) bytes is off `MachPriv`"; the store
+    lemmas want `toNat` range-disjointness. With no wrap, the two are equivalent —
+    if the ranges overlapped, some byte would land inside. Proved constructively
+    (no `by_contra`, which would pull `Classical`). -/
+theorem range_disjoint_of_bytes (addr base : Word) (len : Nat)
+    (hlen : 0 < len) (hwa : addr.toNat + 8 ≤ 2 ^ 64)
+    (hoff : ∀ i, i < 8 → ¬ memRange (addr + BitVec.ofNat 64 i) base len) :
+    addr.toNat + 8 ≤ base.toNat ∨ base.toNat + len ≤ addr.toNat := by
+  have key : ∀ i, i < 8 →
+      ¬ (base.toNat ≤ addr.toNat + i ∧ addr.toNat + i < base.toNat + len) := by
+    intro i hi hc
+    refine hoff i hi ?_
+    have ht : (addr + BitVec.ofNat 64 i).toNat = addr.toNat + i := by
+      simp only [BitVec.toNat_add, BitVec.toNat_ofNat, Nat.reducePow]; omega
+    unfold memRange; rw [ht]; exact hc
+  rcases Nat.lt_or_ge (addr.toNat + 8) (base.toNat + 1) with h | h
+  · exact Or.inl (by omega)
+  rcases Nat.lt_or_ge addr.toNat (base.toNat + len) with h2 | h2
+  · exfalso
+    rcases Nat.lt_or_ge addr.toNat base.toNat with h3 | h3
+    · exact key (base.toNat - addr.toNat) (by omega) ⟨by omega, by omega⟩
+    · exact key 0 (by omega) ⟨by omega, by omega⟩
+  · exact Or.inr (by omega)
+
 /-! ## §3 — the payoff: a user `storeWord` preserves `StInv`.
 
     The store hits `addr`, off THIS activation's hole `[sp, sp + userOff fd)` (so

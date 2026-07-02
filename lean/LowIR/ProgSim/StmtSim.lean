@@ -505,7 +505,8 @@ def MemAccOff (L : Layout) (holes : List Hole)
       ∀ i, i < 8 → ¬ MachPriv L holes (s.rget rs + imm.signExtend 64 + BitVec.ofNat 64 i)
   | _, .lbu _ rs imm, s => ¬ MachPriv L holes (s.rget rs + imm.signExtend 64)
   | _, .sd rb _ imm, s =>
-      ∀ i, i < 8 → ¬ MachPriv L holes (s.rget rb + imm.signExtend 64 + BitVec.ofNat 64 i)
+      (s.rget rb + imm.signExtend 64).toNat + 8 ≤ 2 ^ 64 ∧
+        ∀ i, i < 8 → ¬ MachPriv L holes (s.rget rb + imm.signExtend 64 + BitVec.ofNat 64 i)
   | _, .sb rb _ imm, s => ¬ MachPriv L holes (s.rget rb + imm.signExtend 64)
   | fuel + 1, .seq a b, s =>
       MemAccOff L holes P dbase pad stackLo fuel a s ∧
@@ -700,6 +701,79 @@ theorem lower_sim
             show m'.mem _ = s.mem _
             rw [congrFun hmem]; exact (hinv.2.2.2.1 _ haccess).symm
           rw [hb])
+    case sd rb rv imm =>
+      rw [LowIR.Prog.exec_sd, Option.some.injEq, Prod.mk.injEq] at hexec
+      obtain ⟨rfl, -⟩ := hexec
+      simp only [maxRegS] at hreg
+      simp only [MemAccOff] at haccess
+      obtain ⟨hwaddr, hoff⟩ := haccess
+      have hrb : rb ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
+      have hrv : rv ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
+      have hfrb : slotOff rb < 2 ^ 11 := by have := slotOff_add8_le_userOff fd rb hrb; omega
+      have hfrv : slotOff rv < 2 ^ 11 := by have := slotOff_add8_le_userOff fd rv hrv; omega
+      have hinst : Installed L m := hinv.2.2.1
+      -- emit = loadSlotI rb T0 ++ loadSlotI rv T1 ++ [.sd T0 T1 imm]; load both operands
+      have hemL0 : Emitted L pos (loadSlotI rb T0) :=
+        Emitted_append_left L pos _ _ (Emitted_append_left L pos _ _ hem)
+      obtain ⟨hinv1, h1pc, h1mem, h1T0, -⟩ :=
+        run_load L fd holes s m rb T0 pos hinv hrb hfrb (by decide) (by decide) hpc hemL0
+      have hemL1 : Emitted L (pos + 4) (loadSlotI rv T1) := by
+        have h := Emitted_append_right L pos (loadSlotI rb T0) (loadSlotI rv T1)
+                    (Emitted_append_left L pos _ _ hem)
+        rwa [loadSlotI_length, Nat.mul_one] at h
+      obtain ⟨hinv2, h2pc, h2mem, h2T1, h2oth⟩ :=
+        run_load L fd holes s (step m) rv T1 (pos + 4) hinv1 hrv hfrv (by decide) (by decide)
+          h1pc hemL1
+      have h2T0 : (step (step m)).rget T0 = s.rget rb := by rw [h2oth T0 (by decide)]; exact h1T0
+      have h2memm : (step (step m)).mem = m.mem := by rw [h2mem, h1mem]
+      -- the store instruction at pos+8
+      have hemS : Emitted L (pos + 8) [Instr.sd T0 T1 imm] := by
+        have h := Emitted_append_right L pos (loadSlotI rb T0 ++ loadSlotI rv T1)
+                    [Instr.sd T0 T1 imm] hem
+        rw [List.length_append, loadSlotI_length, loadSlotI_length] at h; simpa using h
+      have hdS : decode (fetch32 (step (step m))) = Instr.sd T0 T1 imm := by
+        have h := decode_at L m (step (step m)) (pos + 8) [Instr.sd T0 T1 imm] hemS hinst 0 (by simp)
+                    (by rw [h2pc]) h2memm
+        simpa using h
+      have hsS : step (step (step m)) = (((step (step m)).storeWord
+              (s.rget rb + imm.signExtend 64) (s.rget rv))).setPc ((step (step m)).pc + 4) := by
+        rw [step_sd (step (step m)) T0 T1 imm hdS, h2T0, h2T1]
+      -- range facts from `MemAccOff`: the store's 8 bytes are off the frame hole + blob
+      have hhole_mem : (s.sp, userOff fd) ∈ holes := by
+        have h5 := hinv.2.2.2.2.1
+        cases holes with
+        | nil => simp at h5
+        | cons h0 t =>
+            simp only [List.head?_cons, Option.some.injEq] at h5; rw [← h5]; exact List.mem_cons_self
+      have hbl0 : 0 < L.blobLen := by
+        have hlen : 0 < (emit (LowIR.Prog.Stmt.sd rb rv imm)).length := by
+          simp only [emit, List.length_append, loadSlotI_length, List.length_cons,
+                     List.length_nil]; omega
+        obtain ⟨h2i, -⟩ := hem.2 0 hlen
+        simp only [Layout.blobLen]; omega
+      have huo : 0 < userOff fd := by show 0 < 8 * (maxRegF fd + 2); omega
+      have hhole : (s.rget rb + imm.signExtend 64).toNat + 8 ≤ s.sp.toNat
+                     ∨ s.sp.toNat + userOff fd ≤ (s.rget rb + imm.signExtend 64).toNat :=
+        range_disjoint_of_bytes _ s.sp (userOff fd) huo hwaddr
+          (fun i hi hc => hoff i hi (Or.inr ⟨(s.sp, userOff fd), hhole_mem, hc⟩))
+      have hbdA : L.codeBase.toNat + L.blobLen ≤ (s.rget rb + imm.signExtend 64).toNat
+                    ∨ (s.rget rb + imm.signExtend 64).toNat + 8 ≤ L.codeBase.toNat :=
+        (range_disjoint_of_bytes _ L.codeBase L.blobLen hbl0 hwaddr
+          (fun i hi hc => hoff i hi (Or.inl hc))).symm
+      have hStore := StInv_storeWord_user L fd holes s (step (step m))
+        (s.rget rb + imm.signExtend 64) (s.rget rv) hinv2 hwaddr hhole hbdA hseg hblob hnw
+      refine ⟨3, ?_, ?_⟩
+      · have hrun : stepN 3 m = ((step (step m)).storeWord
+            (s.rget rb + imm.signExtend 64) (s.rget rv)).setPc ((step (step m)).pc + 4) := by
+          simp only [stepN]; exact hsS
+        rw [hrun]
+        exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hStore
+      · have hrun : stepN 3 m = ((step (step m)).storeWord
+            (s.rget rb + imm.signExtend 64) (s.rget rv)).setPc ((step (step m)).pc + 4) := by
+          simp only [stepN]; exact hsS
+        rw [hrun, pc_setPc, h2pc, pc_add4]
+        exact pc_congr _ (by simp only [emit, List.length_append, loadSlotI_length,
+                                        List.length_cons, List.length_nil])
     all_goals sorry
 
 /-! ## Toy end-to-end corollary: `sub3` — the differential-oracle sanity check.
