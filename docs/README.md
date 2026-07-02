@@ -18,6 +18,7 @@ New docs go in this directory; add a line for each new doc below.
 - [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md) — exploration + plan for formalizing & verifying libc: survey of the `third-party/` substrate (CompCert, Frama-C, CakeML/Pancake, Tree Borrows, POSIX spec, fv-libc partition), the design space, and the recommended path.
 - [MEMORY-BORROWS.md](MEMORY-BORROWS.md) — the separation discipline for libc specs: shared-input / unique-output borrows (Tree-Borrows residue), the single-threaded-errno assumption, and the `Slice`/`Borrow`/`Wf`/`Disjoint` layer.
 - [LOWIR-DESIGN.md](LOWIR-DESIGN.md) — design record for the lower IR: the decisions made (structured IL, unbounded registers + flat byte memory, non-local control flow, clocked semantics, borrows-not-blocks, single-threaded errno), the alternatives rejected, and the likely extensions (wider load/store, stack/frames, calls, `alloca`, borrow-typed higher IRs, `Ctrl` `compile_sim`).
+- [DESIGN-THESES.md](DESIGN-THESES.md) — ten design theses distilled from the third-party review series, culminating in the target: a borrow-checked, GC-free, C-power language verified down to machine code (the "empty cell" no surveyed project fills), and the composition that would fill it (borrow gate → prophecies → verified backend).
 
 ## Status & handoffs
 
