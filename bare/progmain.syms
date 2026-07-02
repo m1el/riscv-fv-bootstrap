@@ -5,3 +5,8 @@
 --add-symbol hex0=.text:1112,function,global
 --add-symbol hex1=.text:2696,function,global
 --add-symbol main=.text:7772,function,global
+--add-symbol cmain=.text:9052,function,global
+--add-symbol hi=.text:9528,object,global
+--add-symbol num=.text:9536,object,global
+--add-symbol hex0src=.text:9552,object,global
+--add-symbol hex1src=.text:9568,object,global

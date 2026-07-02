@@ -286,11 +286,37 @@ def mainF : FunDef :=
             .call 4 2 "hex1" #v[16, 17, 18, 19] #v[26, 27],
             .ld 28 8 48, .ld 29 8 80, .add 28 28 29 ]) }
 
+/-- The same driver on CONST SLICES: every input comes from the data segment
+    via `cref`/`clen` (no byte-by-byte staging); the frame only holds the two
+    output buffers (16 bytes). Same 8 observables as `main`. -/
+def cmainF : FunDef :=
+  { argc := 0, rvc := 8, params := #v[], rets := #v[21, 22, 23, 24, 25, 26, 27, 28]
+    frameSize := 16, frameReg := 8
+    body := seqs
+      [ .cref 20 "hi",
+        .call 1 1 "strlen" #v[20] #v[21],
+        .cref 20 "num",
+        .call 1 2 "strtoull" #v[20] #v[22, 23],
+        .cref 16 "hex0src", .clen 17 "hex0src", .addi 18 8 0, lit 19 8,
+        .call 4 2 "hex0" #v[16, 17, 18, 19] #v[24, 25],
+        .cref 16 "hex1src", .clen 17 "hex1src", .addi 18 8 8, lit 19 8,
+        .call 4 2 "hex1" #v[16, 17, 18, 19] #v[26, 27],
+        .ld 28 8 0, .ld 29 8 8, .add 28 28 29 ] }
+
 def libEnv : Env :=
   [("strlen", strlenF), ("strtoull", strtoullF), ("hex0", hex0F),
-   ("hex1", hex1F), ("main", mainF)]
+   ("hex1", hex1F), ("main", mainF), ("cmain", cmainF)]
 
-#guard wfEnv libEnv
+def libData : Data :=
+  [("hi",      ((sbytes "Hi!" ++ [0]).map (BitVec.ofNat 8))),
+   ("num",     ((sbytes "123456789" ++ [0]).map (BitVec.ofNat 8))),
+   ("hex0src", ((sbytes "48 65 6C 6C 6F").map (BitVec.ofNat 8))),
+   ("hex1src", ((sbytes ":A 00 %A").map (BitVec.ofNat 8)))]
+
+/-- The whole library as a Program (functions + rodata). -/
+def libProgram : Program := { env := libEnv, data := libData }
+
+#guard wfProgram libProgram
 
 /-! ## IL-level validation against the specs -/
 
@@ -306,7 +332,7 @@ def asBytes (l : List Nat) : List Byte := l.map (BitVec.ofNat 8)
 
 /-- Run a hex-decoder from the library env; result (status, out bytes, len). -/
 def hexRun (f : Name) (inp : List Nat) (cap fuel : Nat) : Nat × List Nat × Nat :=
-  match run libEnv 0 fuel f
+  match run libProgram 0 fuel f
           [inBase, BitVec.ofNat 64 inp.length, outBase, BitVec.ofNat 64 cap]
           (memIn (asBytes inp)) SP0 with
   | some s => ((s.rget 14).toNat,
@@ -355,7 +381,7 @@ theorem hex1F_extends_hex0 :
 /-- strtoull-as-a-function matches the conformant spec on its battery. -/
 theorem strtoullF_matches_spec :
     LowIR.Ctrl.Strtoull2.battery.all (fun inp =>
-      (match run libEnv 0 100000 "strtoull" [inBase] (memIn (asBytes inp)) SP0 with
+      (match run libProgram 0 100000 "strtoull" [inBase] (memIn (asBytes inp)) SP0 with
        | some s => (s.rget 12, (s.rget 14).toNat)
        | none   => (0xDEAD, 0))
       == LowIR.Ctrl.Strtoull2.strtoullConfSpec (asBytes inp)) = true := by
@@ -364,7 +390,7 @@ theorem strtoullF_matches_spec :
 /-- strlen over a few strings. -/
 theorem strlenF_ok :
     [("", 0), ("x", 1), ("Hello", 5), ("Hi!", 3)].all (fun tc =>
-      (match run libEnv 0 1000 "strlen" [inBase]
+      (match run libProgram 0 1000 "strlen" [inBase]
                (memIn (asBytes (sbytes tc.1 ++ [0]))) SP0 with
        | some s => (s.rget 12).toNat
        | none   => 999)
@@ -375,8 +401,17 @@ theorem strlenF_ok :
     checksum = the "Hello" buffer word + the hex1 output word
     ([00 FB FF FF FF] LE, zero-padded). -/
 theorem main_il_ok :
-    (run libEnv 0 100000 "main" [] (fun _ => 0) SP0).map
+    (run libProgram 0 100000 "main" [] (fun _ => 0) SP0).map
       (fun s => mainF.rets.toList.map s.rget)
+    = some [3, 123456789, 0, 0, 5, 0, 5,
+            (0x0000006F6C6C6548 : Word) + 0x000000FFFFFFFB00] := by
+  native_decide
+
+/-- The const-slice driver produces the SAME observables — inputs read from
+    the data segment instead of being staged byte-by-byte into the frame. -/
+theorem cmain_il_ok :
+    (run libProgram 0 100000 "cmain" [] (fun _ => 0) SP0).map
+      (fun s => cmainF.rets.toList.map s.rget)
     = some [3, 123456789, 0, 0, 5, 0, 5,
             (0x0000006F6C6C6548 : Word) + 0x000000FFFFFFFB00] := by
   native_decide

@@ -195,18 +195,18 @@ theorem diff_sumdata : diffOk LowIR.Prog.sumData "sumd" [] = true := by
     outputs at DATA+64, compared byte-for-byte), and the `main` driver that
     stages everything in its own frame — 8 observables at once. -/
 
-open LowIR.Prog.Lib (libEnv sbytes asBytes)
+open LowIR.Prog.Lib (libProgram sbytes asBytes)
 
-theorem diff_lib_strlen : diffOk libEnv "strlen" [DATA]
+theorem diff_lib_strlen : diffOk libProgram "strlen" [DATA]
     (data := asBytes (sbytes "Hello, differential world!" ++ [0])) = true := by
   native_decide
 
-theorem diff_lib_strtoull_ok : diffOk libEnv "strtoull" [DATA]
+theorem diff_lib_strtoull_ok : diffOk libProgram "strtoull" [DATA]
     (data := asBytes (sbytes "123456789x"))
     (ilFuel := 100000) = true := by native_decide
 
 -- 2^64 exactly: saturates to ULLONG_MAX with errno ERANGE on BOTH altitudes
-theorem diff_lib_strtoull_ovf : diffOk libEnv "strtoull" [DATA]
+theorem diff_lib_strtoull_ovf : diffOk libProgram "strtoull" [DATA]
     (data := asBytes (sbytes "18446744073709551616"))
     (ilFuel := 100000) = true := by native_decide
 
@@ -215,35 +215,40 @@ theorem diff_lib_strtoull_ovf : diffOk libEnv "strtoull" [DATA]
 def hexArgs (s : String) (cap : Nat) : List Word :=
   [DATA, BitVec.ofNat 64 (sbytes s).length, DATA + 64, BitVec.ofNat 64 cap]
 
-theorem diff_lib_hex0 : memDiffOk 80 libEnv "hex0"
+theorem diff_lib_hex0 : memDiffOk 80 libProgram "hex0"
     (hexArgs "48 65 6C 6C 6F" 8) (data := asBytes (sbytes "48 65 6C 6C 6F"))
     (ilFuel := 100000) = true := by native_decide
 
-theorem diff_lib_hex0_err : diffOk libEnv "hex0"
+theorem diff_lib_hex0_err : diffOk libProgram "hex0"
     (hexArgs "4_2" 8) (data := asBytes (sbytes "4_2"))
     (ilFuel := 100000) = true := by native_decide
 
-theorem diff_lib_hex1 : memDiffOk 80 libEnv "hex1"
+theorem diff_lib_hex1 : memDiffOk 80 libProgram "hex1"
     (hexArgs ":A 00 %A" 8) (data := asBytes (sbytes ":A 00 %A"))
     (ilFuel := 100000) = true := by native_decide
 
 -- backward AND forward refs, comments, a '\n' label — the busy case
-theorem diff_lib_hex1_fwd : memDiffOk 80 libEnv "hex1"
+theorem diff_lib_hex1_fwd : memDiffOk 80 libProgram "hex1"
     (hexArgs "%B 41 :B 42 #x\n:\n 00 %\n" 16)
     (data := asBytes (sbytes "%B 41 :B 42 #x\n:\n 00 %\n"))
     (ilFuel := 100000) = true := by native_decide
 
-theorem diff_lib_hex1_undef : memDiffOk 80 libEnv "hex1"
+theorem diff_lib_hex1_undef : memDiffOk 80 libProgram "hex1"
     (hexArgs "00 %Z" 8) (data := asBytes (sbytes "00 %Z"))
     (ilFuel := 100000) = true := by native_decide
 
-theorem diff_lib_hex1_dup : diffOk libEnv "hex1"
+theorem diff_lib_hex1_dup : diffOk libProgram "hex1"
     (hexArgs ":A 00 :A" 8) (data := asBytes (sbytes ":A 00 :A"))
     (ilFuel := 100000) = true := by native_decide
 
 /-- The driver: stages all inputs in its own frame, calls strlen + strtoull +
     hex0 + hex1, returns 8 observables — IL and compiled-machine agree on all. -/
-theorem diff_lib_main : diffOk libEnv "main" []
+theorem diff_lib_main : diffOk libProgram "main" []
+    (ilFuel := 200000) (mcFuel := 1000000) = true := by native_decide
+
+/-- The const-slice driver: same 8 observables, inputs from the blob's data
+    segment via cref/clen (jal-pc-read on the machine side). -/
+theorem diff_lib_cmain : diffOk libProgram "cmain" []
     (ilFuel := 200000) (mcFuel := 1000000) = true := by native_decide
 
 end LowIR.CompileTests

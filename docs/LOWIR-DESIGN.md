@@ -381,6 +381,21 @@ is to make them *specifiable*.
       the single-`sp` model, needs per-stack discipline lemmas and a B7-style switch stub; no
       libc-relevant benefit.
 
+12. **Const data segment + reference-to-const-slice** — **DONE 2026-07-02** (forced the moment a
+    driver had to stage string literals byte-by-byte with `sb` into its frame). `Program :=
+    { env, data : List (Name × List Byte) }`; statements `cref rd d` / `clen rd d` (a const
+    slice is the (ptr, len) pair). Semantics: object addresses come from a `dbase : Name →
+    Option Word` map, ∀-quantifiable exactly like D8's `sp₀` — programs stay address-independent;
+    the harness installs the objects (`layoutData`). `wf` checks existence; writes to const data
+    are NOT yet policed (that's the borrow layer's job, same story as D5). Compiler: data is
+    appended to the blob after the code (8-aligned); `clen` = fixed 3-instr constant synth;
+    `cref` = **`jal t0, +4` pc-read** + fixed delta synth + `add` — deliberately NO `auipc`, so
+    the 16-encoding trusted surface and whole-blob position-independence both survive.
+    - *Rejected*: `auipc` (new trusted encoding + new cross-check obligation for one addressing
+      mode); absolute data addresses chosen at compile time (breaks position independence AND
+      the ∀-`dbase` quantification); in-frame staging as the permanent answer (what this
+      extension replaces — ~2 instructions per byte of rodata).
+
 **Priorities (agreed 2026-07):** Ext. 8 first (cheapest, pays in every proof *and* in pass 2);
 then D7's `FunDef` implementation including the `Vect` arities and `BorrowSig` (the scaling
 decision — design the env once); then Ext. 1 (`ld`/`sd`, compiler-forced). Ext. 9 is the

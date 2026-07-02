@@ -1,5 +1,19 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-02 (later still) — Ext. 12: const data segment + cref/clen
+
+Commits ff8867c + (this): `Program := { env, data }`; `cref`/`clen` give
+reference-to-const-slice (ptr+len), addresses ∀-quantified via `dbase` (the
+D8 `sp₀` move). Compiler appends the data segment to the blob; `cref` lowers
+to a `jal t0,+4` pc-read + fixed delta synth — NO auipc, the 16-encoding
+surface and position-independence survive. `cmain` re-drives the whole
+library off const slices (inputs from rodata, frame holds only the output
+buffers) with the same 8 observables as the staged `main`; validated at all
+three altitudes again (IL `cmain_il_ok`, differential `diff_lib_cmain` +
+`diff_sumdata`, QEMU byte-for-byte). `make dismain` now labels data objects
+too (`<hex1src>` shows its ASCII in place). Design record: LOWIR-DESIGN.md
+Ext. 12.
+
 ## 2026-07-02 (later) — the library on Prog: strlen/strtoull/hex0/hex1 + driver
 
 `lean/LowIR/ProgLib.lean` (commit 8ba9a8f): the four programs as real D7/D8
