@@ -15,7 +15,7 @@
   yields the machine fetch. The Phase-2 connection `Emitted L pos (emit stmt)`
   from the real `layout`/`resolveOne` pipeline is deferred (AsmFacts).
 -/
-import LowIR.ProgSim.SlotFacts
+import LowIR.ProgSim.MemFacts
 
 namespace LowIR.ProgSim
 
@@ -665,6 +665,41 @@ theorem lower_sim
         | brk k => rw [LowIR.Prog.exec_seq_brk (h := hea)] at hexec; exact absurd hexec (by simp)
         | cont k => rw [LowIR.Prog.exec_seq_cont (h := hea)] at hexec; exact absurd hexec (by simp)
         | ret => rw [LowIR.Prog.exec_seq_ret (h := hea)] at hexec; exact absurd hexec (by simp)
+    case ld rd rs imm =>
+      rw [LowIR.Prog.exec_ld, Option.some.injEq, Prod.mk.injEq] at hexec
+      obtain ⟨rfl, -⟩ := hexec
+      simp only [maxRegS] at hreg
+      have hrs : rs ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
+      have hrd : rd ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
+      -- ld: single-source shape; the loaded value is the IL load (agreement at the
+      -- off-`MachPriv` address, `haccess`), the address is IL's (P1: T0 = s.rget rs).
+      exact single_op_sim s m rd rs pos (.ld T0 T0 imm)
+        (s.loadWord (s.rget rs + imm.signExtend 64)) hinv hpc hem hrs hrd
+        (by have := slotOff_add8_le_userOff fd rs hrs; omega)
+        (by have := slotOff_add8_le_userOff fd rd hrd; omega)
+        hnw hseg hblob hbd
+        (fun m' hd hT0 hmem => by
+          rw [step_ld m' T0 T0 imm hd, hT0,
+              loadWord_mem_congr m' m (s.rget rs + imm.signExtend 64) hmem,
+              loadWord_agree_off L fd holes s m (s.rget rs + imm.signExtend 64) hinv haccess])
+    case lbu rd rs imm =>
+      rw [LowIR.Prog.exec_lbu, Option.some.injEq, Prod.mk.injEq] at hexec
+      obtain ⟨rfl, -⟩ := hexec
+      simp only [maxRegS] at hreg
+      have hrs : rs ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
+      have hrd : rd ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
+      exact single_op_sim s m rd rs pos (.lbu T0 T0 imm)
+        ((s.loadByte (s.rget rs + imm.signExtend 64)).setWidth 64) hinv hpc hem hrs hrd
+        (by have := slotOff_add8_le_userOff fd rs hrs; omega)
+        (by have := slotOff_add8_le_userOff fd rd hrd; omega)
+        hnw hseg hblob hbd
+        (fun m' hd hT0 hmem => by
+          rw [step_lbu m' T0 T0 imm hd, hT0]
+          have hb : m'.loadByte (s.rget rs + imm.signExtend 64)
+              = s.loadByte (s.rget rs + imm.signExtend 64) := by
+            show m'.mem _ = s.mem _
+            rw [congrFun hmem]; exact (hinv.2.2.2.1 _ haccess).symm
+          rw [hb])
     all_goals sorry
 
 /-! ## Toy end-to-end corollary: `sub3` — the differential-oracle sanity check.

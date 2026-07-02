@@ -46,6 +46,28 @@ theorem loadWord_agree (s : St) (m : State) (a : Word)
 theorem loadByte_agree (s : St) (m : State) (a : Word) (h : s.mem a = m.mem a) :
     s.loadByte a = m.loadByte a := h
 
+/-- A `loadWord` depends only on the byte memory, so equal `.mem` gives equal loads. -/
+theorem loadWord_mem_congr (m1 m2 : State) (a : Word) (h : m1.mem = m2.mem) :
+    m1.loadWord a = m2.loadWord a := by simp only [State.loadWord, h]
+
+/-- The load-value payoff: at an address whose eight bytes are off `MachPriv`, the
+    machine load equals the IL load (`StInv` gives byte agreement there). -/
+theorem loadWord_agree_off (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State)
+    (addr : Word) (hinv : StInv L fd holes s m)
+    (hoff : ∀ i, i < 8 → ¬ MachPriv L holes (addr + BitVec.ofNat 64 i)) :
+    m.loadWord addr = s.loadWord addr := by
+  have h4 := hinv.2.2.2.1
+  have e0 : addr + BitVec.ofNat 64 0 = addr := by simp
+  refine (loadWord_agree s m addr ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_).symm
+  · exact h4 addr (e0 ▸ hoff 0 (by omega))
+  · exact h4 (addr + 1) (hoff 1 (by omega))
+  · exact h4 (addr + 2) (hoff 2 (by omega))
+  · exact h4 (addr + 3) (hoff 3 (by omega))
+  · exact h4 (addr + 4) (hoff 4 (by omega))
+  · exact h4 (addr + 5) (hoff 5 (by omega))
+  · exact h4 (addr + 6) (hoff 6 (by omega))
+  · exact h4 (addr + 7) (hoff 7 (by omega))
+
 /-- A `storeWord` writes identical bytes into IL and machine memory, so wherever the
     base bytes agree, the results agree — no in-range/out-of-range split needed. -/
 theorem storeWord_mem_agree (s : St) (m : State) (addr v a : Word)
