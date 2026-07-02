@@ -27,6 +27,7 @@ New docs go in this directory; add a line for each new doc below.
 - [RESUME-HEX1.md](RESUME-HEX1.md) — hex1 campaign handoff and wrap-up (campaign complete: `core1_refines` proved in both systems).
 - [RESUME-LOWIR.md](RESUME-LOWIR.md) — **handoff for the LowIR structured-IL effort + the (now complete) hex0 functional proof** (toolbox, gotchas).
 - [RESUME-IR-DESIGN-SESSION.md](RESUME-IR-DESIGN-SESSION.md) — resume for the session that finished `hex0_correct`, added the `call` construct + cross-call-disjointness demo, and worked the IR design arc (memory model, borrows vs provenance/FilC/CHERI, calling conventions, `compile_sim` passes); has the open **frame-based call specs** next-step.
+- [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) — **handoff for the executable LowIR compiler cut** (post-D7/D8 design session): survey findings (Rv64i model already has all 16 needed encodings; build-root trap), and the detailed plan — Prog.lean IR core, memory-locals compilation strategy, differential-testing regime, commit milestones.
 - [PREV_CTX.md](PREV_CTX.md) — original project handoff context (goals of the bottom-up verified tower).
 
 ## Experiments
