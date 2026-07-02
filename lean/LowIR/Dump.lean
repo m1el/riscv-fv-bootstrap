@@ -5,6 +5,8 @@
   (or a single `FunDef` / `Stmt`) as nested s-expressions in a WebAssembly-text
   idiom, so a reader can eyeball the structure — the seq spine, the block/loop
   scopes, the `brk`/`cont` de-Bruijn depths, register moves, and the rodata.
+  Registers are `$rN`; named symbols (functions and data objects) are `'name`, so
+  the two namespaces can't collide (a data object called `r0` ≠ register 0).
 
   It is the seed of the "IR ↔ assembly mapping" discussed for `prog_sim`: this
   pass renders just the IR tree; a later pass will thread the layout positions
@@ -65,15 +67,15 @@ partial def dumpStmt (n : Nat) : Stmt → String
   | .sb   rb rv imm  => pad n ++ s!"(i64.store8 offset={imm12 imm} (local.get {reg rb}) (local.get {reg rv}))"
   | .sd   rb rv imm  => pad n ++ s!"(i64.store offset={imm12 imm} (local.get {reg rb}) (local.get {reg rv}))"
   | .annot a         => pad n ++ s!"(annot {String.quote a})"
-  | .cref rd d       => pad n ++ setr rd s!"(cref ${d})"
-  | .clen rd d       => pad n ++ setr rd s!"(clen ${d})"
+  | .cref rd d       => pad n ++ setr rd s!"(cref '{d})"
+  | .clen rd d       => pad n ++ setr rd s!"(clen '{d})"
   | .brkB k          => pad n ++ s!"(brk {k})"
   | .contL k         => pad n ++ s!"(cont {k})"
   | .ret             => pad n ++ "(return)"
   | .call _ _ f args rets =>
       let a := " ".intercalate (args.toList.map (fun r => s!"(local.get {reg r})"))
       let r := " ".intercalate (rets.toList.map reg)
-      pad n ++ s!"(call ${f} (args {a}) (rets {r}))"
+      pad n ++ s!"(call '{f} (args {a}) (rets {r}))"
   | .ife c a b t e =>
       pad n ++ s!"(if {dumpCond c a b}" ++ "\n" ++
       pad (n+1) ++ "(then" ++ "\n" ++ dumpStmt (n+2) t ++ ")" ++ "\n" ++
@@ -89,14 +91,14 @@ partial def dumpStmt (n : Nat) : Stmt → String
 def dumpFun (name : Name) (fd : FunDef) : String :=
   let params := " ".intercalate (fd.params.toList.map reg)
   let rets   := " ".intercalate (fd.rets.toList.map reg)
-  pad 1 ++ s!"(func ${name} (param {params}) (result {rets}) " ++
+  pad 1 ++ s!"(func '{name} (param {params}) (result {rets}) " ++
     s!"(frame (size {fd.frameSize}) (base {reg fd.frameReg}))" ++ "\n" ++
     dumpStmt 2 fd.body ++ ")"
 
 /-- A rodata object as a WAST `(data …)` with `\HH` byte escapes. -/
 def dumpData (name : Name) (bytes : List Byte) : String :=
   let esc := String.join (bytes.map (fun b => "\\" ++ hex2 b.toNat))
-  pad 1 ++ s!"(data ${name} \"{esc}\")"
+  pad 1 ++ s!"(data '{name} \"{esc}\")"
 
 /-- The whole program as a `(module …)`: rodata first, then functions. -/
 def dumpProgram (p : Program) : String :=
