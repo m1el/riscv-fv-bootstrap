@@ -387,7 +387,7 @@ theorem single_op_sim {L : Layout} {fd : FunDef} {holes : List Hole}
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
     (hbd : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
              ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat)
-    (hC : ∀ m', decode (fetch32 m') = C → m'.rget T0 = s.rget rs →
+    (hC : ∀ m', decode (fetch32 m') = C → m'.rget T0 = s.rget rs → m'.mem = m.mem →
             step m' = (m'.rset T0 vC).setPc (m'.pc + 4)) :
     ∃ k, StInv L fd holes (s.rset rd vC) (stepN k m)
        ∧ (stepN k m).pc = L.codeBase
@@ -405,7 +405,7 @@ theorem single_op_sim {L : Layout} {fd : FunDef} {holes : List Hole}
   have hdC : decode (fetch32 (step m)) = C := by
     have h := decode_at L m (step m) (pos + 4) [C] hemC hinst 0 (by simp) (by rw [h1pc]) h1mem
     simpa using h
-  have hsC : step (step m) = ((step m).rset T0 vC).setPc ((step m).pc + 4) := hC _ hdC h1T0
+  have hsC : step (step m) = ((step m).rset T0 vC).setPc ((step m).pc + 4) := hC _ hdC h1T0 h1mem
   have hinv2 : StInv L fd holes s (step (step m)) := by
     rw [hsC]; exact StInv_scratch L fd holes s (step m) T0 _ _ (by decide) hinv1
   have h2pc : (step (step m)).pc = L.codeBase + BitVec.ofNat 64 (pos + 8) := by
@@ -489,17 +489,41 @@ theorem two_op_sim {L : Layout} {fd : FunDef} {holes : List Hole}
         loadSlotI_length, loadSlotI_length]
     exact pc_congr _ (by simp only [List.length_cons, List.length_nil]; omega)
 
+/-! ## `MemAccOff` — the memory-access side condition for `lower_sim`. -/
+
+/-- Every byte the statement's IL memory ops touch lies off `MachPriv` (the frame
+    holes + code blob). This is the read+write generalisation of Defs' footprint
+    note (`ws.all (¬ MachPriv ·)`) — loads need it for value agreement, stores for
+    slot/`Installed` preservation. It mirrors `exec`'s recursion for `seq` (the
+    second statement's addresses depend on the first's result); `True` for the
+    non-memory and (still-`sorry`) control-flow cases. `lbu`/`sb` touch one byte,
+    `ld`/`sd` eight; both `n`-byte ranges are pinned via `¬ MachPriv (base + i)`. -/
+def MemAccOff (L : Layout) (holes : List Hole)
+    (P : Program) (dbase : Name → Option Word) (pad : Name → Nat) (stackLo : Word) :
+    Nat → PStmt → St → Prop
+  | _, .ld _ rs imm, s =>
+      ∀ i, i < 8 → ¬ MachPriv L holes (s.rget rs + imm.signExtend 64 + BitVec.ofNat 64 i)
+  | _, .lbu _ rs imm, s => ¬ MachPriv L holes (s.rget rs + imm.signExtend 64)
+  | _, .sd rb _ imm, s =>
+      ∀ i, i < 8 → ¬ MachPriv L holes (s.rget rb + imm.signExtend 64 + BitVec.ofNat 64 i)
+  | _, .sb rb _ imm, s => ¬ MachPriv L holes (s.rget rb + imm.signExtend 64)
+  | fuel + 1, .seq a b, s =>
+      MemAccOff L holes P dbase pad stackLo fuel a s ∧
+        (∀ s1, LowIR.Prog.exec P dbase pad stackLo fuel a s = some (s1, .normal) →
+           MemAccOff L holes P dbase pad stackLo fuel b s1)
+  | _, _, _ => True
+
 /-! ## `lower_sim` — the statement-level simulation (VERTICAL SLICE).
 
     If the IL says `stmt` runs `s ↦ s'` with a `.normal` outcome, and the machine
     sits at `codeBase + pos` in a `StInv`-related state with `emit stmt` installed
     there, then it runs `k` steps to `codeBase + (pos + 4·|emit stmt|)` in a state
-    still `StInv`-related to `s'`. The `.normal`-only form covers the straight-line
-    slice (skip/annot/arith/seq); the control-flow cases (whose outcome selects a
-    label target) and the `ld/sd/cref/clen` memory cases are the `sorry`'d
-    remainder (Phases 4.2–4.4). The frame- and blob-placement hypotheses
-    (`hframe`/`hnw`/`hseg`/`hblob`/`hbd`) are `SlotFacts`' side conditions, from
-    `fnOk`+`SimPre` downstream. -/
+    still `StInv`-related to `s'`. Covers the straight-line slice
+    (skip/annot/arith/**mem**/seq); the control-flow cases (whose outcome selects a
+    label target) and the `cref/clen` const-data cases are the `sorry`'d remainder
+    (Phases 4.3–4.4). `MemAccOff` (the memory-access side condition) is trivial for
+    the non-memory cases. The frame/blob-placement hypotheses
+    (`hframe`/`hnw`/`hseg`/`hblob`/`hbd`) are `SlotFacts`' side conditions. -/
 theorem lower_sim
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole}
@@ -514,7 +538,8 @@ theorem lower_sim
     (hseg  : 4 * L.instrs.length ≤ L.segStart)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
     (hbd   : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
-               ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat) :
+               ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat)
+    (haccess : MemAccOff L holes P dbase pad stackLo fuel stmt s) :
     ∃ k, StInv L fd holes s' (stepN k m)
        ∧ (stepN k m).pc
            = L.codeBase + BitVec.ofNat 64 (pos + 4 * (emit stmt).length) := by
@@ -542,7 +567,7 @@ theorem lower_sim
         hinv hpc hem hrs hrd
         (by have := slotOff_add8_le_userOff fd rs hrs; omega)
         (by have := slotOff_add8_le_userOff fd rd hrd; omega)
-        hnw hseg hblob hbd (fun m' hd hT0 => by rw [step_addi m' T0 T0 imm hd, hT0])
+        hnw hseg hblob hbd (fun m' hd hT0 _ => by rw [step_addi m' T0 T0 imm hd, hT0])
     case slli rd rs sh =>
       rw [LowIR.Prog.exec_slli, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, -⟩ := hexec
@@ -553,7 +578,7 @@ theorem lower_sim
         hinv hpc hem hrs hrd
         (by have := slotOff_add8_le_userOff fd rs hrs; omega)
         (by have := slotOff_add8_le_userOff fd rd hrd; omega)
-        hnw hseg hblob hbd (fun m' hd hT0 => by rw [step_slli m' T0 T0 sh hd, hT0])
+        hnw hseg hblob hbd (fun m' hd hT0 _ => by rw [step_slli m' T0 T0 sh hd, hT0])
     case srli rd rs sh =>
       rw [LowIR.Prog.exec_srli, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, -⟩ := hexec
@@ -564,7 +589,7 @@ theorem lower_sim
         hinv hpc hem hrs hrd
         (by have := slotOff_add8_le_userOff fd rs hrs; omega)
         (by have := slotOff_add8_le_userOff fd rd hrd; omega)
-        hnw hseg hblob hbd (fun m' hd hT0 => by rw [step_srli m' T0 T0 sh hd, hT0])
+        hnw hseg hblob hbd (fun m' hd hT0 _ => by rw [step_srli m' T0 T0 sh hd, hT0])
     case add rd r1 r2 =>
       rw [LowIR.Prog.exec_add, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, -⟩ := hexec
@@ -612,6 +637,7 @@ theorem lower_sim
         hnw hseg hblob hbd (fun m' hd hT0 hT1 => by rw [step_or m' T0 T0 T1 hd, hT0, hT1])
     case seq a b =>
       simp only [maxRegS] at hreg
+      obtain ⟨haccA, haccB⟩ := haccess
       -- `a` must finish `.normal` (any other outcome would surface as the seq's
       -- outcome, contradicting `= some (s', .normal)`); then chain the fuel `ih`.
       cases hea : LowIR.Prog.exec P dbase pad stackLo fuel a s with
@@ -627,11 +653,11 @@ theorem lower_sim
           have hregA : maxRegS a ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
           have hregB : maxRegS b ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
           obtain ⟨k1, hinvA, hpcA⟩ :=
-            ih a s s1 m pos hea hinv hpc hemA hregA hnw hbd
+            ih a s s1 m pos hea hinv hpc hemA hregA hnw hbd haccA
           have hsp : s1.sp = s.sp := StInv_sp_eq L fd holes s s1 m (stepN k1 m) hinv hinvA
           obtain ⟨k2, hinvB, hpcB⟩ :=
             ih b s1 s' (stepN k1 m) (pos + 4 * (emit a).length) hexec hinvA hpcA hemB hregB
-              (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd)
+              (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd) (haccB s1 hea)
           refine ⟨k1 + k2, ?_, ?_⟩
           · rw [stepN_add]; exact hinvB
           · rw [stepN_add, hpcB]
