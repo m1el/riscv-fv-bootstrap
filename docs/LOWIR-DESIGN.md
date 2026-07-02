@@ -116,12 +116,29 @@ Two flavors exist:
 
 ### D7. Activation-local calls: `rets := call f args` over an env-threaded `exec` — not SSA
 - **Decision** (2026-07, not yet implemented). Calls are **by name** against a function
-  environment `Env : Name → FunDef` threaded through `exec` (or fixed as a parameter). A call
-  `rets := call f args` evaluates `args` in the caller's registers, runs the callee's body in a
-  **fresh register file** (parameters bound to the argument values, all other registers
-  **zero-initialized**), reads the callee's declared return registers at its `ret` boundary, and
-  binds them to `rets` in the caller — whose register file is otherwise *untouched by
-  construction*. **Registers are function-local; memory stays shared** (the `Slice`/`Wf` borrow
+  environment `Env : Name → FunDef` threaded through `exec` (or fixed as a parameter).
+  **Arities are static**: a function's signature is part of its definition,
+
+  ```
+  FunDef := { argc rvc : Nat
+            ; params : Vect argc Reg          -- registers receiving the arguments
+            ; rets   : Vect rvc Reg           -- registers read at the ret boundary
+            ; sig    : BorrowSig argc         -- boundary borrow contract (see below)
+            ; body   : Stmt }
+  ```
+
+  and a call site is `(rets : Vect rvc Reg) := call f (args : Vect argc Reg)` — **arity
+  mismatch is unrepresentable by construction** (intrinsic *arity*, the one narrow slice of
+  lean-mlir-style intrinsic typing worth taking here; full intrinsic typing stays rejected on
+  elaborator-cost grounds). The call evaluates `args` in the caller's registers, runs the body
+  in a **fresh register file** (params bound to argument values, all other registers
+  **zero-initialized**), reads the callee's `rets` registers at its `ret` boundary, and binds
+  them at the call site — the caller's register file is otherwise *untouched by construction*.
+  `BorrowSig argc` names the callee's borrowed regions **in terms of its parameters** ("slice
+  based at arg 0, length arg 1, shared") so that one generic call rule — caller's `Wf` context
+  + args satisfy `sig` ⇒ callee spec applies + frame over everything disjoint from `sig` —
+  replaces per-call manual `Disjoint` threading; the future borrow checker *emits* `sig`,
+  higher-IR pointer types lower to it, LowIR proofs consume it (cf. Ext. 5). **Registers are function-local; memory stays shared** (the `Slice`/`Wf` borrow
   discipline is unchanged — by-reference data crosses as addresses). Zero-init is made
   semantically irrelevant by a **definite-assignment check** (no local read before written,
   except parameters) plus a once-proved lemma that `exec` of a definitely-assigned body does not
@@ -143,9 +160,11 @@ Two flavors exist:
   machine but breaks the deterministic `Option`-based `exec`; the definite-assignment check
   recovers the same effect deterministically.
 - **Status / caveat.** `CtrlCall.lean` (shared-register call + cross-call disjointness example)
-  is to be reworked onto D7; the memory-side reasoning carries over verbatim. The compiler must
-  realize the fiction — argument passing, callee-saved discipline, frame slots — which is
-  exactly pass 4's job and is now *located* there rather than added.
+  is to be reworked onto D7; the memory-side reasoning carries over verbatim. If the inline
+  ret-catch `.call g` survives as sugar, it is **expanded in pass 1** so compile passes 2–4 see
+  only env-calls (one call shape per pass, one proof case). The compiler must realize the
+  fiction — argument passing, callee-saved discipline, frame slots — which is exactly pass 4's
+  job and is now *located* there rather than added.
 
 ---
 
@@ -204,7 +223,10 @@ One-line summary: **the IL owns functional meaning over flat state; everything a
 
 1. **Wider load/store** (`lw/lh/ld/sw/sh/sd`). The one genuine *expressiveness* gap for structs/aggregates:
    multi-byte fields are miserable to synthesize from bytes. Additive constructors, one-line `exec`
-   equations, direct RV64I mapping. Add when the first multi-byte field appears.
+   equations, direct RV64I mapping. ~~Add when the first multi-byte field appears.~~
+   **Priority bump (2026-07): compiler-forced.** `compile_sim` pass 4 spills 64-bit registers;
+   synthesizing an 8-byte spill from eight `sb`s is absurd, so `ld`/`sd` must exist in the IL
+   *before* pass 4 regardless of what source programs need.
 2. **Stack as a `mem` region + SP convention.** Pick a register as SP; frames are decrements. Each frame /
    stack struct is a **unique `Slice`** in the borrow layer — disjoint from heap, caller buffers, and
    sibling frames. Then "the callee's locals don't alias the caller's `&out`" is the *same* separation
@@ -241,6 +263,38 @@ One-line summary: **the IL owns functional meaning over flat state; everything a
 7. **Toolbox factoring.** Promote the now-substantial reusable pieces — `exec_mono`/one-layer `exec_*`
    equations, the `Slice`/`Borrow`/`Wf` layer, `regionBytes` — out of `CtrlHex0Proof`/`CtrlStrtoullProof`
    into shared files (`LowIR/ExecMono.lean`, `LowIR/Borrow.lean`) for the rest of the libc.
+   Includes the `lit` helper, currently defined identically in four files (and superseded by
+   Ext. 10's `set r (imm v)`, which also removes the 12-bit ceiling on literals).
+8. **Well-formedness checker `Stmt.wf` + boundary lemma.** A decidable
+   `wf (blockDepth loopDepth : Nat) : Stmt → Bool`: `brkB`/`contL` indices in range, shift
+   amounts `< 64` (RV64I shamt is 6 bits — today `slli/srli (sh : Nat)` is unconstrained and
+   unencodable for `sh ≥ 64`), call names resolve in `Env` (post-D7), definite assignment (D7).
+   Once-proved boundary lemma: `wf` programs never surface `brk`/`cont` at the function boundary
+   — today an escaping `brkB` makes `run` return `none`, **indistinguishable from fuel
+   exhaustion**, and `.call`'s semantics merely *comments* "well-formed: no free brk/cont".
+   Payoffs: generic outcome-dismissal lemmas in every proof (e.g. "wf body ⇒ `block body`
+   yields only normal/ret"), higher IRs discharge `wf` by construction, and pass 2's label
+   resolution becomes *total* on wf programs. Checker-produces-hypothesis instances #2/#3
+   (with the borrow checker as #1) — house them in one static-checks module.
+9. **`annot` — a semantically-inert annotation statement.** `exec (annot a) s = some (s, .normal)`;
+   erased in pass 1. The carrier higher IRs need: borrow events (the checker's
+   reborrow/resolve points), loop-invariant anchors, spec labels. Planted intent *in the
+   program* beats position-keyed side tables — positions don't survive transformations,
+   statements do (rustc's `FakeRead`/`AscribeUserType` lesson). Near-zero cost now, painful
+   retrofit after more passes exist.
+10. **Pure expression trees: `set (rd : Reg) (e : Expr)`.** `Expr` = reg / imm / binop / shift —
+    **no memory reads**. One `exec_set` equation collapses today's `slli`/`orr`/`addi` chains
+    (hex0's nibble-building, every address computation) into one `simp`; gives the HIR→LowIR
+    lowering its natural target (bedrock2's expr/statement split); lets `Cond` become an `Expr`
+    (deduplicating the `(c, a, b)` triples in `ife`/`while`); subsumes `lit` at arbitrary width.
+    Compile cost: a verified LowIR→LowIR flattening pass — structural induction, no
+    temp-freshness subtleties thanks to infinite registers. Comfort until the HIR exists;
+    schedule together with Ext. 5.
+
+**Priorities (agreed 2026-07):** Ext. 8 first (cheapest, pays in every proof *and* in pass 2);
+then D7's `FunDef` implementation including the `Vect` arities and `BorrowSig` (the scaling
+decision — design the env once); then Ext. 1 (`ld`/`sd`, compiler-forced). Ext. 9 is the
+"cheap now, expensive later" sleeper — do it alongside Ext. 8. Ext. 10 waits for the HIR.
 
 ---
 
