@@ -56,6 +56,8 @@ inductive Stmt where
   | ret
   | call   (argc rvc : Nat) (f : Name)
            (args : Vector Reg argc) (rets : Vector Reg rvc)
+  | cref   (rd : Reg) (d : Name)     -- rd := address of const data object d
+  | clen   (rd : Reg) (d : Name)     -- rd := length of const data object d
 deriving Repr
 
 /-- A function: declared parameter/return registers (callee-side names), a
@@ -70,6 +72,20 @@ structure FunDef where
   body      : Stmt
 
 abbrev Env := List (Name × FunDef)
+
+/-- The program's read-only data segment: named constant byte objects,
+    referenced from code as slices via `cref` (address) + `clen` (length). -/
+abbrev Data := List (Name × List Byte)
+
+/-- A whole program: functions plus const data. Where the data objects LIVE
+    is not part of the program — the semantics takes a base map (`dbase`),
+    ∀-quantifiable like D8's `sp₀`, so programs stay address-independent. -/
+structure Program where
+  env  : Env
+  data : Data
+
+/-- Data-free view (keeps pre-data call sites unchanged). -/
+instance : Coe Env Program := ⟨fun env => ⟨env, []⟩⟩
 
 /-- IL machine state: register file (x0 hardwired 0), byte memory, and the
     semantic stack pointer — no instruction writes `sp`; only call/return move it. -/
@@ -134,12 +150,21 @@ def frameEnter (stackLo : Word) (fd : FunDef) (argVals : List Word)
     (an escaping brk/cont is `none` — `wf` bans it), then return to the CALLER's
     registers and `sp` (structural restore), with only `rets` copied back and
     the callee's memory kept. -/
-def exec (env : Env) (stackLo : Word) : Nat → Stmt → St → Option (St × Outcome)
+def exec (P : Program) (dbase : Name → Option Word) (stackLo : Word) :
+    Nat → Stmt → St → Option (St × Outcome)
   | 0,      _,    _ => none
   | fuel+1, stmt, s =>
     match stmt with
     | .skip            => some (s, .normal)
     | .annot _         => some (s, .normal)
+    | .cref rd d       =>
+        match dbase d with
+        | some a => some (s.rset rd a, .normal)
+        | none   => none
+    | .clen rd d       =>
+        match List.lookup d P.data with
+        | some bs => some (s.rset rd (BitVec.ofNat 64 bs.length), .normal)
+        | none    => none
     | .addi rd rs imm  => some (s.rset rd (s.rget rs + imm.signExtend 64), .normal)
     | .add  rd r1 r2   => some (s.rset rd (s.rget r1 + s.rget r2), .normal)
     | .sub  rd r1 r2   => some (s.rset rd (s.rget r1 - s.rget r2), .normal)
@@ -156,13 +181,13 @@ def exec (env : Env) (stackLo : Word) : Nat → Stmt → St → Option (St × Ou
                           some (s.storeWord a (s.rget rv), .normal)
     | .ife c a b t e   =>
         if evalCond c (s.rget a) (s.rget b)
-        then exec env stackLo fuel t s else exec env stackLo fuel e s
+        then exec P dbase stackLo fuel t s else exec P dbase stackLo fuel e s
     | .seq a b         =>
-        match exec env stackLo fuel a s with
-        | some (s', .normal) => exec env stackLo fuel b s'
+        match exec P dbase stackLo fuel a s with
+        | some (s', .normal) => exec P dbase stackLo fuel b s'
         | other              => other
     | .block body      =>
-        match exec env stackLo fuel body s with
+        match exec P dbase stackLo fuel body s with
         | some (s', .normal)     => some (s', .normal)
         | some (s', .brk 0)      => some (s', .normal)
         | some (s', .brk (k+1))  => some (s', .brk k)
@@ -171,9 +196,9 @@ def exec (env : Env) (stackLo : Word) : Nat → Stmt → St → Option (St × Ou
         | none                   => none
     | .while c a b body =>
         if evalCond c (s.rget a) (s.rget b) then
-          match exec env stackLo fuel body s with
-          | some (s', .normal)     => exec env stackLo fuel (.while c a b body) s'
-          | some (s', .cont 0)     => exec env stackLo fuel (.while c a b body) s'
+          match exec P dbase stackLo fuel body s with
+          | some (s', .normal)     => exec P dbase stackLo fuel (.while c a b body) s'
+          | some (s', .cont 0)     => exec P dbase stackLo fuel (.while c a b body) s'
           | some (s', .cont (k+1)) => some (s', .cont k)
           | some (s', .brk k)      => some (s', .brk k)
           | some (s', .ret)        => some (s', .ret)
@@ -183,14 +208,14 @@ def exec (env : Env) (stackLo : Word) : Nat → Stmt → St → Option (St × Ou
     | .contL k         => some (s, .cont k)
     | .ret             => some (s, .ret)
     | .call argc rvc f args rets =>
-        match List.lookup f env with
+        match List.lookup f P.env with
         | none => none
         | some fd =>
           if fd.argc == argc && fd.rvc == rvc then
             match frameEnter stackLo fd (args.toList.map s.rget) s.mem s.sp with
             | none => none                                       -- stack overflow
             | some callee =>
-              match exec env stackLo fuel fd.body callee with
+              match exec P dbase stackLo fuel fd.body callee with
               | some (s1, .normal) | some (s1, .ret) =>
                   let retVals := fd.rets.toList.map s1.rget
                   some ((rets.toList.zip retVals).foldl
@@ -203,40 +228,61 @@ def exec (env : Env) (stackLo : Word) : Nat → Stmt → St → Option (St × Ou
 
 /-- Well-formedness (Ext. 8): brk/cont indices in scope, shifts `< 64`, call
     arities agree with the env. `blockD`/`loopD` = enclosing block/loop counts. -/
-def wf (env : Env) : Nat → Nat → Stmt → Bool
-  | bD, lD, .seq a b          => wf env bD lD a && wf env bD lD b
-  | bD, lD, .ife _ _ _ t e    => wf env bD lD t && wf env bD lD e
-  | bD, lD, .while _ _ _ body => wf env bD (lD+1) body
-  | bD, lD, .block body       => wf env (bD+1) lD body
+def wf (P : Program) : Nat → Nat → Stmt → Bool
+  | bD, lD, .seq a b          => wf P bD lD a && wf P bD lD b
+  | bD, lD, .ife _ _ _ t e    => wf P bD lD t && wf P bD lD e
+  | bD, lD, .while _ _ _ body => wf P bD (lD+1) body
+  | bD, lD, .block body       => wf P (bD+1) lD body
   | bD, _,  .brkB k           => k < bD
   | _,  lD, .contL k          => k < lD
   | _,  _,  .slli _ _ sh      => sh < 64
   | _,  _,  .srli _ _ sh      => sh < 64
   | _,  _,  .call argc rvc f _ _ =>
-      match List.lookup f env with
+      match List.lookup f P.env with
       | some fd => fd.argc == argc && fd.rvc == rvc
       | none    => false
+  | _,  _,  .cref _ d         => (List.lookup d P.data).isSome
+  | _,  _,  .clen _ d         => (List.lookup d P.data).isSome
   | _,  _,  _                 => true
 
-/-- Env well-formedness: every body is `wf` with NO enclosing block/loop (an
-    escaping brk/cont at function level is ill-formed), and no function binds
-    its `frameReg` as a parameter (frameReg would shadow the param binding). -/
-def wfEnv (env : Env) : Bool :=
-  env.all fun nf =>
-    wf env 0 0 nf.2.body && !(nf.2.params.toList.contains nf.2.frameReg)
+/-- Program well-formedness: every body is `wf` with NO enclosing block/loop
+    (an escaping brk/cont at function level is ill-formed), no function binds
+    its `frameReg` as a parameter (frameReg would shadow the param binding),
+    and data object names are unique. -/
+def wfProgram (P : Program) : Bool :=
+  P.env.all (fun nf =>
+    wf P 0 0 nf.2.body && !(nf.2.params.toList.contains nf.2.frameReg))
+  && (P.data.map Prod.fst).eraseDups.length == P.data.length
 
-/-- Top-level entry: call `f` with argument VALUES on a fresh machine — memory
-    `mem`, stack top `sp0`. Returns the callee's final state (read results from
-    `f`'s declared `rets` registers). -/
-def run (env : Env) (stackLo : Word) (fuel : Nat) (f : Name) (argVals : List Word)
-    (mem : Word → Byte) (sp0 : Word) : Option St :=
-  match List.lookup f env with
+/-- Data-free convenience (pre-data name, used by the existing tests). -/
+def wfEnv (env : Env) : Bool := wfProgram env
+
+/-- Sequential 8-aligned placement of the data objects from `base`: the
+    address map and the memory overlaid with the objects' bytes. The base is
+    the harness's choice — programs never depend on it (`dbase` semantics). -/
+def layoutData (base : Word) (mem : Word → Byte) :
+    Data → (Name → Option Word) × (Word → Byte)
+  | [] => (fun _ => none, mem)
+  | (n, bs) :: rest =>
+      let next := base + BitVec.ofNat 64 ((bs.length + 7) / 8 * 8)
+      let (dbase, mem') := layoutData next mem rest
+      (fun d => if d = n then some base else dbase d,
+       fun a => if base ≤ a ∧ a < base + BitVec.ofNat 64 bs.length
+                then (bs[(a - base).toNat]?).getD 0 else mem' a)
+
+/-- Top-level entry: install the data objects at `dataBase`, then call `f`
+    with argument VALUES on a fresh machine — memory `mem`, stack top `sp0`.
+    Returns the callee's final state (read results from `f`'s `rets`). -/
+def run (P : Program) (stackLo : Word) (fuel : Nat) (f : Name) (argVals : List Word)
+    (mem : Word → Byte) (sp0 : Word) (dataBase : Word := 0x30000) : Option St :=
+  match List.lookup f P.env with
   | none => none
   | some fd =>
-    match frameEnter stackLo fd argVals mem sp0 with
+    let (dbase, mem') := layoutData dataBase mem P.data
+    match frameEnter stackLo fd argVals mem' sp0 with
     | none => none
     | some st0 =>
-      match exec env stackLo fuel fd.body st0 with
+      match exec P dbase stackLo fuel fd.body st0 with
       | some (s1, .normal) | some (s1, .ret) => some s1
       | _ => none
 
@@ -383,5 +429,30 @@ def recSum : Env :=
 -- deep recursion eats stack: 8 bytes/frame, 0x4000 stack → 2048 frames max;
 -- rec(3000) must hit the overflow check, not wrap
 #guard (run recSum STACK_LO 100000 "rec" [3000] zeroMem SP0) = none
+
+/-! Const data: `cref`/`clen` — sum the bytes of a data object (slice = ptr+len). -/
+def sumdFn : FunDef :=
+  { argc := 0, rvc := 2, params := #v[], rets := #v[10, 11]
+    frameSize := 0, frameReg := 3
+    body := .seq (.cref 5 "tbl") <|            -- p := &tbl
+            .seq (.clen 11 "tbl") <|           -- ret2 := len
+            .seq (.addi 6 0 0) <|              -- acc := 0
+            .seq (.addi 7 0 0) <|              -- i := 0
+            .seq (.while .lt 7 11
+                   (.seq (.add 30 5 7) <|
+                    .seq (.lbu 9 30 0) <|
+                    .seq (.add 6 6 9) (.addi 7 7 1)))
+                 (.addi 10 6 0) }              -- ret1 := acc
+
+def sumData : Program :=
+  { env := [("sumd", sumdFn)], data := [("tbl", [1, 2, 3, 250])] }
+
+#guard wfProgram sumData
+#guard (run sumData 0 1000 "sumd" [] zeroMem SP0).map
+        (fun s => ((s.rget 10).toNat, (s.rget 11).toNat)) = some (256, 4)
+-- unknown data object: wf rejects, exec goes none
+#guard !wfProgram { sumData with
+        env := [("bad", { sumdFn with body := .cref 5 "nope" })] }
+#guard (run { sumData with data := [] } 0 1000 "sumd" [] zeroMem SP0) = none
 
 end LowIR.Prog

@@ -34,7 +34,7 @@ import LowIR.Prog
 namespace LowIR.Compile
 
 open LowIR (Cond condInstr jal0)
-open LowIR.Prog (Reg Name FunDef Env wfEnv)
+open LowIR.Prog (Reg Name FunDef Env Data Program wfProgram)
 open Rv64i (Word Byte Instr)
 
 /-- The IL being compiled (the parent `LowIR.Stmt` also exists — be explicit). -/
@@ -59,6 +59,7 @@ inductive SymInstr where
   | br    (c : Cond) (a b : Reg) (l : Nat)     -- branch (phys regs) to label
   | jmp   (l : Nat)                            -- jal x0, label
   | callf (f : Name)                           -- jal ra, function
+  | cref  (d : Name)                           -- T0 := address of data object
 deriving Repr
 
 /-! ### Per-function lowering -/
@@ -82,15 +83,24 @@ def storeSlot (r : Reg) (t : Reg) : List SymInstr :=
 abbrev M := StateM Nat
 def fresh : M Nat := modifyGet fun n => (n, n + 1)
 
+/-- Materialize the constant `v` (|v| < 2^23) into `t` — a FIXED 3-instruction
+    sequence (`v = hi*4096 + lo`, both imm12): layout must not depend on the
+    value. -/
+def synthConst (t : Reg) (v : Int) : List SymInstr :=
+  let lo : Int := ((v + 2048) % 4096) - 2048
+  let hi : Int := (v - lo) / 4096
+  [.ins (.addi t 0 (BitVec.ofInt 12 hi)), .ins (.slli t t 12),
+   .ins (.addi t t (BitVec.ofInt 12 lo))]
+
 /-- Lower one statement. `brks`/`conts` are the enclosing block-end / loop-top
     label stacks (indexed exactly like `brkB`/`contL`'s de Bruijn indices);
     `epi` is this function's epilogue label. `wf` guarantees index ranges and
     call arities; out-of-range lookups fall back to label 0 (never emitted for
     a wf program). -/
-def lower (brks conts : List Nat) (epi : Nat) : PStmt → M (List SymInstr)
+def lower (dat : Data) (brks conts : List Nat) (epi : Nat) : PStmt → M (List SymInstr)
   | .skip           => pure []
   | .annot _        => pure []
-  | .seq a b        => do pure ((← lower brks conts epi a) ++ (← lower brks conts epi b))
+  | .seq a b        => do pure ((← lower dat brks conts epi a) ++ (← lower dat brks conts epi b))
   | .addi rd rs imm => pure <| loadSlot rs T0 ++ [.ins (.addi T0 T0 imm)] ++ storeSlot rd T0
   | .add  rd r1 r2  => pure <| loadSlot r1 T0 ++ loadSlot r2 T1
                               ++ [.ins (.add T0 T0 T1)] ++ storeSlot rd T0
@@ -106,19 +116,19 @@ def lower (brks conts : List Nat) (epi : Nat) : PStmt → M (List SymInstr)
   | .sd   rb rv imm => pure <| loadSlot rb T0 ++ loadSlot rv T1 ++ [.ins (.sd T0 T1 imm)]
   | .ife c a b t e  => do
       let lT ← fresh; let lEnd ← fresh
-      let et ← lower brks conts epi t
-      let ee ← lower brks conts epi e
+      let et ← lower dat brks conts epi t
+      let ee ← lower dat brks conts epi e
       pure <| loadSlot a T0 ++ loadSlot b T1
            ++ [.br c T0 T1 lT] ++ ee ++ [.jmp lEnd, .label lT] ++ et ++ [.label lEnd]
   | .while c a b body => do
       let lTop ← fresh; let lBody ← fresh; let lEnd ← fresh
-      let eb ← lower brks (lTop :: conts) epi body
+      let eb ← lower dat brks (lTop :: conts) epi body
       pure <| [.label lTop] ++ loadSlot a T0 ++ loadSlot b T1
            ++ [.br c T0 T1 lBody, .jmp lEnd, .label lBody]
            ++ eb ++ [.jmp lTop, .label lEnd]
   | .block body     => do
       let lEnd ← fresh
-      let eb ← lower (lEnd :: brks) conts epi body
+      let eb ← lower dat (lEnd :: brks) conts epi body
       pure <| eb ++ [.label lEnd]
   | .brkB k         => pure [.jmp (brks.getD k 0)]
   | .contL k        => pure [.jmp (conts.getD k 0)]
@@ -127,6 +137,10 @@ def lower (brks conts : List Nat) (epi : Nat) : PStmt → M (List SymInstr)
       let loads  := args.toList.zipIdx.flatMap fun ri => loadSlot ri.1 (A ri.2)
       let stores := rets.toList.zipIdx.flatMap fun ri => storeSlot ri.1 (A ri.2)
       pure <| loads ++ [.callf f] ++ stores
+  | .cref rd d      => pure <| [.cref d] ++ storeSlot rd T0
+  | .clen rd d      =>
+      pure <| synthConst T0 (((List.lookup d dat).map (·.length)).getD 0)
+           ++ storeSlot rd T0
 
 /-! ### Frame accounting -/
 
@@ -149,6 +163,8 @@ def maxRegS : PStmt → Nat
   | .block body       => maxRegS body
   | .call _ _ _ args rets =>
       max (args.toList.foldl max 0) (rets.toList.foldl max 0)
+  | .cref rd _        => rd
+  | .clen rd _        => rd
 
 /-- Largest IL register a function touches (body + declared regs + frameReg). -/
 def maxRegF (fd : FunDef) : Nat :=
@@ -191,39 +207,65 @@ def epilogue (fd : FunDef) : List SymInstr :=
       .ins (.jalr 0 RA 0)]
 
 /-- Compile one function to a symbolic stream. -/
-def compileFun (fd : FunDef) : M (List SymInstr) := do
+def compileFun (dat : Data) (fd : FunDef) : M (List SymInstr) := do
   let epi ← fresh
-  let body ← lower [] [] epi fd.body
+  let body ← lower dat [] [] epi fd.body
   pure <| prologue fd ++ body ++ [.label epi] ++ epilogue fd
 
 /-! ### Layout & resolution -/
 
+/-- Emitted size of a symbolic instruction (fixed per constructor — layout
+    must be value-independent). `cref` = jal-pc-read + 3-instr delta synth +
+    add (see `resolveOne`). -/
+def symSize : SymInstr → Nat
+  | .label _ => 0
+  | .cref _  => 20
+  | _        => 4
+
 /-- Pass A over one stream from byte position `pos`: positioned items,
-    label→addr entries, next position. Labels occupy 0 bytes, all else 4. -/
+    label→addr entries, next position. -/
 def layoutItems : List SymInstr → Nat → List (Nat × SymInstr) × List (Nat × Nat) × Nat
   | [], pos => ([], [], pos)
   | .label l :: rest, pos =>
       let (flat, lbls, pos') := layoutItems rest pos
       ((pos, .label l) :: flat, (l, pos) :: lbls, pos')
   | si :: rest, pos =>
-      let (flat, lbls, pos') := layoutItems rest (pos + 4)
+      let (flat, lbls, pos') := layoutItems rest (pos + symSize si)
       ((pos, si) :: flat, lbls, pos')
 
 /-- Pass A: walk the whole program, assigning byte positions. Returns the flat
-    positioned stream, the label→addr map, and the function→addr map. -/
+    positioned stream, the label→addr map, the function→addr map, and the end
+    position (total code bytes). -/
 def layout : List (Name × List SymInstr) →
-    (start : Nat) → List (Nat × SymInstr) × List (Nat × Nat) × List (Name × Nat)
-  | [], _ => ([], [], [])
+    (start : Nat) →
+    List (Nat × SymInstr) × List (Nat × Nat) × List (Name × Nat) × Nat
+  | [], pos => ([], [], [], pos)
   | (n, items) :: rest, pos =>
       let (flat1, lbls1, pos') := layoutItems items pos
-      let (flat2, lbls2, fns) := layout rest pos'
-      (flat1 ++ flat2, lbls1 ++ lbls2, (n, pos) :: fns)
+      let (flat2, lbls2, fns, endP) := layout rest pos'
+      (flat1 ++ flat2, lbls1 ++ lbls2, (n, pos) :: fns, endP)
 
-/-- Resolve one positioned symbolic instruction (range-checked). -/
-def resolveOne (lbls : List (Nat × Nat)) (fns : List (Name × Nat)) :
+/-- Resolve one positioned symbolic instruction (range-checked). `cref d`:
+    `jal T0, +4` reads the pc (T0 := address of the next instruction — pc-read
+    with NO auipc, staying inside the 16-encoding surface and keeping the blob
+    position-independent), then a fixed 3-instr synth of the delta to the data
+    object into T1, then `add T0, T0, T1`. -/
+def resolveOne (lbls : List (Nat × Nat)) (fns : List (Name × Nat))
+    (dats : List (Name × Nat)) :
     Nat × SymInstr → Option (List Instr)
   | (_,   .label _)      => some []
   | (_,   .ins i)        => some [i]
+  | (pos, .cref d)       => do
+      let off ← List.lookup d dats
+      let δ : Int := (off : Int) - ((pos : Int) + 4)
+      let lo : Int := ((δ + 2048) % 4096) - 2048
+      let hi : Int := (δ - lo) / 4096
+      if -2048 ≤ hi && hi ≤ 2047 then
+        some [.jal T0 (BitVec.ofInt 21 4),
+              .addi T1 0 (BitVec.ofInt 12 hi), .slli T1 T1 12,
+              .addi T1 T1 (BitVec.ofInt 12 lo),
+              .add T0 T0 T1]
+      else none
   | (pos, .br c a b l)   => do
       let tgt ← List.lookup l lbls
       let δ : Int := (tgt : Int) - (pos : Int)
@@ -238,30 +280,52 @@ def resolveOne (lbls : List (Nat × Nat)) (fns : List (Name × Nat)) :
       if -(2^20 : Int) ≤ δ && δ ≤ (2^20 : Int) - 2
       then some [.jal RA (BitVec.ofInt 21 δ)] else none
 
+def pad8 (n : Nat) : Nat := (n + 7) / 8 * 8
+
+/-- Byte offsets of the data objects, laid out 8-aligned from `start`
+    (mirrors `Prog.layoutData`'s spacing). -/
+def dataOffsets (start : Nat) : Data → List (Name × Nat)
+  | [] => []
+  | (n, bs) :: rest => (n, start) :: dataOffsets (start + pad8 bs.length) rest
+
+/-- The data segment bytes, each object zero-padded to 8. -/
+def dataBytes : Data → List Byte
+  | [] => []
+  | (_, bs) :: rest =>
+      bs ++ List.replicate (pad8 bs.length - bs.length) 0 ++ dataBytes rest
+
 /-- Compile a whole program. The stream is `jal ra, entry` (the 4-byte stub at
     offset 0), a `jal x0, 0` self-loop landing pad at offset 4 — the HALT
     address, occupied by a real instruction so no function entry can collide
-    with it — then every function in env order. Run the result with
-    `runFuel (codeBase+4)`. `none` = ill-formed env, per-function limits
-    exceeded, missing entry, or a branch/jump out of range. The `T` variant
-    also returns the function→byte-offset table (e.g. for an external shim
-    that calls a function inside the blob directly). -/
-def compileProgT (env : Env) (entry : Name) :
-    Option (List Instr × List (Name × Nat)) :=
-  if !(wfEnv env && env.all (fun nf => fnOk nf.2) && (List.lookup entry env).isSome)
+    with it — then every function in env order, then (in `progBytes`) the
+    data segment. Run the result with `runFuel (codeBase+4)`. `none` =
+    ill-formed program, per-function limits exceeded, missing entry, data too
+    large, or a branch/jump/cref out of range. The `T` variant also returns
+    the function and data byte-offset tables. -/
+def compileProgT (P : Program) (entry : Name) :
+    Option (List Instr × List (Name × Nat) × List (Name × Nat)) :=
+  if !(wfProgram P && P.env.all (fun nf => fnOk nf.2)
+       && (List.lookup entry P.env).isSome
+       && P.data.all (fun d => d.2.length < 2 ^ 23))    -- cref/clen synth range
   then none
   else
     let segs : List (Name × List SymInstr) :=
-      (env.mapM (fun nf => do pure (nf.1, ← compileFun nf.2)) : M _).run' 0
-    let (flat, lbls, fns) := layout (("", [.callf entry, .ins (jal0 0)]) :: segs) 0
-    ((flat.mapM (resolveOne lbls fns)).map List.flatten).map
-      (fun is => (is, fns.filter (fun f => f.1 != "")))
+      (P.env.mapM (fun nf => do pure (nf.1, ← compileFun P.data nf.2)) : M _).run' 0
+    let (flat, lbls, fns, codeEnd) :=
+      layout (("", [.callf entry, .ins (jal0 0)]) :: segs) 0
+    let dats := dataOffsets (pad8 codeEnd) P.data
+    ((flat.mapM (resolveOne lbls fns dats)).map List.flatten).map
+      (fun is => (is, fns.filter (fun f => f.1 != ""), dats))
 
-def compileProg (env : Env) (entry : Name) : Option (List Instr) :=
-  (compileProgT env entry).map (·.1)
+def compileProg (P : Program) (entry : Name) : Option (List Instr) :=
+  (compileProgT P entry).map (·.1)
 
-/-- Program bytes (little-endian), ready to load at a code base. -/
-def progBytes (env : Env) (entry : Name) : Option (List Byte) :=
-  (compileProg env entry).map LowIR.asmBytes
+/-- The full loadable blob: code, zero pad to 8, then the data segment
+    (offsets per `dataOffsets`). This — not `compileProg`'s instruction list
+    alone — is what runs when the program has data. -/
+def progBytes (P : Program) (entry : Name) : Option (List Byte) :=
+  (compileProg P entry).map fun is =>
+    let code := LowIR.asmBytes is
+    code ++ List.replicate (pad8 code.length - code.length) 0 ++ dataBytes P.data
 
 end LowIR.Compile

@@ -17,7 +17,7 @@ import LowIR.ProgLib
 
 namespace LowIR.CompileTests
 
-open LowIR.Prog (Env FunDef Name)
+open LowIR.Prog (Env FunDef Name Program)
 open LowIR.Compile
 open Rv64i (Word Byte)
 
@@ -26,43 +26,43 @@ def DATA  : Word := 0x20000
 def SPTOP : Word := 0x80000
 def HALT  : Word := CODE + 4
 
-/-- Initial machine: compiled code at CODE, `args` in a0.., sp = SPTOP,
-    `data` at DATA (everything else reads 0). -/
-def machineOf (code : List Rv64i.Instr) (args : List Word) (data : List Byte) :
+/-- Initial machine: the full blob (code + const-data segment) at CODE,
+    `args` in a0.., sp = SPTOP, `data` at DATA (everything else reads 0). -/
+def machineOf (blob : List Byte) (args : List Word) (data : List Byte) :
     Rv64i.State :=
   { reg := fun i =>
       if i = 2 then SPTOP
       else if 10 ≤ i ∧ i < 10 + args.length then args.getD (i - 10) 0
       else 0
     pc  := CODE
-    mem := LowIR.loadMem CODE (LowIR.asmBytes code) DATA data }
+    mem := LowIR.loadMem CODE blob DATA data }
 
 /-- IL side: final callee state of `Prog.run`. -/
-def ilFinal (env : Env) (entry : Name) (args : List Word) (data : List Byte)
+def ilFinal (P : Program) (entry : Name) (args : List Word) (data : List Byte)
     (fuel : Nat) : Option LowIR.Prog.St :=
-  LowIR.Prog.run env 0 fuel entry args (LowIR.memOf DATA data) SPTOP
+  LowIR.Prog.run P 0 fuel entry args (LowIR.memOf DATA data) SPTOP
 
 /-- Machine side: compile, load, run to HALT (`none` if compile fails or the
     machine doesn't reach the halt pc in `fuel`). -/
-def mcFinal (env : Env) (entry : Name) (args : List Word) (data : List Byte)
+def mcFinal (P : Program) (entry : Name) (args : List Word) (data : List Byte)
     (fuel : Nat) : Option Rv64i.State := do
-  let code ← compileProg env entry
-  let m := Rv64i.runFuel HALT fuel (machineOf code args data)
+  let blob ← progBytes P entry
+  let m := Rv64i.runFuel HALT fuel (machineOf blob args data)
   if m.pc = HALT then some m else none
 
 /-- Compare the entry's declared returns: IL ret registers vs machine a0.. -/
-def diffOk (env : Env) (entry : Name) (args : List Word) (data : List Byte := [])
+def diffOk (P : Program) (entry : Name) (args : List Word) (data : List Byte := [])
     (ilFuel : Nat := 1000) (mcFuel : Nat := 100000) : Bool :=
-  match List.lookup entry env,
-        ilFinal env entry args data ilFuel, mcFinal env entry args data mcFuel with
+  match List.lookup entry P.env,
+        ilFinal P entry args data ilFuel, mcFinal P entry args data mcFuel with
   | some fd, some s, some m =>
       fd.rets.toList.map s.rget == (List.range fd.rvc).map fun j => m.rget (A j)
   | _, _, _ => false
 
 /-- Compare the first `n` bytes of the data region as well. -/
-def memDiffOk (n : Nat) (env : Env) (entry : Name) (args : List Word)
+def memDiffOk (n : Nat) (P : Program) (entry : Name) (args : List Word)
     (data : List Byte := []) (ilFuel : Nat := 1000) (mcFuel : Nat := 100000) : Bool :=
-  match ilFinal env entry args data ilFuel, mcFinal env entry args data mcFuel with
+  match ilFinal P entry args data ilFuel, mcFinal P entry args data mcFuel with
   | some s, some m =>
       (List.range n).all fun k =>
         s.mem (DATA + BitVec.ofNat 64 k) == m.mem (DATA + BitVec.ofNat 64 k)
@@ -178,6 +178,17 @@ theorem diff_rec0       : diffOk recSum "rec" [0] = true := by native_decide
 -- sanity: the pipeline REFUSES what it must (hog's frame > imm12; missing entry)
 #guard LowIR.Compile.compileProg LowIR.Prog.testEnv "sub3" = none  -- hog in env
 #guard LowIR.Compile.compileProg denv "nosuch" = none
+
+/-! ### Stage 4b — const data: `cref`/`clen` through the whole pipeline
+    (data segment in the blob, jal-pc-read address materialization). -/
+
+theorem diff_sumdata : diffOk LowIR.Prog.sumData "sumd" [] = true := by
+  native_decide
+
+-- refusal: data object too large for the fixed synth/cref range
+#guard LowIR.Compile.compileProg
+        { env := LowIR.Prog.sumData.env,
+          data := [("tbl", List.replicate (2^23) 0)] } "sumd" = none
 
 /-! ### Stage 5 — the library (`LowIR/ProgLib.lean`) through the compiler:
     strlen, strtoull, hex0, hex1 individually (inputs staged at DATA, hex
