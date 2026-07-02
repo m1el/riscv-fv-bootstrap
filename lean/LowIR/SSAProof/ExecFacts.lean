@@ -32,6 +32,33 @@ variable (env : Env) (stackLo : Word)
 @[simp] theorem bindOuts_cons (s : St) (o : Reg) (os : List Reg) (v : Word) (vs : List Word) :
     bindOuts s (o :: os) (v :: vs) = bindOuts (s.rset o v) os vs := rfl
 
+/-! ### Register/memory access simp lemmas (mirrors the flat `StrlenProof` set,
+    retargeted at `Prog.St`; register indices are literals so `Nat.reduceEq`
+    discharges the `i ≠ j` side conditions). -/
+
+@[simp] theorem rget_zero (s : St) : s.rget 0 = 0 := by simp [Prog.St.rget]
+
+@[simp] theorem rset_mem (s : St) (i : Reg) (v : Word) : (s.rset i v).mem = s.mem := by
+  unfold Prog.St.rset; split <;> rfl
+
+@[simp] theorem rset_sp (s : St) (i : Reg) (v : Word) : (s.rset i v).sp = s.sp := by
+  unfold Prog.St.rset; split <;> rfl
+
+@[simp] theorem rget_rset_eq (s : St) (i : Reg) (v : Word) (h : i ≠ 0) :
+    (s.rset i v).rget i = v := by
+  unfold Prog.St.rset Prog.St.rget; rw [if_neg h, if_neg h]; simp
+
+@[simp] theorem rget_rset_ne (s : St) (i j : Reg) (v : Word) (h : j ≠ i) :
+    (s.rset i v).rget j = s.rget j := by
+  by_cases hi : i = 0
+  · subst hi; simp [Prog.St.rset]
+  · by_cases hj : j = 0
+    · subst hj; simp [Prog.St.rget]
+    · unfold Prog.St.rset Prog.St.rget
+      rw [if_neg hi, if_neg hj, if_neg hj]; simp only []; rw [if_neg h]
+
+@[simp] theorem loadByte_eq (s : St) (a : Word) : s.loadByte a = s.mem a := rfl
+
 /-! ### Leaf statements — pure value/outcome equations. -/
 
 theorem exec_skip (fuel : Nat) (s : St) :
