@@ -50,9 +50,22 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   split lives once inside `run_store`) and `single_op_sim`/`two_op_sim` (abstract
   compute `C`/`vC`, each op supplies its `step_*` lemma as `hC`) — all
   `[propext, Quot.sound]`. `seq` chains the fuel `ih` (stepN_add + pc_congr;
-  frame side conditions transfer via `StInv_sp_eq`). `sorry` remains ONLY for
-  control-flow (ife/while/block/ret/brk/cont/call) and memory (lbu/ld/sb/sd/cref/
-  clen) — Phases 4.2–4.4.
+  frame side conditions transfer via `StInv_sp_eq`).
+- **Phase 4.2 memory ops — DONE (ld/sd/lbu/sb).** New file `ProgSim/MemFacts.lean`
+  (the memory analogue of `SlotFacts`, all `[propext, Quot.sound]`): `loadWord_agree`
+  / `loadWord_agree_off` (machine load = IL load off `MachPriv` — the P1 address
+  equality + byte agreement), `storeWord_mem_agree` (a store writes IDENTICAL bytes
+  into IL and machine memory ⇒ pointwise agreement, NO in/out-range split), and the
+  payoffs `StInv_storeWord_user`/`StInv_storeByte_user` (a user store off this
+  activation's hole ⇒ disjoint from live slots, and off the blob ⇒ `Installed`
+  survives). `lower_sim` now has a `MemAccOff` hypothesis (per-statement "accessed
+  bytes off `MachPriv`", recursing through `seq` like `exec`; trivial for
+  non-memory cases) threaded through `seq`. ld/lbu go via the (mem-generalized)
+  `single_op_sim`; sd/sb are two loads then the machine store, with the toNat
+  range-disjointness derived from `MemAccOff`'s pointwise form by the constructive
+  `range_disjoint_of_bytes`. `#guard`: `emit frameLocal.body` (sd+ld) == real
+  lowering. `sorry` remains ONLY for control-flow (ife/while/block/ret/brk/cont/
+  call) and cref/clen — Phase 4.3.
 - **Phase 4.1 sub3 corollary — DONE, go/no-go CLOSED (sorry-free).**
   `sub3_body_exec` (IL spec `(a+b)−c` into x10, forward via `exec_*`) +
   `sub3_body_sim`: from a `StInv`-related state with `emit sub3.body` installed,
@@ -62,10 +75,12 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   control-flow `sorry`), chained with `stepN_add`. The IL result reproduces the
   differential oracle `diff_sub3` ([30,12,2] ↦ 40), checked by a `native_decide`
   example. The relation is validated end-to-end against the oracle.
-- **NEXT:** Phase 4.2 memory ops (`ld/sd/lbu/sb` via WordMem + MachStack), 4.3
-  control flow (branches — the outcome selects a label; needs the `Emitted`
-  label-offset algebra), Phase 2 (AsmFacts: `Emitted L pos (emit stmt)` from the
-  real pipeline), 5 (call), 6 (prog_sim).
+- **NEXT:** Phase 4.3 control flow (ife/while/block/ret/brk/cont — the outcome
+  selects a label; needs the `Emitted` label-offset algebra + a `.brk/.cont/.ret`
+  outcome-carrying `lower_sim` generalization), cref/clen (`synthConst`), Phase 2
+  (AsmFacts: `Emitted L pos (emit stmt)` from the real pipeline), 5 (call),
+  6 (prog_sim). A sorry-free frameLocal corollary (mem end-to-end vs the oracle)
+  can be done now by driving sd/ld through the simulators directly (as sub3 did).
 
 ## 0. Mission and payoff
 
@@ -456,7 +471,11 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
   e688c5a, dade03c).
 - [x] Toy sub3 corollary against the differential oracle — DONE, `sorry`-free
   (`sub3_body_sim` via `two_op_sim` directly; oracle value 40 via `native_decide`).
-- [ ] Finish `lower_sim`: memory ops (ld/sd/lbu/sb/cref/clen), control flow
-  (ife/while/block/ret/brk/cont/call) — Phases 4.2–4.4.
+- [x] **Phase 4.2 memory ops — DONE (ld/sd/lbu/sb).** `ProgSim/MemFacts.lean`
+  (StInv_store{Word,Byte}_user, loadWord_agree_off, range_disjoint_of_bytes) +
+  the four `lower_sim` cases via a `MemAccOff` access side-condition, all
+  `[propext, Quot.sound]`. `#guard` on frameLocal.body.
+- [ ] Finish `lower_sim`: cref/clen, control flow (ife/while/block/ret/brk/cont/
+  call) — Phases 4.3–4.4.
 - [ ] Then Phases 1/2 (encode/decode, assembler) in parallel-friendly chunks,
   the rest of 4, 5, 6 in order.
