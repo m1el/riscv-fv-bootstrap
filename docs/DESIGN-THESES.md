@@ -1,6 +1,6 @@
 # Design theses: toward a verified systems language
 
-Distilled 2026-07 from the [third-party design-review series](README.md#third-party-design-reviews)
+Distilled 2026-07 from the [third-party design-review series](third-party/README.md)
 (Radix, Verus, CompCert, CakeML+Pancake, bedrock2, rustc, Creusot, Prusti,
 RefinedC, Frama-C, lean-mlir, seL4+l4v) and the discussion around it. Ten
 theses about how verified programs, compilers, and languages should be
