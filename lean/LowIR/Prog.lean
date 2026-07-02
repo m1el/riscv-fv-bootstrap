@@ -242,16 +242,16 @@ def run (env : Env) (stackLo : Word) (fuel : Nat) (f : Name) (argVals : List Wor
 
 /-! ### Sanity battery (`#guard` — executable, no proofs). -/
 
-private def zeroMem : Word → Byte := fun _ => 0
+def zeroMem : Word → Byte := fun _ => 0
 
 /-- Test fixture: `sub3 (a,b,c) = (a+b)-c`, no frame. Params x10 x11 x12 → ret x10. -/
-private def sub3 : FunDef :=
+def sub3 : FunDef :=
   { argc := 3, rvc := 1, params := #v[10, 11, 12], rets := #v[10]
     frameSize := 0, frameReg := 5
     body := .seq (.add 6 10 11) (.sub 10 6 12) }
 
 /-- `sumTo (n) = 1+2+…+n` via a while loop with continue-free body. x10=n → x10. -/
-private def sumTo : FunDef :=
+def sumTo : FunDef :=
   { argc := 1, rvc := 1, params := #v[10], rets := #v[10]
     frameSize := 0, frameReg := 5
     body := .seq (.addi 6 0 0) <|                    -- acc := 0
@@ -262,7 +262,7 @@ private def sumTo : FunDef :=
 
 /-- `frameLocal (v) : write v to the frame local at frameReg+0 via sd, read it
     back via ld, return it` — the D8 ld/sd/frame roundtrip. x8 = frame base. -/
-private def frameLocal : FunDef :=
+def frameLocal : FunDef :=
   { argc := 1, rvc := 1, params := #v[10], rets := #v[10]
     frameSize := 16, frameReg := 8
     body := .seq (.sd 8 10 0) <|                     -- mem64[frame+0] := v
@@ -270,7 +270,7 @@ private def frameLocal : FunDef :=
             (.ld 10 8 0) }                           -- x10 := mem64[frame+0]
 
 /-- `caller (v) = frameLocal(v+1) + 1`, i.e. v+2 — a two-function call. -/
-private def caller : FunDef :=
+def caller : FunDef :=
   { argc := 1, rvc := 1, params := #v[10], rets := #v[10]
     frameSize := 0, frameReg := 5
     body := .seq (.addi 11 10 1) <|                          -- x11 := v+1
@@ -278,72 +278,72 @@ private def caller : FunDef :=
             (.addi 10 12 1) }                                -- ret := x12+1
 
 /-- Early `ret` via block/brk interplay: returns 7 out of a nested block. -/
-private def early : FunDef :=
+def early : FunDef :=
   { argc := 0, rvc := 1, params := #v[], rets := #v[10]
     frameSize := 0, frameReg := 5
     body := .seq (.block (.seq (.addi 10 0 7) (.seq .ret (.addi 10 0 9))))
                  (.addi 10 0 3) }   -- unreachable: ret escapes the block
 
 /-- Hog: frameSize bigger than the whole stack — must trip the overflow check. -/
-private def hog : FunDef :=
+def hog : FunDef :=
   { argc := 0, rvc := 0, params := #v[], rets := #v[]
     frameSize := 0x10000, frameReg := 8, body := .skip }
 
-private def env : Env :=
+def testEnv : Env :=
   [("sub3", sub3), ("sumTo", sumTo), ("frameLocal", frameLocal),
    ("caller", caller), ("early", early), ("hog", hog),
    ("hogCaller", { argc := 0, rvc := 0, params := #v[], rets := #v[]
                    frameSize := 0, frameReg := 5
                    body := .call 0 0 "hog" #v[] #v[] })]
 
-private def STACK_LO : Word := 0x4000
-private def SP0      : Word := 0x8000
+def STACK_LO : Word := 0x4000
+def SP0      : Word := 0x8000
 
-private def runOn (f : Name) (args : List Word) : Option St :=
-  run env STACK_LO 1000 f args zeroMem SP0
+def testRun (f : Name) (args : List Word) : Option St :=
+  run testEnv STACK_LO 1000 f args zeroMem SP0
 
 -- the whole test env is well-formed
-#guard wfEnv env
+#guard wfEnv testEnv
 
 -- arithmetic: (30+12)-2 = 40
-#guard (runOn "sub3" [30, 12, 2]).map (·.rget 10 |>.toNat) = some 40
+#guard (testRun "sub3" [30, 12, 2]).map (·.rget 10 |>.toNat) = some 40
 
 -- loop: sum 1..10 = 55; sum 1..0 = 0
-#guard (runOn "sumTo" [10]).map (·.rget 10 |>.toNat) = some 55
-#guard (runOn "sumTo" [0]).map (·.rget 10 |>.toNat) = some 0
+#guard (testRun "sumTo" [10]).map (·.rget 10 |>.toNat) = some 55
+#guard (testRun "sumTo" [0]).map (·.rget 10 |>.toNat) = some 0
 
 -- frame local sd/ld roundtrip
-#guard (runOn "frameLocal" [0xDEAD]).map (·.rget 10 |>.toNat) = some 0xDEAD
+#guard (testRun "frameLocal" [0xDEAD]).map (·.rget 10 |>.toNat) = some 0xDEAD
 
 -- two-function call: caller(5) = 7; callee's regs must NOT leak (x11 stays caller's v+1)
-#guard (runOn "caller" [5]).map (fun s => ((s.rget 10).toNat, (s.rget 11).toNat))
+#guard (testRun "caller" [5]).map (fun s => ((s.rget 10).toNat, (s.rget 11).toNat))
         = some (7, 6)
 
 -- callee frame is BELOW caller's sp; caller's sp is restored after the call:
 -- run "caller" and check final sp = entry sp (sp0 - caller.frameSize = sp0)
-#guard (runOn "caller" [5]).map (·.sp) = some SP0
+#guard (testRun "caller" [5]).map (·.sp) = some SP0
 
 -- ret escapes block and skips the rest of the function
-#guard (runOn "early" []).map (·.rget 10 |>.toNat) = some 7
+#guard (testRun "early" []).map (·.rget 10 |>.toNat) = some 7
 
 -- annot is a no-op
-#guard (run env STACK_LO 100 "sub3" [1, 2, 0] zeroMem SP0).map (·.rget 10)
+#guard (run testEnv STACK_LO 100 "sub3" [1, 2, 0] zeroMem SP0).map (·.rget 10)
         = (run [("sub3", { sub3 with body := .seq (.annot "hi") sub3.body })]
                STACK_LO 100 "sub3" [1, 2, 0] zeroMem SP0).map (·.rget 10)
 
 -- stack overflow: hog's frame doesn't fit → none (directly and through a call)
-#guard runOn "hog" [] = none
-#guard runOn "hogCaller" [] = none
+#guard testRun "hog" [] = none
+#guard testRun "hogCaller" [] = none
 
 -- unknown function / bad arity at a call site → none
-#guard (run env STACK_LO 100 "nosuch" [] zeroMem SP0) = none
+#guard (run testEnv STACK_LO 100 "nosuch" [] zeroMem SP0) = none
 #guard (run [("bad", { caller with body := .call 2 1 "frameLocal" #v[10, 11] #v[12] }),
              ("frameLocal", frameLocal)]
             STACK_LO 100 "bad" [1] zeroMem SP0) = none
 
 /-! Nested calls, 3 deep: f3(v) = f2(v)+1 = (f1(v)+1)+1 = v+3, each with a
     frame local proving the frames don't clobber each other. -/
-private def chainFn (callee : Option Name) : FunDef :=
+def chainFn (callee : Option Name) : FunDef :=
   { argc := 1, rvc := 1, params := #v[10], rets := #v[10]
     frameSize := 8, frameReg := 8
     body :=
@@ -355,7 +355,7 @@ private def chainFn (callee : Option Name) : FunDef :=
                   .seq (.sub 13 11 12) <|              -- g(v) - v  (sanity distance)
                   (.addi 10 11 1) }                    -- ret := g(v)+1
 
-private def chainEnv : Env :=
+def chainEnv : Env :=
   [("f1", chainFn none), ("f2", chainFn (some "f1")), ("f3", chainFn (some "f2"))]
 
 #guard wfEnv chainEnv
@@ -365,7 +365,7 @@ private def chainEnv : Env :=
 /-! Recursion smoke test (policy C5 open — executably it just works on fuel):
     rec(n) = n + rec(n-1), rec(0) = 0 — sumTo again, but recursive, with each
     activation parking `n` in its own frame across the recursive call. -/
-private def recSum : Env :=
+def recSum : Env :=
   [("rec", { argc := 1, rvc := 1, params := #v[10], rets := #v[10]
              frameSize := 8, frameReg := 8
              body := .seq (.addi 7 0 1) <|
