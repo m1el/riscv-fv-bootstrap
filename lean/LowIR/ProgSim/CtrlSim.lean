@@ -471,6 +471,135 @@ theorem lower_sim_cf
           (LowIR.Prog.exec_sd P dbase pad stackLo fuel rb rv imm s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+    case ife c a b t e =>
+      simp only [maxRegS] at hreg
+      obtain ⟨hbrbr, hbrT, hbrE⟩ := hbr
+      obtain ⟨haccT, haccE⟩ := haccess
+      have hab : max a b ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
+      have hra : a ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hab
+      have hrb : b ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hab
+      have hte : max (maxRegS t) (maxRegS e) ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
+      have hregT : maxRegS t ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hte
+      have hregE : maxRegS e ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hte
+      have hfa : slotOff a < 2 ^ 11 := by have := slotOff_add8_le_userOff fd a hra; omega
+      have hfb : slotOff b < 2 ^ 11 := by have := slotOff_add8_le_userOff fd b hrb; omega
+      have hinst : Installed L m := hinv.2.2.1
+      have hemU : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1
+          ++ [condInstr c T0 T1 (8 + 4 * csize e)]
+          ++ emitCF brkPos contPos epiPos (here + 12) e
+          ++ [jal0 (4 + 4 * csize t)]
+          ++ emitCF brkPos contPos epiPos (here + 16 + 4 * csize e) t) := hem
+      have hP2 : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1) :=
+        Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _
+          (Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hemU)))
+      obtain ⟨hinv1, h1pc, h1mem, h1T0, -⟩ :=
+        run_load L fd holes s m a T0 here hinv hra hfa (by decide) (by decide) hpc
+          (Emitted_append_left _ _ _ _ hP2)
+      have hemB : Emitted L (here + 4) (loadSlotI b T1) := by
+        have h := Emitted_append_right _ _ _ _ hP2; rwa [loadSlotI_length, Nat.mul_one] at h
+      obtain ⟨hinv2, h2pc, h2mem, h2T1, h2oth⟩ :=
+        run_load L fd holes s (step m) b T1 (here + 4) hinv1 hrb hfb (by decide) (by decide) h1pc hemB
+      have h2T0 : (step (step m)).rget T0 = s.rget a := by rw [h2oth T0 (by decide)]; exact h1T0
+      have h2mm : (step (step m)).mem = m.mem := by rw [h2mem, h1mem]
+      have hemBr : Emitted L (here + 8) [condInstr c T0 T1 (8 + 4 * csize e)] := by
+        have h := Emitted_append_right _ _ _ _ (Emitted_append_left _ _ _ _
+          (Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hemU)))
+        rw [List.length_append, loadSlotI_length, loadSlotI_length] at h
+        rwa [show here + 4 * (1 + 1) = here + 8 from by omega] at h
+      have hdBr : decode (fetch32 (step (step m))) = condInstr c T0 T1 (8 + 4 * csize e) := by
+        have h := decode_at L m (step (step m)) (here + 8) _ hemBr hinst 0 (by simp)
+          (by rw [h2pc]) h2mm
+        simpa using h
+      have hb13lo : -(2 ^ 12 : Int) ≤ (8 : Int) + 4 * (csize e : Int) := by omega
+      have hb13hi : (8 : Int) + 4 * (csize e : Int) < 2 ^ 12 := by
+        have : 8 + 4 * csize e < 2 ^ 12 := hbrbr; omega
+      have hbnd2 : here + 16 + 4 * csize e + 4 * csize t < 2 ^ 20 := by
+        simp only [csize] at hbnd; omega
+      have h3 : stepN 3 m = step (step (step m)) := rfl
+      have hsN : ∀ n, stepN (3 + n) m = stepN n (step (step (step m))) := fun n => by
+        rw [stepN_add, h3]
+      cases hev : evalCond c (s.rget a) (s.rget b) with
+      | true =>
+          rw [LowIR.Prog.exec_ife_then (h := hev)] at hexec
+          have hs3 : step (step (step m)) = (step (step m)).setPc
+              ((step (step m)).pc + (BitVec.ofInt 13 (8 + 4 * csize e)).signExtend 64) :=
+            cond_taken (step (step m)) c _ (s.rget a) (s.rget b) hdBr h2T0 h2T1 hev
+          have hinv3 : StInv L fd holes s (step (step (step m))) := by
+            rw [hs3]; exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hinv2
+          have hpc3 : (step (step (step m))).pc
+              = L.codeBase + BitVec.ofNat 64 (here + 16 + 4 * csize e) := by
+            rw [hs3, pc_setPc, h2pc, signExtend_ofInt_13 _ hb13lo hb13hi]
+            rw [show ((8 : Int) + 4 * (csize e : Int))
+                  = (↑(here + 16 + 4 * csize e) : Int) - ↑(here + 4 + 4) from by push_cast; omega]
+            exact jump_lands L.codeBase (here + 4 + 4) (here + 16 + 4 * csize e)
+          have hemT : Emitted L (here + 16 + 4 * csize e)
+              (emitCF brkPos contPos epiPos (here + 16 + 4 * csize e) t) := by
+            have h := Emitted_append_right _ _ _ _ hemU
+            rw [show (loadSlotI a T0 ++ loadSlotI b T1 ++ [condInstr c T0 T1 (8 + 4 * csize e)]
+                  ++ emitCF brkPos contPos epiPos (here + 12) e ++ [jal0 (4 + 4 * csize t)]).length
+                  = 4 + csize e from by
+                  simp only [List.length_append, loadSlotI_length, List.length_cons,
+                             List.length_nil, emitCF_length]; omega] at h
+            rwa [show here + 4 * (4 + csize e) = here + 16 + 4 * csize e from by omega] at h
+          obtain ⟨kt, hinvT, hpcT⟩ :=
+            ih t s s' oc (step (step (step m))) (here + 16 + 4 * csize e) brkPos contPos hexec hinv3
+              hpc3 hemT hregT hnw hbd haccT hlbl (by simp only [csize] at hbnd; omega) hbrT
+          refine ⟨3 + kt, by rw [hsN kt]; exact hinvT, ?_⟩
+          rw [hsN kt, hpcT,
+              show here + 16 + 4 * csize e + 4 * csize t
+                = here + 4 * csize (LowIR.Prog.Stmt.ife c a b t e) from by simp only [csize]; omega]
+      | false =>
+          rw [LowIR.Prog.exec_ife_else (h := hev)] at hexec
+          have hs3 : step (step (step m)) = (step (step m)).setPc ((step (step m)).pc + 4) :=
+            cond_not_taken (step (step m)) c _ (s.rget a) (s.rget b) hdBr h2T0 h2T1 hev
+          have hinv3 : StInv L fd holes s (step (step (step m))) := by
+            rw [hs3]; exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hinv2
+          have hpc3 : (step (step (step m))).pc = L.codeBase + BitVec.ofNat 64 (here + 12) := by
+            rw [hs3, pc_setPc, h2pc, pc_add4]
+          have hemE : Emitted L (here + 12) (emitCF brkPos contPos epiPos (here + 12) e) := by
+            have h := Emitted_append_right _ _ _ _ (Emitted_append_left _ _ _ _
+              (Emitted_append_left _ _ _ _ hemU))
+            rw [show (loadSlotI a T0 ++ loadSlotI b T1
+                  ++ [condInstr c T0 T1 (8 + 4 * csize e)]).length = 3 from by
+                  simp only [List.length_append, loadSlotI_length, List.length_cons,
+                             List.length_nil]] at h
+            rwa [show here + 4 * 3 = here + 12 from by omega] at h
+          obtain ⟨ke, hinvE, hpcE⟩ :=
+            ih e s s' oc (step (step (step m))) (here + 12) brkPos contPos hexec hinv3 hpc3 hemE
+              hregE hnw hbd haccE hlbl (by simp only [csize] at hbnd; omega) hbrE
+          cases oc with
+          | normal =>
+              have hemJ : Emitted L (here + 12 + 4 * csize e) [jal0 (4 + 4 * csize t)] := by
+                have h := Emitted_append_right _ _ _ _ (Emitted_append_left _ _ _ _ hemU)
+                rw [show (loadSlotI a T0 ++ loadSlotI b T1 ++ [condInstr c T0 T1 (8 + 4 * csize e)]
+                      ++ emitCF brkPos contPos epiPos (here + 12) e).length = 3 + csize e from by
+                      simp only [List.length_append, loadSlotI_length, List.length_cons,
+                                 List.length_nil, emitCF_length]] at h
+                rwa [show here + 4 * (3 + csize e) = here + 12 + 4 * csize e from by omega] at h
+              have hpcE' : (stepN ke (step (step (step m)))).pc
+                  = L.codeBase + BitVec.ofNat 64 (here + 12 + 4 * csize e) := by
+                rw [hpcE]; simp only [landPos]
+              obtain ⟨hstJ, hpcJ⟩ :=
+                jump_sim L fd holes s' (stepN ke (step (step (step m)))) (here + 12 + 4 * csize e)
+                  (here + 16 + 4 * csize e + 4 * csize t) _ hinvE hpcE' hemJ (by push_cast; omega)
+                  (by omega) (by omega)
+              refine ⟨3 + ke + 1, ?_, ?_⟩
+              · rw [show stepN (3 + ke + 1) m = step (stepN (3 + ke) m) from by rw [stepN_add]; rfl,
+                    hsN ke]
+                exact hstJ
+              · rw [show stepN (3 + ke + 1) m = step (stepN (3 + ke) m) from by rw [stepN_add]; rfl,
+                    hsN ke, hpcJ]
+                simp only [landPos]
+                exact pc_congr _ (by simp only [csize]; omega)
+          | brk k =>
+              refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_⟩
+              rw [hsN ke, hpcE]; simp only [landPos]
+          | cont k =>
+              refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_⟩
+              rw [hsN ke, hpcE]; simp only [landPos]
+          | ret =>
+              refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_⟩
+              rw [hsN ke, hpcE]; simp only [landPos]
     all_goals sorry
 
 end LowIR.ProgSim

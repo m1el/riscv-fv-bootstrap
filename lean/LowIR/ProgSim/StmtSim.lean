@@ -578,6 +578,9 @@ def MemAccOff (L : Layout) (holes : List Hole)
            MemAccOff L holes P dbase pad stackLo fuel b s1)
   | fuel + 1, .block body, s =>
       MemAccOff L holes P dbase pad stackLo fuel body s
+  | fuel + 1, .ife _ _ _ t e, s =>
+      MemAccOff L holes P dbase pad stackLo fuel t s ∧
+        MemAccOff L holes P dbase pad stackLo fuel e s
   | _, _, _ => True
 
 /-! ## `jump_sim` — the leaf unconditional jump (the `ret`/`brkB`/`contL` atom).
