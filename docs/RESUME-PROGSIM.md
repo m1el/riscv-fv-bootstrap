@@ -112,6 +112,18 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   strlen/strtoull/hex0/hex1 (all control-flow constructs + nestings) — the concrete
   decidable IR↔assembly mapping. This is the emit the outcome-carrying `lower_sim`
   inducts over.
+- **Phase 4.3 `lower_sim_cf` (outcome-carrying) — IN PROGRESS (`CtrlSim.lean`).**
+  Conclusion carries the `Outcome`: the machine lands at `codeBase + landPos(oc)`
+  (`landPos`: normal↦fall-through, brk k↦brkPos[k], cont k↦contPos[k], ret↦epiPos).
+  Fuel induction over `emitCF` with the label environment. **Cases DONE:** skip,
+  annot, block (IH on body with `lEnd::brkPos`, outcome case-walk), the six arith
+  + four mem ops (delegate to `emit`'s `lower_sim`), seq (outcome-threaded), the
+  three leaf jumps ret/brkB/contL (`jump_sim`), and **`ife`** — two `run_load`s to
+  the branch, `cond_taken`/`cond_not_taken` split on `evalCond`, then/else IHs,
+  else-normal extra jal, landings reconciled. Needs a `BranchOk` side condition
+  (every ife's `8+4·csize e < 2^12`, the compiler's 13-bit branch-span guard) and
+  a `MemAccOff` ife case (both arms access-safe). **Remaining `sorry`:** while
+  (fuel-IH back-edge + `contPos` scope), cref, clen, call.
 - **Phase 4.1 sub3 corollary — DONE, go/no-go CLOSED (sorry-free).**
   `sub3_body_exec` (IL spec `(a+b)−c` into x10, forward via `exec_*`) +
   `sub3_body_sim`: from a `StInv`-related state with `emit sub3.body` installed,
