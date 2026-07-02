@@ -1,0 +1,124 @@
+# LowIRSSA — SSA/value-flavored variant of the Prog IR (experiment)
+
+Status: **design experiment**, user-directed, 2026-07-02. Code:
+`lean/LowIR/SSA.lean` (lib `LowIRSSA`, in `defaultTargets`; executable `#guard`
+battery, no proofs). Companions: [LOWIR-DESIGN.md](LOWIR-DESIGN.md) (D7/D8 and
+the explicit not-SSA decision this experiment probes),
+[RESUME-PROGSIM.md](RESUME-PROGSIM.md) (the campaign this must not disturb).
+
+## What it is
+
+`LowIR.SSA` is `LowIR.Prog` (D7 calls + D8 frames) re-shaped so that control
+constructs *produce values* and registers are single-assignment:
+
+| Piece | Prog (D7/D8) | SSA experiment |
+|---|---|---|
+| registers | mutable locals | defined once per function (params, frameReg, op dests, `outs`, loop `args`); enforced by a decidable checker |
+| outcomes | `brk k / cont k / ret` bare | **carry `List Word`** — jumps transport values |
+| function results | `rets : Vector Reg rvc` read at the boundary | **arity only** (`rvc`); `ret [operands]` carries the values; `run` returns them directly |
+| `block` | pure break scope | `block (outs) body` — `brk 0 [vs]` binds `outs`; body must not fall through (except `outs = []`) |
+| `ife` | transparent to brk indices | **its own break scope** (Wasm-style): arms deliver `outs` via `brk 0 [vs]`, or are `.never` (e.g. `ret`) — then `outs` need no initialization on that path |
+| `while` | cond over mutable regs, body falls through and re-loops | **block-parameter loop**: `while (outs) (inits) (args) c a b body dflt` — `args` are the φ-nodes, bound to `inits` on entry and rebound by `cont 0 [vs]` ("iteration is a tail call"); exits deliver `outs` |
+| operands | registers only (+ x0) | `Opnd = .reg r \| .const v` at value-flow sites (brk/cont/ret args, inits, call args) |
+| statement type | — | `.never` (fall-through unreachable) vs `.thru`, computed by the checker |
+
+Omitted as orthogonal (would port verbatim from Prog): const data
+(`cref`/`clen`/`Program.data`), the P1 `pad` oracle, `execT` footprints.
+
+## Decisions made where the sketch was ambiguous
+
+1. **`defaultBody` runs on EVERY guard-false, with the current `args` in
+   scope** — not only when the loop is never entered. The user's first sketch
+   had `defaultOut : List Opnd` (outer-scope values); that design *discards
+   loop-carried values on a guard exit* — a sum loop exiting via `i > n` would
+   return the outer default, not the accumulated sum, so every value-carrying
+   loop would be forced onto explicit `brk` exits and the guard would be dead
+   weight. The mid-flight switch to a `defaultBody` *statement*, given `args`
+   in scope, fixes this: the guard exit runs `dflt`, which can
+   `brk 0 [.reg acc]`. This is exactly MLIR `scf.while`'s before-region /
+   Cranelift's block-param shape. The zero-trip case falls out: `dflt` then
+   sees `args = inits`. (`sumTo`/`sumCap` in the battery exercise both.)
+   `dflt` shares the loop's scopes, so it may even `cont 0` to restart.
+2. **Loop bodies are `.never`-typed**: `body` and `dflt` must end in
+   `cont`/`brk`/`ret`. There is no implicit fall-through-and-loop (it couldn't
+   rebind `args` anyway). `ife`/`block` arms may fall through only when
+   `outs = []` (the user's "`.value 0` doesn't need destructuring").
+3. **Scope shape**: `ife` shifts brk indices (it catches `brk 0`), unlike
+   Prog; `while` is now *both* a break scope (`brk 0` exits with `outs`) and a
+   continue scope (`cont 0` re-enters) — in Prog/Ctrl it was continue-only,
+   with breaks targeting an enclosing `block`.
+4. **SSA is a checker, not intrinsic typing** (the N3 "checker produces the
+   hypothesis" pattern): the semantics stays a total, clocked, mutable-file
+   big-step (`exec`, Prog's exact shape); `wfFun` = definition census (each
+   register textually defined at most once; x0 exempt as a discard) + a
+   use/arity/type pass (`check`) threading the dominance-approximating
+   `avail` set and the label contexts `brks`/`conts : List Nat` (the arity of
+   each enclosing break/continue target). The user's `.value (Vect n Word)`
+   type lives in those arity contexts; the statement type proper is just
+   `.never | .thru`.
+5. **Never-detection needs may-brk information**: an `ife` whose arms are both
+   `.never` can still be fallen out of *via its own `brk 0`*. This is the Wasm
+   validator's "unreachable polymorphism" in miniature; approximated here by
+   the syntactic `mayBrk` over-approximation (cheap, admits some dead code,
+   never rejects live code).
+6. **Loop iteration in `exec` is re-execution with `inits := consts of the
+   continued values`** — the tail call made literal, recursion at `fuel` from
+   `fuel+1` like every other case, so the clocked-semantics proof toolbox
+   (`exec_mono` style) carries over. Consequence: while-lemmas quantify over
+   `inits`.
+
+## What the battery validates (all `#guard`, executable)
+
+The user's exact `if` example (a `.never` arm returning directly, out register
+uninitialized on that path); value-producing blocks; `sumTo` with a
+guard-exit that *carries* the loop-carried accumulator + the zero-trip case;
+`brk 1` escaping an `ife` into the enclosing `while` while `cont 0` passes
+through the `ife` unshifted; multi-value returns with no return registers;
+D8 frames + recursion + stack-overflow trip under SSA names; and 7 checker
+negatives (double def, use-before-def, arm-local escaping its join, brk arity
+mismatch, fall-through loop body, missing return, dead code after `.never`).
+
+## Assessment — suggestions and criticism
+
+1. **The keeper: lower SSA → Prog; do not fork the compiler.** With Prog's
+   unbounded registers, out-of-SSA is nearly syntactic: give every SSA name a
+   Prog register; a `cont 0 [vs]` edge becomes a parallel copy into the `args`
+   registers, and the classic lost-copy/swap hazard dissolves by staging
+   through fresh temporaries (always available — registers are infinite).
+   Register *pressure* stays where it already lives, in Prog's future
+   allocator (`compile_sim` pass 3). So LowIRSSA's right position is the first
+   rung of the **higher-IR ladder** (LOWIR-DESIGN Ext. 5/10), lowering to Prog
+   by a structural, machine-free pass — and the entire ProgSim campaign is
+   reused unchanged. Building a second Stmt→RV64I compiler for it would be a
+   mistake.
+2. **What SSA actually buys at proof time**: loop invariants become *local* —
+   the induction hypothesis of a `while` proof is a statement about the `args`
+   tuple, read off the `cont` sites, instead of an invariant over a mutable
+   register file plus a per-proof "all other registers unchanged" frame
+   clause. Outer-name immutability is a **once-proved SSA frame theorem**
+   ("exec of a checked statement changes only its `defs`"), the same
+   pay-once economics as `compile_sim`. That, plus valued returns killing the
+   rets-register convention, is the real ergonomic content of the experiment.
+3. **Severable pieces** — worth taking even if SSA itself is not:
+   - *Valued `ret`* (outcome carries the results): removes the "read the
+     callee's `rets` registers at the boundary" convention from D7 with no SSA
+     needed. Cost: touches `exec`/ExecFacts/StmtSim in the live campaign — a
+     post-campaign retrofit, not a now one.
+   - *`Opnd .const` operands* at jump/call sites (kills addi-a-constant
+     staging), and `Cond` over operands.
+   - *`.never` typing* as an extension of Ext. 8's `wf`: even on Prog it would
+     give "all paths return" and dead-code rejection.
+4. **Honest costs**: textual def-once means sibling `ife` arms cannot reuse a
+   name (stricter than dominance-SSA; irrelevant for generated code, mildly
+   annoying handwritten); `mayBrk` over-approximation types some dead joins
+   `.thru` (accepts dead code — harmless, semantics is total); the `check`
+   pass carries more moving parts than Prog's `wf` (label arities + avail
+   threading), which a soundness proof will have to pay for once.
+5. **Where it earns its keep / trigger to graduate**: if the borrow-checker
+   layer (Ext. 5) lands, its natural carrier is exactly this IR — borrow
+   signatures attach to single-assignment names far more cleanly than to
+   mutable registers (no reborrow-vs-overwrite ambiguity). Graduation =
+   (a) the SSA frame theorem + checker soundness lemma, (b) the SSA→Prog
+   lowering + its simulation proof, (c) porting one ProgLib function as the
+   pilot. Until something needs (a)–(c), this stays a frozen experiment;
+   D7's "explicitly not SSA" decision for *Prog itself* stands unrevised.

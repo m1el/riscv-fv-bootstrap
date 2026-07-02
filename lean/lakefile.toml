@@ -1,5 +1,5 @@
 name = "hex0"
-defaultTargets = ["Hex0", "Hex1", "LowIRCompile", "LowIRProgSim"]
+defaultTargets = ["Hex0", "Hex1", "LowIRCompile", "LowIRProgSim", "LowIRSSA"]
 
 [[lean_lib]]
 name = "Hex0"
@@ -17,6 +17,12 @@ name = "LowIR"
 [[lean_lib]]
 name = "LowIRCompile"
 roots = ["LowIR.CompileTests"]
+
+# EXPERIMENT (2026-07-02): SSA variant of the Prog IR — valued outcomes,
+# block-parameter loops, never/thru typing (docs/LOWIR-SSA-EXPERIMENT.md).
+[[lean_lib]]
+name = "LowIRSSA"
+roots = ["LowIR.SSA"]
 
 # The compile_sim-for-Prog proof campaign (docs/RESUME-PROGSIM.md). Rooted at
 # the Defs module for now (the top-level `LowIR.ProgSim.Main` with the payoff
