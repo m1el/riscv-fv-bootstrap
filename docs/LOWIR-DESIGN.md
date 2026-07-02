@@ -121,8 +121,14 @@ Two flavors exist:
 - **No stack / SP / frames / `alloca`.** Stack data is *representable* (a `mem` region off a chosen SP
   register, addressed by arithmetic) but unsupported by convention or sugar. Address-taken/aggregate locals
   would have to be placed in `mem` by hand.
-- **No `call`/return-address.** `Ctrl.ret` returns to the function boundary; there is no call instruction,
-  no `ra` save/restore, no nesting. The model is whole-program / inlined.
+- **`call` is a `ret`-boundary, not an activation boundary.** `Ctrl.call g` (added `d7f8298`,
+  worked example in `CtrlCall.lean`) runs the callee body in the *same* state — shared register
+  file, shared memory — and catches the callee's `ret`. There is no argument passing, no fresh
+  locals, no `ra`. Consequence: register discipline across calls is whole-program — callee specs
+  state their full register footprint, and register *naming* is a global convention. Whether
+  `call` should become **activation-local** (fresh register file + explicit args/rets, making
+  register preservation a non-theorem at the IL — the CompCert-RTL/bedrock2/CakeML design) is an
+  **open decision**; see N2 below and Ext. 3.
 - **Byte-only memory ops.** Only `lbu` (byte load) and `sb` (byte store). Wider accesses must be synthesized
   from byte ops + `slli`/`srli`/`orr` (hex0 builds a byte from two nibbles this way).
 - **No register-count limit.** Spilling to stack for >31 live registers is a `compile_sim` obligation, not
@@ -131,6 +137,34 @@ Two flavors exist:
   (no borrow checker yet — see Ext. 5).
 - **No `compile_sim` for `Ctrl`.** Only the original `LowIR` has a compiler (with the sorry); `Ctrl`
   theorems have no path to bytes yet.
+
+---
+
+## 2b. Non-goals — and where each one lives instead
+
+Unlike §2 (features the IL will likely grow), these are **permanent** exclusions: things LowIR
+should *never* do, each pushed to a specific other layer. The IL stays small because every one of
+these has a designated home. (Informed by the [third-party review series](README.md#third-party-design-reviews)
+and [DESIGN-THESES.md](DESIGN-THESES.md).)
+
+| # | Non-goal for the IR | Where it lives instead | Notes / trigger to revisit |
+|---|---|---|---|
+| N1 | Finite registers, register allocation, spilling | `compile_sim` pass 3, as an untrusted allocator + **verified checker** (translation validation) | Never expressible at the IL — that's the point of `Reg = Nat` (D2). |
+| N2 | Calling convention: stack layout, `sp`/`ra`, prologue/epilogue, **callee-saved preservation** | `compile_sim` pass 4, with the ABI as a *parameter record*; stated once as a per-compiled-function contract ("only caller-saved + results differ, `sp` restored, `pc = ra`", bedrock2's `only_differ` shape) | At the IL, register preservation across calls should be a **non-theorem** — which requires deciding activation-local `call` (open; see §2). Tail calls are the one place the convention leaks upward (CompCert `tailcall_possible`). |
+| N3 | Separation / aliasing **enforcement** | *Above* the IL: borrow-typed higher IRs / future borrow checker (Ext. 5) *produce* `Wf`/`Disjoint`; LowIR proofs only *consume* them as hypotheses | Never into the memory model (D5). The checker is a pure gate whose output is hypotheses — rustc's architecture. |
+| N4 | Pointer provenance, int↔ptr cast semantics | The borrow layer above (spatial shadow of Tree Borrows); flat `mem`, addresses are integers | Revisit only if `container_of`/pointer-tagging idioms are ever required — then RefinedC's PNVI/VIP is the reference, *paid per function*, not globally. |
+| N5 | Undefined behavior | Nowhere — **UB does not exist at this level by construction**: `exec` is total modulo fuel; `mem` is total. "Going wrong" is a C-level notion, and LowIR is not C | If a C-like surface is ever built above, *its* UB is discharged by *its* checker/verifier before reaching LowIR (thesis 9: no UB nooks). |
+| N6 | Concurrency, threads, TLS, atomics | Out of scope entirely; single-threaded is a **TCB assumption** (D6); `errno` is a global unique borrow | Revisit only if the bootstrap ever grows threads — then `__errno_location`/TLS modelling and a memory model decision (big lock à la seL4 SMP, or oracle traces). |
+| N7 | Heap allocation, GC | No IR primitive. `malloc`/`free` are *libc functions verified on top of* the IL; freshness bookkeeping via the Ext. 4 `alloca`-style fresh-`Slice` primitive if manual disjointness dominates | Pancake's lesson: no GC anywhere in the pipeline. Allocator verification is a program proof, not a language feature. |
+| N8 | I/O, syscalls | The external-call spec interface (§4): pre/post + frame per external, at every pass level; observable behavior via (future) event traces | Today the boundary is memory pre/post (hex0). **Known retrofit debt**: `exec` has no trace/oracle component yet — decide before I/O-bearing libc functions (see review note C2). |
+| N9 | Optimization | Not in `compile_sim` (passes stay dumb and small). If optimization is ever wanted: a verified rewrite engine over the IL, lean-mlir style — engine proved once, rules as lemmas | Re-running verified passes is free (composition); resist smartness inside lowering passes. |
+| N10 | Termination proofs, WCET / cost | Theorems are partial correctness with **existential fuel**; "`∃ fuel, exec fuel …`" *is* the termination statement per function. Cost/WCET: non-goal | bedrock2's metric/leakage strata are the reference design if cost or constant-time claims are ever needed — they'd thread through `compile_sim` phase records, a large retrofit. |
+| N11 | Instruction encoding, PC arithmetic, branch offsets | `compile_sim` passes 5–6; encoder verified to bytes (the TCB point) | Cross-check opportunity: riscv-coq (task #7) and SailRV64 (lean-mlir's Sail-derived Lean semantics) as independent legs. |
+| N12 | Floating point | Absent — RV64I integer subset only | Until forced; then it's new ops + Flocq-class semantics work, a separate campaign. |
+
+One-line summary: **the IL owns functional meaning over flat state; everything about *machines*
+(N1, N2, N11), everything about *discipline* (N3, N4, N5), and everything about the *world*
+(N6, N8) is someone else's job, on purpose.**
 
 ---
 
