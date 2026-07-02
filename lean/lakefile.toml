@@ -1,5 +1,5 @@
 name = "hex0"
-defaultTargets = ["Hex0", "Hex1"]
+defaultTargets = ["Hex0", "Hex1", "LowIRCompile"]
 
 [[lean_lib]]
 name = "Hex0"
@@ -9,3 +9,11 @@ name = "Hex1"
 
 [[lean_lib]]
 name = "LowIR"
+
+# The executable D7/D8 compiler cut (Prog IR + Compile + differential tests).
+# Rooted at the test module so `lake build LowIRCompile` checks the whole
+# pipeline (the bare `LowIR` lib only builds its root module — see
+# docs/RESUME-LOWIR-COMPILER.md on the globs trap).
+[[lean_lib]]
+name = "LowIRCompile"
+roots = ["LowIR.CompileTests"]

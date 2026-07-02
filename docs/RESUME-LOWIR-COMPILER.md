@@ -1,5 +1,22 @@
 # RESUME: LowIR compiler implementation (executable, unverified first cut)
 
+## STATUS 2026-07-02: DONE — all tasks landed
+
+Tasks 2/4/5 implemented and green (commits 16b7296 `Prog.lean`, 1be7e63
+`Compile.lean`+`CompileTests.lean`): the D7/D8 IR, the memory-locals compiler
+to RV64I bytes, and 16 `native_decide` differential theorems. Built by default
+via the `LowIRCompile` lib target (`lake build`; rooted at
+`LowIR.CompileTests`). Execution details in [PROGRESS.md](PROGRESS.md)
+(2026-07-02 entry) — including the halt-address collision the differential
+tests caught. The `encode`-coverage eyeball check passed (all 16 constructors,
+`LowIR.lean:238`). Remaining (deliberately out of this cut): compiler
+verification (`compile_sim` for Prog), definite-assignment optimization,
+>imm12 frames, recursion policy C5.
+
+The original handoff below is kept for the design rationale and plan record.
+
+---
+
 Session handoff, 2026-07. The design session (see below) ended with a mandate:
 **implement the IR as designed (D7/D8) plus the executable compiler pipeline to
 RV64I bytes, validated by differential testing — no formal verification yet.**

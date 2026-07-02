@@ -3,7 +3,39 @@
 Reverse-chronological execution log for the libc-formalization effort (design doc:
 [LIBC-FORMALIZE.md](LIBC-FORMALIZE.md); status: [archive/STATUS.md](archive/STATUS.md) §LowIR).
 
-## In progress (current turn)
+## 2026-07-02 — D7/D8 compiler cut: Prog IR + executable compiler + differential tests
+
+The [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) mandate, all landed
+(commits 16b7296, 1be7e63; build target `LowIRCompile`, in `defaultTargets`):
+
+- **`LowIR/Prog.lean`** — the D7/D8 IR, executable: named activation-local
+  calls (fresh zero-init regs, params-only binding, rets-only copyback,
+  arity-indexed `Vector`s, `wf`/`wfEnv` Ext. 8), D8 frames (semantic
+  unwritable `sp`, `frameEnter` overflow → `none`, `frameReg` binding,
+  structural sp restore), `ld`/`sd` (Rv64i byte order), `annot`. 18 `#guard`s
+  incl. rec(3000) tripping the overflow check.
+- **`LowIR/Compile.lean`** — memory-locals (-O0) compiler to RV64I: frame
+  `[ra | slot per IL reg | user frame]`, t0/t1 lowering, SymInstr label
+  streams, two-pass layout+resolve (range-checked imm12/B/J), a0..a7 call
+  marshalling, prologue `sd x0` zeroing to match IL zero-init exactly.
+  Entry stub `jal ra, entry`; halt pc = codeBase+4 backed by a self-loop
+  landing pad — **differential testing caught the pad's absence**: the first
+  function sat AT the halt address, so entering it silently stopped the
+  machine (rec(0) passed by coincidence — the classic reason diff tests
+  need non-trivial expected values).
+- **`LowIR/CompileTests.lean`** — 16 `native_decide` differential theorems
+  (IL `Prog.exec` vs compiled bytes on `Rv64i.step`): arith, bitops,
+  whole-program encode/decode round-trip, sumOdd (while+ife+contL),
+  findByte (brk-through-loop), nested brkB 1, early ret, memset with
+  byte-for-byte data-region comparison, frame-local ld/sd, 2-function and
+  3-deep chains, rec(10); + compile-refusal guards (frame > imm12, missing
+  entry).
+
+Not in this cut (per plan): verification of the compiler (`compile_sim`-style
+theorem for Prog), definite-assignment optimization, >imm12 frame offsets,
+recursion policy C5 (executably: it just works on fuel + overflow check).
+
+## Previous turn
 
 Items, in order: (a) `strtoull10_correct` sorry-free · (b) label-based compiler so
 `LowIR.Ctrl` programs reach real RV64I bytes · (c) re-prove hex0 on the flat ret-cascade.
