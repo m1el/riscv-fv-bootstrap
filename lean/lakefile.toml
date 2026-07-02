@@ -20,9 +20,11 @@ roots = ["LowIR.CompileTests"]
 
 # EXPERIMENT (2026-07-02): SSA variant of the Prog IR — valued outcomes,
 # block-parameter loops, never/thru typing (docs/LOWIR-SSA-EXPERIMENT.md).
+# Rooted at the Lib module (strlen/hex0 ports + spec validation), which
+# transitively pulls the core LowIR.SSA.
 [[lean_lib]]
 name = "LowIRSSA"
-roots = ["LowIR.SSA"]
+roots = ["LowIR.SSALib"]
 
 # The compile_sim-for-Prog proof campaign (docs/RESUME-PROGSIM.md). Rooted at
 # the Defs module for now (the top-level `LowIR.ProgSim.Main` with the payoff

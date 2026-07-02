@@ -78,6 +78,44 @@ D8 frames + recursion + stack-overflow trip under SSA names; and 7 checker
 negatives (double def, use-before-def, arm-local escaping its join, brk arity
 mismatch, fall-through loop body, missing return, dead code after `.never`).
 
+## Port pilot: strlen and hex0 from ProgLib (2026-07-02)
+
+`lean/LowIR/SSALib.lean` ports `strlenF`/`hex0F` from `ProgLib.lean` onto the
+SSA IR, validated the same way as the originals: the SSA checker passes
+(`wfEnv`), and `native_decide` confirms hex0 ≡ `Hex0.coreSpec` on the full
+Ctrl battery and strlen on the string battery — results read from the
+returned value list, no boundary register convention. What the port showed:
+
+- **The error cascade dissolves.** Prog's `err code = (x14 := code); ret`
+  plus "x14 initialized 0, read at the boundary" becomes a literal
+  `ret [.const code, .reg n]` at each failure site; the success exit is the
+  loop guard's `defaultBody` returning `[.const 0, .reg n]`. Registers x14
+  (status), x15 (comment-guard flag) and x16 (the constant 1) vanish from
+  hex0 entirely.
+- **`pnib` becomes a value-producing `ife`.** The 5-leaf decision tree that
+  in Prog assigns its dst on every leaf and falls through now `brk k [v]`s
+  each leaf to the outs-carrying root; the 255 sentinel leaves are `.const`
+  operands — no register holds them (x19 remains only for the *comparison*
+  against the sentinel, since `Cond` is register-only).
+- **`skipComment` is the design's best moment.** Prog computes a guard bit
+  into x15 (`cgGuard`, duplicated before the loop and in the body) and loops
+  on `x15 ≥u 1`; the SSA version is an always-true inner loop whose two exits
+  `cont 1 [pos, n]` — continuing the OUTER scan loop directly across the
+  inner one, the tail-call framing made literal. No flag, no re-computed
+  guard, and EOF needs no poison: the outer guard just fails.
+- **strlen's load-bearing guard survives**: the guard can't do a load, so the
+  current byte rides as a second loop arg, loaded before each `cont` and
+  seeded before the loop — the standard block-param idiom, and the guard-exit
+  `defaultBody` computes `cur − p` from the final args.
+- **The honest cost is scratch-register naming.** Prog reuses x30/x31 at
+  every site; textual def-once forces a fresh name per site, so helpers
+  (`pnibS`, `skipCommentS`) take their scratch registers as parameters and
+  hex0 allocates ~20 extra names. Every dispatch arm must end in an explicit
+  `cont`/`ret`. A `seqs` variant without the trailing `.skip` was needed too
+  (`seqs1`) — dead code after a `.never` tail is rejected by design.
+- Net size: comparable to the Prog version (the removed status/guard plumbing
+  roughly pays for the explicit continues).
+
 ## Assessment — suggestions and criticism
 
 1. **The keeper: lower SSA → Prog; do not fork the compiler.** With Prog's
