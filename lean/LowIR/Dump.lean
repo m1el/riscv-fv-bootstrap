@@ -90,7 +90,7 @@ def dumpFun (name : Name) (fd : FunDef) : String :=
   let params := " ".intercalate (fd.params.toList.map reg)
   let rets   := " ".intercalate (fd.rets.toList.map reg)
   pad 1 ++ s!"(func ${name} (param {params}) (result {rets}) " ++
-    s!"(frame {fd.frameSize} {reg fd.frameReg})" ++ "\n" ++
+    s!"(frame (size {fd.frameSize}) (base {reg fd.frameReg}))" ++ "\n" ++
     dumpStmt 2 fd.body ++ ")"
 
 /-- A rodata object as a WAST `(data …)` with `\HH` byte escapes. -/
