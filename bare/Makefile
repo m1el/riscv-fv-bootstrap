@@ -53,7 +53,15 @@ progmain.elf: shellmain.s progmain.bin progmain.inc link.ld
 run-progmain: progmain.elf
 	$(RUNENV) $(QEMU) $(QFLAGS) progmain.elf
 
+# Disassemble the compiled blob as raw code (gas marks .incbin data with a
+# $d mapping symbol, so objdump -d on the ELF renders it as .word). Raw-bin
+# addresses = blob byte offsets = the Lean fn table (progmain.inc MAIN_OFF).
+# no-aliases so the mnemonics can be eyeballed against the 16-encoding
+# trusted surface. For the (unverified) shim: $(OBJDUMP) -d progmain.elf.
+dismain: progmain.bin
+	$(OBJDUMP) -D -b binary -m riscv:rv64 -M no-aliases progmain.bin
+
 clean:
 	rm -f hex0.elf hex0.bin hex1.elf hex1.bin progmain.elf
 
-.PHONY: all dis dis1 run run1 run-progmain clean
+.PHONY: all dis dis1 dismain run run1 run-progmain clean
