@@ -175,6 +175,82 @@ theorem StInv_congr (L : Layout) (fd : FunDef) (holes : List Hole) (s : St)
       simp only [fetch32, hmem]
     rw [hf]; exact hcode j hj
 
+/-! ## Structural register/pc/memory facts (scratch bookkeeping). -/
+
+@[simp] theorem mem_setPc (m : State) (p : Word) : (m.setPc p).mem = m.mem := rfl
+@[simp] theorem rget_setPc (m : State) (p : Word) (b : Nat) : (m.setPc p).rget b = m.rget b := rfl
+@[simp] theorem pc_setPc (m : State) (p : Word) : (m.setPc p).pc = p := rfl
+
+@[simp] theorem mem_rset (m : State) (a : Nat) (v : Word) : (m.rset a v).mem = m.mem := by
+  unfold State.rset; split <;> rfl
+
+/-- `rset a` leaves `rget b` for `b ≠ a` (and x0). -/
+theorem rget_rset_ne (m : State) (a b : Nat) (v : Word) (h : b ≠ a) :
+    (m.rset a v).rget b = m.rget b := by
+  unfold State.rset State.rget
+  split
+  · rfl
+  · split
+    · rfl
+    · show (if b = a then v else m.reg b) = m.reg b
+      rw [if_neg h]
+
+/-- `rset a` then `rget a` returns the written value (`a ≠ 0`). -/
+theorem rget_rset_self (m : State) (a : Nat) (v : Word) (ha : a ≠ 0) :
+    (m.rset a v).rget a = v := by
+  unfold State.rset State.rget
+  rw [if_neg ha, if_neg ha]
+  show (if a = a then v else m.reg a) = v
+  rw [if_pos rfl]
+
+/-- The fetch bridge for an intermediate machine state `mj` reached mid-op: same
+    code memory as `m`, positioned at instruction `j`. -/
+theorem decode_at (L : Layout) (m mj : State) (pos : Nat) (is : List Instr)
+    (hem : Emitted L pos is) (hinst : Installed L m) (j : Nat) (hj : j < is.length)
+    (hpcj : mj.pc = L.codeBase + BitVec.ofNat 64 (pos + 4 * j)) (hmemj : mj.mem = m.mem) :
+    decode (fetch32 mj) = is[j]'hj := by
+  have : fetch32 mj = fetch32 { m with pc := L.codeBase + BitVec.ofNat 64 (pos + 4 * j) } := by
+    simp only [fetch32, hpcj, hmemj]
+  rw [this]; exact decode_emitted L m pos is hem hinst j hj
+
+/-- `StInv` survives a scratch-register write (`a ≠ 2`) plus a `pc` change —
+    the shape every intermediate machine state in an op's stream has. -/
+theorem StInv_scratch (L : Layout) (fd : FunDef) (holes : List Hole) (s : St)
+    (m : State) (a : Nat) (v p : Word) (ha : a ≠ 2) (hinv : StInv L fd holes s m) :
+    StInv L fd holes s ((m.rset a v).setPc p) := by
+  refine StInv_congr L fd holes s m _ ?_ ?_ hinv
+  · rw [rget_setPc]; exact rget_rset_ne m a 2 v (fun h => ha h.symm)
+  · rw [mem_setPc, mem_rset]
+
+/-! ## Op-lowering building blocks. -/
+
+/-- pc advances by one instruction: `codeBase + pos + 4 = codeBase + (pos+4)`. -/
+theorem pc_add4 (cb : Word) (p : Nat) :
+    cb + BitVec.ofNat 64 p + 4 = cb + BitVec.ofNat 64 (p + 4) := by
+  rw [BitVec.add_assoc, show (4 : Word) = BitVec.ofNat 64 4 from rfl, BitVec.ofNat_add_ofNat]
+
+/-- Executing one `loadSlotI r t` instruction parks `IL reg r` into physical `t`,
+    uniformly over `r = 0` (materialise 0) and `r ≠ 0` (`ld` from the slot). The
+    only machine change is `t := s.rget r` and `pc += 4`. -/
+theorem load_step (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State)
+    (r t : Nat) (hinv : StInv L fd holes s m) (hr : r ≤ maxRegF fd) (hfr : slotOff r < 2 ^ 11)
+    (hdec : decode (fetch32 m)
+              = (if r = 0 then Instr.addi t 0 0
+                 else Instr.ld t SP (BitVec.ofNat 12 (slotOff r)))) :
+    step m = (m.rset t (s.rget r)).setPc (m.pc + 4) := by
+  obtain ⟨c1, c2, -, -, -, -⟩ := hinv
+  by_cases hr0 : r = 0
+  · subst hr0
+    rw [if_pos rfl] at hdec
+    rw [step_addi m t 0 0 hdec]
+    -- `m.rget 0 + (0).signExtend 64` and `s.rget 0` are both defeq `0`
+    congr 2
+  · rw [if_neg hr0] at hdec
+    rw [step_ld m t SP (BitVec.ofNat 12 (slotOff r)) hdec]
+    congr 2
+    rw [show m.rget SP = s.sp from c1, signExtend_ofNat_lt (slotOff r) hfr]
+    exact (c2 r (by omega) hr).symm
+
 /-! ## `lower_sim` — the statement-level simulation (VERTICAL SLICE).
 
     If the IL says `stmt` runs `s ↦ s'` with a `.normal` outcome, and the machine
@@ -218,6 +294,90 @@ theorem lower_sim
       obtain ⟨rfl, -⟩ := hexec
       exact ⟨0, hinv, by simp only [stepN_zero, emit, List.length_nil, Nat.mul_zero,
                                     Nat.add_zero]; exact hpc⟩
+    case addi rd rs imm =>
+      rw [LowIR.Prog.exec_addi, Option.some.injEq, Prod.mk.injEq] at hexec
+      obtain ⟨rfl, -⟩ := hexec
+      simp only [maxRegS] at hreg
+      have hrs : rs ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
+      have hrd : rd ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
+      have hfrs : slotOff rs < 2 ^ 11 := by have := slotOff_add8_le_userOff fd rs hrs; omega
+      have hfrd : slotOff rd < 2 ^ 11 := by have := slotOff_add8_le_userOff fd rd hrd; omega
+      have hinst : Installed L m := hinv.2.2.1
+      cases Nat.decEq rs 0 with
+      | isTrue _ => sorry
+      | isFalse hrs0 =>
+        cases Nat.decEq rd 0 with
+        | isTrue _ => sorry
+        | isFalse hrd0 =>
+          -- MAIN: rs ≠ 0, rd ≠ 0 — the 3-instruction ld/addi/sd path
+          have hemit : emit (LowIR.Prog.Stmt.addi rd rs imm)
+              = [Instr.ld T0 SP (BitVec.ofNat 12 (slotOff rs)),
+                 Instr.addi T0 T0 imm,
+                 Instr.sd SP T0 (BitVec.ofNat 12 (slotOff rd))] := by
+            simp only [emit, loadSlotI, storeSlotI, if_neg hrs0, if_neg hrd0,
+                       List.cons_append, List.nil_append]
+          rw [hemit] at hem ⊢
+          -- instruction 0: ld T0, slot rs
+          have hd0 : decode (fetch32 m) = Instr.ld T0 SP (BitVec.ofNat 12 (slotOff rs)) := by
+            have h := decode_at L m m pos _ hem hinst 0 (by simp)
+                        (by simp only [Nat.mul_zero, Nat.add_zero]; exact hpc) rfl
+            simpa using h
+          have hs1 : step m = (m.rset T0 (s.rget rs)).setPc (m.pc + 4) :=
+            load_step L fd holes s m rs T0 hinv hrs hfrs (by rw [if_neg hrs0]; exact hd0)
+          have hinv1 : StInv L fd holes s ((m.rset T0 (s.rget rs)).setPc (m.pc + 4)) :=
+            StInv_scratch L fd holes s m T0 _ _ (by decide) hinv
+          have h1pc : ((m.rset T0 (s.rget rs)).setPc (m.pc + 4)).pc
+              = L.codeBase + BitVec.ofNat 64 (pos + 4 * 1) := by
+            rw [pc_setPc, hpc, pc_add4]
+          have h1mem : ((m.rset T0 (s.rget rs)).setPc (m.pc + 4)).mem = m.mem := by
+            rw [mem_setPc, mem_rset]
+          have h1T0 : ((m.rset T0 (s.rget rs)).setPc (m.pc + 4)).rget T0 = s.rget rs := by
+            rw [rget_setPc]; exact rget_rset_self m T0 _ (by decide)
+          -- instruction 1: addi T0, T0, imm
+          have hd1 : decode (fetch32 ((m.rset T0 (s.rget rs)).setPc (m.pc + 4)))
+              = Instr.addi T0 T0 imm := by
+            have h := decode_at L m _ pos _ hem hinst 1 (by simp) h1pc h1mem
+            simpa using h
+          have hs2 : step ((m.rset T0 (s.rget rs)).setPc (m.pc + 4))
+              = (((m.rset T0 (s.rget rs)).setPc (m.pc + 4)).rset T0
+                    (s.rget rs + imm.signExtend 64)).setPc
+                  (((m.rset T0 (s.rget rs)).setPc (m.pc + 4)).pc + 4) := by
+            rw [step_addi _ T0 T0 imm hd1, h1T0]
+          -- name the two intermediate machine states to keep terms small
+          generalize hM1 : (m.rset T0 (s.rget rs)).setPc (m.pc + 4) = M1
+            at hs1 hinv1 h1pc h1mem h1T0 hd1 hs2
+          generalize hM2 : (M1.rset T0 (s.rget rs + imm.signExtend 64)).setPc (M1.pc + 4) = M2
+            at hs2
+          -- M2's frame-visible state (from M1's, one scratch write + pc bump)
+          have hinv2 : StInv L fd holes s M2 := by
+            rw [← hM2]; exact StInv_scratch L fd holes s M1 T0 _ _ (by decide) hinv1
+          have h2pc : M2.pc = L.codeBase + BitVec.ofNat 64 (pos + 4 * 2) := by
+            rw [← hM2, pc_setPc, h1pc, pc_add4]
+          have h2mem : M2.mem = m.mem := by rw [← hM2, mem_setPc, mem_rset]; exact h1mem
+          have h2T0 : M2.rget T0 = s.rget rs + imm.signExtend 64 := by
+            rw [← hM2, rget_setPc]; exact rget_rset_self M1 T0 _ (by decide)
+          -- instruction 2: sd slot rd, T0  (the store — the P1 payoff)
+          have hd2 : decode (fetch32 M2) = Instr.sd SP T0 (BitVec.ofNat 12 (slotOff rd)) := by
+            have h := decode_at L m M2 pos _ hem hinst 2 (by simp) h2pc h2mem
+            simpa using h
+          have hs3 : step M2
+              = (M2.storeWord (s.sp + BitVec.ofNat 64 (slotOff rd))
+                    (s.rget rs + imm.signExtend 64)).setPc (M2.pc + 4) := by
+            rw [step_sd M2 SP T0 (BitVec.ofNat 12 (slotOff rd)) hd2,
+                show M2.rget SP = s.sp from hinv2.1, signExtend_ofNat_lt (slotOff rd) hfrd, h2T0]
+          have hstore : StInv L fd holes (s.rset rd (s.rget rs + imm.signExtend 64))
+              (M2.storeWord (s.sp + BitVec.ofNat 64 (slotOff rd))
+                 (s.rget rs + imm.signExtend 64)) :=
+            StInv_store_slot L fd holes s M2 rd _ hinv2 (by omega) hrd hnw hseg hblob hbd
+          -- stepN 3 m = the final state; then StInv + pc
+          have hrun : stepN 3 m
+              = (M2.storeWord (s.sp + BitVec.ofNat 64 (slotOff rd))
+                    (s.rget rs + imm.signExtend 64)).setPc (M2.pc + 4) := by
+            simp only [stepN]; rw [hs1, hs2, hs3]
+          refine ⟨3, ?_, ?_⟩
+          · rw [hrun]
+            exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hstore
+          · rw [hrun, pc_setPc, h2pc, pc_add4]; rfl
     all_goals sorry
 
 /-! ## Executable oracle: `emit` mirrors the real `Compile.lower` (straight-line). -/
