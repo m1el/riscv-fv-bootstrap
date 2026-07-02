@@ -576,6 +576,8 @@ def MemAccOff (L : Layout) (holes : List Hole)
       MemAccOff L holes P dbase pad stackLo fuel a s ∧
         (∀ s1, LowIR.Prog.exec P dbase pad stackLo fuel a s = some (s1, .normal) →
            MemAccOff L holes P dbase pad stackLo fuel b s1)
+  | fuel + 1, .block body, s =>
+      MemAccOff L holes P dbase pad stackLo fuel body s
   | _, _, _ => True
 
 /-! ## `jump_sim` — the leaf unconditional jump (the `ret`/`brkB`/`contL` atom).

@@ -21,8 +21,10 @@ import LowIR.ProgLib
 
 namespace LowIR.ProgSim
 
-open Rv64i (Instr)
-open LowIR.Compile (T0 T1)
+open Rv64i (Instr State step Word)
+open LowIR.Compile (T0 T1 userOff slotOff maxRegF maxRegS)
+open LowIR.Ctrl (Outcome)
+open LowIR.Prog (St Program Name FunDef dbaseOf)
 
 local notation "PStmt" => LowIR.Prog.Stmt
 
@@ -131,5 +133,124 @@ def matchesReal (body : PStmt) : Bool :=
 #guard matchesReal LowIR.Prog.Lib.strtoullF.body
 #guard matchesReal LowIR.Prog.Lib.hex0F.body
 #guard matchesReal LowIR.Prog.Lib.hex1F.body
+
+/-! ## The outcome-carrying `lower_sim`.
+
+    Where `emit`'s `lower_sim` (StmtSim) is `.normal`-only and lands at the
+    fall-through, this carries the `Outcome`: the machine lands at
+    `codeBase + landPos(outcome)` — fall-through for `.normal`, the resolved
+    break/continue/epilogue label for `.brk`/`.cont`/`.ret`. It inducts over
+    `emitCF` with the label-position environment (`brkPos`/`contPos`/`epiPos`).
+
+    `block` is the first compound case (this file): it adds no machine code of its
+    own (the `lEnd` label is 0 bytes), so its trace IS the body's trace — the whole
+    proof is the IH on `body` with `lEnd` pushed on the break stack, then a
+    case-walk on the body outcome showing the landing positions coincide (`.brk 0`
+    lands at `lEnd` = block fall-through; deeper `.brk`/`.cont`/`.ret` propagate). -/
+
+/-- Where the machine lands for each outcome: fall-through `ft` for `.normal`, the
+    resolved break/continue label for `.brk k`/`.cont k`, the epilogue for `.ret`. -/
+def landPos (brkPos contPos : List Nat) (epiPos ft : Nat) : Outcome → Nat
+  | .normal => ft
+  | .brk k  => brkPos.getD k 0
+  | .cont k => contPos.getD k 0
+  | .ret    => epiPos
+
+/-- Every label position fits the 21-bit `jal`/branch offset window (from byte 0,
+    so target − here ∈ (−2²⁰, 2²⁰) whenever both ends are `< 2²⁰`). -/
+def LabelsOk (brkPos contPos : List Nat) (epiPos : Nat) : Prop :=
+  (∀ p ∈ brkPos, p < 2 ^ 20) ∧ (∀ p ∈ contPos, p < 2 ^ 20) ∧ epiPos < 2 ^ 20
+
+theorem lower_sim_cf
+    {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
+    {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat}
+    (fuel : Nat) (stmt : PStmt) (s s' : St) (oc : Outcome) (m : State)
+    (here : Nat) (brkPos contPos : List Nat)
+    (hexec : LowIR.Prog.exec P dbase pad stackLo fuel stmt s = some (s', oc))
+    (hinv  : StInv L fd holes s m)
+    (hpc   : m.pc = L.codeBase + BitVec.ofNat 64 here)
+    (hem   : Emitted L here (emitCF brkPos contPos epiPos here stmt))
+    (hreg  : maxRegS stmt ≤ maxRegF fd)
+    (hnw   : s.sp.toNat + userOff fd ≤ 2 ^ 64)
+    (hbd   : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
+               ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat)
+    (haccess : MemAccOff L holes P dbase pad stackLo fuel stmt s)
+    (hlbl  : LabelsOk brkPos contPos epiPos)
+    (hbnd  : here + 4 * csize stmt < 2 ^ 20)
+    (hframe : userOff fd ≤ 2000)
+    (hseg  : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64) :
+    ∃ k, StInv L fd holes s' (stepN k m)
+       ∧ (stepN k m).pc = L.codeBase
+           + BitVec.ofNat 64 (landPos brkPos contPos epiPos (here + 4 * csize stmt) oc) := by
+  induction fuel generalizing stmt s s' oc m here brkPos contPos with
+  | zero => exact absurd hexec (by simp [LowIR.Prog.exec])
+  | succ fuel ih =>
+    cases stmt
+    case skip =>
+      rw [LowIR.Prog.exec_skip, Option.some.injEq, Prod.mk.injEq] at hexec
+      obtain ⟨rfl, rfl⟩ := hexec
+      exact ⟨0, hinv, by simp only [stepN_zero, csize, emit, List.length_nil, Nat.mul_zero,
+                                    Nat.add_zero, landPos]; exact hpc⟩
+    case annot a =>
+      rw [LowIR.Prog.exec_annot, Option.some.injEq, Prod.mk.injEq] at hexec
+      obtain ⟨rfl, rfl⟩ := hexec
+      exact ⟨0, hinv, by simp only [stepN_zero, csize, emit, List.length_nil, Nat.mul_zero,
+                                    Nat.add_zero, landPos]; exact hpc⟩
+    case block body =>
+      -- csize/emitCF/MemAccOff for `.block body` reduce to `body` with `lEnd` pushed.
+      have hbnd' : here + 4 * csize body < 2 ^ 20 := hbnd
+      have hlEnd : here + 4 * csize body < 2 ^ 20 := hbnd
+      have hlbl' : LabelsOk ((here + 4 * csize body) :: brkPos) contPos epiPos := by
+        obtain ⟨hb, hc, he⟩ := hlbl
+        refine ⟨fun p hp => ?_, hc, he⟩
+        rcases List.mem_cons.mp hp with h | h
+        · exact h ▸ hlEnd
+        · exact hb p h
+      -- `csize`/`emitCF`/`MemAccOff`/`maxRegS` on `.block body` are defeq to the
+      -- `body` forms; rebind so the elaborator unfolds them.
+      have hem' : Emitted L here (emitCF ((here + 4 * csize body) :: brkPos) contPos epiPos here body)
+        := hem
+      have hreg' : maxRegS body ≤ maxRegF fd := hreg
+      have hacc' : MemAccOff L holes P dbase pad stackLo fuel body s := by
+        simpa only [MemAccOff] using haccess
+      cases hb : LowIR.Prog.exec P dbase pad stackLo fuel body s with
+      | none =>
+          rw [LowIR.Prog.exec_block_none P dbase pad stackLo fuel body s hb] at hexec
+          simp at hexec
+      | some pr =>
+          obtain ⟨s'', ocb⟩ := pr
+          obtain ⟨k, hst, hpck⟩ :=
+            ih body s s'' ocb m here ((here + 4 * csize body) :: brkPos) contPos
+              hb hinv hpc hem' hreg' hnw hbd hacc' hlbl' hbnd'
+          cases ocb with
+          | normal =>
+              rw [LowIR.Prog.exec_block_normal P dbase pad stackLo fuel body s s'' hb,
+                  Option.some.injEq, Prod.mk.injEq] at hexec
+              obtain ⟨rfl, rfl⟩ := hexec
+              exact ⟨k, hst, by rw [hpck]; simp only [csize, landPos]⟩
+          | brk kk =>
+              cases kk with
+              | zero =>
+                  rw [LowIR.Prog.exec_block_catch P dbase pad stackLo fuel body s s'' hb,
+                      Option.some.injEq, Prod.mk.injEq] at hexec
+                  obtain ⟨rfl, rfl⟩ := hexec
+                  refine ⟨k, hst, by rw [hpck]; simp only [csize, landPos, List.getD_cons_zero]⟩
+              | succ kk' =>
+                  rw [LowIR.Prog.exec_block_brkS P dbase pad stackLo fuel body s s'' kk' hb,
+                      Option.some.injEq, Prod.mk.injEq] at hexec
+                  obtain ⟨rfl, rfl⟩ := hexec
+                  refine ⟨k, hst, by rw [hpck]; simp only [landPos, List.getD_cons_succ]⟩
+          | cont kk =>
+              rw [LowIR.Prog.exec_block_cont P dbase pad stackLo fuel body s s'' kk hb,
+                  Option.some.injEq, Prod.mk.injEq] at hexec
+              obtain ⟨rfl, rfl⟩ := hexec
+              exact ⟨k, hst, by rw [hpck]; simp only [landPos]⟩
+          | ret =>
+              rw [LowIR.Prog.exec_block_ret P dbase pad stackLo fuel body s s'' hb,
+                  Option.some.injEq, Prod.mk.injEq] at hexec
+              obtain ⟨rfl, rfl⟩ := hexec
+              exact ⟨k, hst, by rw [hpck]; simp only [landPos]⟩
+    all_goals sorry
 
 end LowIR.ProgSim
