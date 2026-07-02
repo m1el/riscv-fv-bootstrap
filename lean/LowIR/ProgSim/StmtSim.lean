@@ -341,6 +341,15 @@ theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : 
     · rw [show stepN 1 m2 = step m2 from rfl, hstep, pc_setPc, hq, pc_add4,
           storeSlotI_length, if_neg hrd0]
 
+/-- Two `StInv`s over the same `holes` pin the same frame pointer: `s'.sp = s.sp`.
+    (`holes.head? = some (·.sp, userOff fd)` in each; `holes` is fixed.) This is how
+    the frame-placement side conditions transfer across an intermediate state. -/
+theorem StInv_sp_eq (L : Layout) (fd : FunDef) (holes : List Hole) (s s' : St) (m m' : State)
+    (h : StInv L fd holes s m) (h' : StInv L fd holes s' m') : s'.sp = s.sp := by
+  have e := h.2.2.2.2.1
+  rw [h'.2.2.2.2.1, Option.some.injEq, Prod.mk.injEq] at e
+  exact e.1
+
 /-! ## Whole-op simulators: `single_op_sim` (1 source) / `two_op_sim` (2 sources).
 
     These factor the shared `load(s) → compute → store` shape of every arithmetic
@@ -585,6 +594,35 @@ theorem lower_sim
         (by have := slotOff_add8_le_userOff fd r2 hr2; omega)
         (by have := slotOff_add8_le_userOff fd rd hrd; omega)
         hnw hseg hblob hbd (fun m' hd hT0 hT1 => by rw [step_or m' T0 T0 T1 hd, hT0, hT1])
+    case seq a b =>
+      simp only [maxRegS] at hreg
+      -- `a` must finish `.normal` (any other outcome would surface as the seq's
+      -- outcome, contradicting `= some (s', .normal)`); then chain the fuel `ih`.
+      cases hea : LowIR.Prog.exec P dbase pad stackLo fuel a s with
+      | none => rw [LowIR.Prog.exec_seq_none (h := hea)] at hexec; exact absurd hexec (by simp)
+      | some r =>
+        obtain ⟨s1, o⟩ := r
+        cases o with
+        | normal =>
+          rw [LowIR.Prog.exec_seq_normal (h := hea)] at hexec
+          have hemA : Emitted L pos (emit a) := Emitted_append_left L pos _ _ hem
+          have hemB : Emitted L (pos + 4 * (emit a).length) (emit b) :=
+            Emitted_append_right L pos _ _ hem
+          have hregA : maxRegS a ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
+          have hregB : maxRegS b ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
+          obtain ⟨k1, hinvA, hpcA⟩ :=
+            ih a s s1 m pos hea hinv hpc hemA hregA hnw hbd
+          have hsp : s1.sp = s.sp := StInv_sp_eq L fd holes s s1 m (stepN k1 m) hinv hinvA
+          obtain ⟨k2, hinvB, hpcB⟩ :=
+            ih b s1 s' (stepN k1 m) (pos + 4 * (emit a).length) hexec hinvA hpcA hemB hregB
+              (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd)
+          refine ⟨k1 + k2, ?_, ?_⟩
+          · rw [stepN_add]; exact hinvB
+          · rw [stepN_add, hpcB]
+            exact pc_congr _ (by simp only [emit, List.length_append]; omega)
+        | brk k => rw [LowIR.Prog.exec_seq_brk (h := hea)] at hexec; exact absurd hexec (by simp)
+        | cont k => rw [LowIR.Prog.exec_seq_cont (h := hea)] at hexec; exact absurd hexec (by simp)
+        | ret => rw [LowIR.Prog.exec_seq_ret (h := hea)] at hexec; exact absurd hexec (by simp)
     all_goals sorry
 
 /-! ## Executable oracle: `emit` mirrors the real `Compile.lower` (straight-line). -/
