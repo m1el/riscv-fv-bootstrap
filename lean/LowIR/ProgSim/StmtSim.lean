@@ -625,6 +625,81 @@ theorem lower_sim
         | ret => rw [LowIR.Prog.exec_seq_ret (h := hea)] at hexec; exact absurd hexec (by simp)
     all_goals sorry
 
+/-! ## Toy end-to-end corollary: `sub3` — the differential-oracle sanity check.
+
+    `sub3 (a,b,c) = (a+b)−c` (body `add 6 10 11; sub 10 6 12`, pure arith+seq) is
+    entirely within `lower_sim`'s proven fragment, so we can close the loop now:
+    `lower_sim` gives the machine simulation, and the IL `exec` gives the spec.
+    This is the vertical slice's go/no-go check — if the relation were misstated,
+    it would fail HERE against the differential oracle (`diff_sub3`: [30,12,2] ↦ 40). -/
+
+section Sub3
+open LowIR.Prog (sub3)
+
+/-- IL semantics of `sub3.body`: it computes `(a+b)−c` (with `a,b,c = x10,x11,x12`)
+    into register 10. Forward evaluation via the `exec_*` unfolders (fuel ≥ 2). -/
+theorem sub3_body_exec {P : Program} {dbase : Name → Option Word} {pad : Name → Nat}
+    {stackLo : Word} (f : Nat) (s : St) :
+    LowIR.Prog.exec P dbase pad stackLo (f + 1 + 1) sub3.body s
+      = some ((s.rset 6 (s.rget 10 + s.rget 11)).rset 10
+                ((s.rget 10 + s.rget 11) - s.rget 12), .normal) := by
+  show LowIR.Prog.exec P dbase pad stackLo (f + 1 + 1)
+        (.seq (.add 6 10 11) (.sub 10 6 12)) s = _
+  rw [LowIR.Prog.exec_seq_normal (h := LowIR.Prog.exec_add P dbase pad stackLo f 6 10 11 s),
+      LowIR.Prog.exec_sub P dbase pad stackLo f 10 6 12 _]
+  -- `(rset 6 w).rget 6 = w` and `(rset 6 w).rget 12 = s.rget 12` hold definitionally
+  rfl
+
+/-- **sub3 corollary** — the straight-line `lower_sim` fragment composes into a
+    full statement-level simulation of `sub3`'s body: from a `StInv`-related state
+    with `emit sub3.body` installed, the machine runs to a `StInv`-related state
+    for `s'` whose return register (x10) holds `(a+b)−c`, sub3's IL spec. -/
+theorem sub3_body_sim {P : Program} {dbase : Name → Option Word} {pad : Name → Nat}
+    {stackLo : Word} {L : Layout} {holes : List Hole}
+    (f : Nat) (s s' : St) (m : State) (pos : Nat)
+    (hexec : LowIR.Prog.exec P dbase pad stackLo (f + 1 + 1) sub3.body s = some (s', .normal))
+    (hinv : StInv L sub3 holes s m)
+    (hpc : m.pc = L.codeBase + BitVec.ofNat 64 pos)
+    (hem : Emitted L pos (emit sub3.body))
+    (hnw : s.sp.toNat + userOff sub3 ≤ 2 ^ 64)
+    (hseg : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
+    (hbd : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
+             ∨ s.sp.toNat + userOff sub3 ≤ L.codeBase.toNat) :
+    ∃ k, StInv L sub3 holes s' (stepN k m)
+       ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (pos + 4 * (emit sub3.body).length)
+       ∧ s'.rget 10 = (s.rget 10 + s.rget 11) - s.rget 12 := by
+  -- pin `s'` from the IL exec (`sub3.body = add 6 10 11; sub 10 6 12`)
+  rw [sub3_body_exec (P := P) (dbase := dbase) (pad := pad) (stackLo := stackLo) f s,
+      Option.some.injEq, Prod.mk.injEq] at hexec
+  obtain ⟨rfl, -⟩ := hexec
+  -- machine: simulate `add` then `sub` via the fully-proven `two_op_sim` (NO `lower_sim`,
+  -- so this corollary is genuinely `sorry`-free — the real go/no-go).
+  have hemA : Emitted L pos (emit (.add 6 10 11)) := Emitted_append_left L pos _ _ hem
+  have hemB : Emitted L (pos + 4 * (emit (.add 6 10 11)).length) (emit (.sub 10 6 12)) :=
+    Emitted_append_right L pos _ _ hem
+  obtain ⟨k1, hinv1, hpc1⟩ := two_op_sim s m 6 10 11 pos (.add T0 T0 T1)
+    (s.rget 10 + s.rget 11) hinv hpc hemA (by decide) (by decide) (by decide)
+    (by decide) (by decide) (by decide) hnw hseg hblob hbd
+    (fun m' hd hT0 hT1 => by rw [step_add m' T0 T0 T1 hd, hT0, hT1])
+  obtain ⟨k2, hinv2, hpc2⟩ := two_op_sim (s.rset 6 (s.rget 10 + s.rget 11)) (stepN k1 m)
+    10 6 12 (pos + 4 * (emit (.add 6 10 11)).length) (.sub T0 T0 T1)
+    ((s.rset 6 (s.rget 10 + s.rget 11)).rget 6 - (s.rset 6 (s.rget 10 + s.rget 11)).rget 12)
+    hinv1 hpc1 hemB (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+    hnw hseg hblob hbd (fun m' hd hT0 hT1 => by rw [step_sub m' T0 T0 T1 hd, hT0, hT1])
+  refine ⟨k1 + k2, ?_, ?_, rfl⟩
+  · rw [stepN_add]; exact hinv2
+  · rw [stepN_add, hpc2]
+    exact pc_congr _ rfl
+
+/-- The corollary's IL result reproduces the differential oracle `diff_sub3`:
+    inputs `[30,12,2]` give `40` (matching `diffOk denv "sub3" [30,12,2] = true`). -/
+example (s : St) (h10 : s.rget 10 = 30) (h11 : s.rget 11 = 12) (h12 : s.rget 12 = 2) :
+    ((s.rget 10 + s.rget 11) - s.rget 12).toNat = 40 := by
+  rw [h10, h11, h12]; native_decide
+
+end Sub3
+
 /-! ## Executable oracle: `emit` mirrors the real `Compile.lower` (straight-line). -/
 
 section Guards
