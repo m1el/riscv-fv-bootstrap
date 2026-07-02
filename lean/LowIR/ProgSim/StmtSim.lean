@@ -65,6 +65,10 @@ def emit : PStmt → List Instr
   | .orr  rd r1 r2   => loadSlotI r1 T0 ++ loadSlotI r2 T1 ++ [.or  T0 T0 T1] ++ storeSlotI rd T0
   | .slli rd rs sh   => loadSlotI rs T0 ++ [.slli T0 T0 sh] ++ storeSlotI rd T0
   | .srli rd rs sh   => loadSlotI rs T0 ++ [.srli T0 T0 sh] ++ storeSlotI rd T0
+  | .lbu  rd rs imm  => loadSlotI rs T0 ++ [.lbu T0 T0 imm] ++ storeSlotI rd T0
+  | .ld   rd rs imm  => loadSlotI rs T0 ++ [.ld  T0 T0 imm] ++ storeSlotI rd T0
+  | .sb   rb rv imm  => loadSlotI rb T0 ++ loadSlotI rv T1 ++ [.sb T0 T1 imm]
+  | .sd   rb rv imm  => loadSlotI rb T0 ++ loadSlotI rv T1 ++ [.sd T0 T1 imm]
   | .seq a b         => emit a ++ emit b
   | _                => []
 
@@ -140,6 +144,18 @@ theorem step_ld (m : State) (rd rs : Nat) (imm : BitVec 12)
 theorem step_sd (m : State) (rs1 rs2 : Nat) (imm : BitVec 12)
     (h : decode (fetch32 m) = .sd rs1 rs2 imm) :
     step m = (m.storeWord (m.rget rs1 + imm.signExtend 64) (m.rget rs2)).setPc (m.pc + 4) := by
+  simp only [step, h]
+
+theorem step_lbu (m : State) (rd rs : Nat) (imm : BitVec 12)
+    (h : decode (fetch32 m) = .lbu rd rs imm) :
+    step m = (m.rset rd ((m.loadByte (m.rget rs + imm.signExtend 64)).setWidth 64)).setPc
+               (m.pc + 4) := by
+  simp only [step, h]
+
+theorem step_sb (m : State) (rs1 rs2 : Nat) (imm : BitVec 12)
+    (h : decode (fetch32 m) = .sb rs1 rs2 imm) :
+    step m = (m.storeByte (m.rget rs1 + imm.signExtend 64) ((m.rget rs2).setWidth 8)).setPc
+               (m.pc + 4) := by
   simp only [step, h]
 
 /-! ## Immediate roundtrip for slot offsets. -/
@@ -703,13 +719,19 @@ end Sub3
 /-! ## Executable oracle: `emit` mirrors the real `Compile.lower` (straight-line). -/
 
 section Guards
-open LowIR.Prog (sub3)
+open LowIR.Prog (sub3 frameLocal)
 open LowIR.Compile (lower)
 
 -- `emit sub3.body` = the resolved (`.ins`-extracted) real lowering of the body.
 #guard ((lower [] [] [] 0 sub3.body).run' 0).filterMap
           (fun si => match si with | .ins i => some i | _ => none)
         = emit sub3.body
+
+-- `frameLocal.body` exercises the memory ops (`sd`/`ld`): `emit` still mirrors
+-- the real lowering byte-for-byte.
+#guard ((lower [] [] [] 0 frameLocal.body).run' 0).filterMap
+          (fun si => match si with | .ins i => some i | _ => none)
+        = emit frameLocal.body
 end Guards
 
 end LowIR.ProgSim
