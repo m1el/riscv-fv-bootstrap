@@ -114,6 +114,39 @@ Two flavors exist:
   is then *precisely* illegal: it would need a second unique borrow overlapping libc's → ill-formed.
 - **Alternative.** Model TLS / `__errno_location` returning a per-thread pointer. Deferred until threads exist.
 
+### D7. Activation-local calls: `rets := call f args` over an env-threaded `exec` — not SSA
+- **Decision** (2026-07, not yet implemented). Calls are **by name** against a function
+  environment `Env : Name → FunDef` threaded through `exec` (or fixed as a parameter). A call
+  `rets := call f args` evaluates `args` in the caller's registers, runs the callee's body in a
+  **fresh register file** (parameters bound to the argument values, all other registers
+  **zero-initialized**), reads the callee's declared return registers at its `ret` boundary, and
+  binds them to `rets` in the caller — whose register file is otherwise *untouched by
+  construction*. **Registers are function-local; memory stays shared** (the `Slice`/`Wf` borrow
+  discipline is unchanged — by-reference data crosses as addresses). Zero-init is made
+  semantically irrelevant by a **definite-assignment check** (no local read before written,
+  except parameters) plus a once-proved lemma that `exec` of a definitely-assigned body does not
+  depend on unread registers — another checker-produces-the-hypothesis instance (cf. N3).
+  Explicitly **not SSA**: registers stay mutable, `while` keeps its state-invariant proof shape;
+  no φ-nodes, no out-of-SSA pass. SSA is reserved for a possible future rewrite-engine IR (N9).
+- **Rationale.** Register preservation across calls becomes a **non-theorem** at the IL; callee
+  specs shrink to relations between `(args, mem)` and `(rets, mem')` with no register-footprint
+  clauses and no global register-naming convention; the calling convention lives *solely* in
+  `compile_sim` pass 4 (N2). This is the survey-standard design above the allocation boundary
+  (CompCert RTL `Icall`, bedrock2 `cmd.call`, CakeML wordLang, Pancake). Pleasant side effect:
+  env-based calls consume fuel per activation, so recursive semantics are well-defined for free
+  (whether the verified fragment *allows* recursion remains a separate, open policy decision).
+- **Alternatives rejected.** (a) Shared-register `.call g` (the `d7f8298` ret-catch construct):
+  makes every callee spec carry its full register footprint and register naming a whole-program
+  obligation — may survive only as inline-expansion sugar. (b) Full SSA: buys rewriting
+  ergonomics we don't need here, costs φ-semantics and an out-of-SSA pass + proof, and conflicts
+  with `while` + mutation. (c) Junk (nondeterministic) init of the fresh file: honest to the
+  machine but breaks the deterministic `Option`-based `exec`; the definite-assignment check
+  recovers the same effect deterministically.
+- **Status / caveat.** `CtrlCall.lean` (shared-register call + cross-call disjointness example)
+  is to be reworked onto D7; the memory-side reasoning carries over verbatim. The compiler must
+  realize the fiction — argument passing, callee-saved discipline, frame slots — which is
+  exactly pass 4's job and is now *located* there rather than added.
+
 ---
 
 ## 2. Current non-features (deliberate gaps)
@@ -125,10 +158,9 @@ Two flavors exist:
   worked example in `CtrlCall.lean`) runs the callee body in the *same* state — shared register
   file, shared memory — and catches the callee's `ret`. There is no argument passing, no fresh
   locals, no `ra`. Consequence: register discipline across calls is whole-program — callee specs
-  state their full register footprint, and register *naming* is a global convention. Whether
-  `call` should become **activation-local** (fresh register file + explicit args/rets, making
-  register preservation a non-theorem at the IL — the CompCert-RTL/bedrock2/CakeML design) is an
-  **open decision**; see N2 below and Ext. 3.
+  state their full register footprint, and register *naming* is a global convention. **Decided
+  (D7): `call` becomes activation-local** — fresh register file + explicit args/rets, register
+  preservation a non-theorem at the IL. `CtrlCall.lean` awaits rework onto D7.
 - **Byte-only memory ops.** Only `lbu` (byte load) and `sb` (byte store). Wider accesses must be synthesized
   from byte ops + `slli`/`srli`/`orr` (hex0 builds a byte from two nibbles this way).
 - **No register-count limit.** Spilling to stack for >31 live registers is a `compile_sim` obligation, not
@@ -150,7 +182,7 @@ and [DESIGN-THESES.md](DESIGN-THESES.md).)
 | # | Non-goal for the IR | Where it lives instead | Notes / trigger to revisit |
 |---|---|---|---|
 | N1 | Finite registers, register allocation, spilling | `compile_sim` pass 3, as an untrusted allocator + **verified checker** (translation validation) | Never expressible at the IL — that's the point of `Reg = Nat` (D2). |
-| N2 | Calling convention: stack layout, `sp`/`ra`, prologue/epilogue, **callee-saved preservation** | `compile_sim` pass 4, with the ABI as a *parameter record*; stated once as a per-compiled-function contract ("only caller-saved + results differ, `sp` restored, `pc = ra`", bedrock2's `only_differ` shape) | At the IL, register preservation across calls should be a **non-theorem** — which requires deciding activation-local `call` (open; see §2). Tail calls are the one place the convention leaks upward (CompCert `tailcall_possible`). |
+| N2 | Calling convention: stack layout, `sp`/`ra`, prologue/epilogue, **callee-saved preservation** | `compile_sim` pass 4, with the ABI as a *parameter record*; stated once as a per-compiled-function contract ("only caller-saved + results differ, `sp` restored, `pc = ra`", bedrock2's `only_differ` shape) | At the IL, register preservation across calls is a **non-theorem** by D7 (activation-local `call`). Tail calls are the one place the convention leaks upward (CompCert `tailcall_possible`). |
 | N3 | Separation / aliasing **enforcement** | *Above* the IL: borrow-typed higher IRs / future borrow checker (Ext. 5) *produce* `Wf`/`Disjoint`; LowIR proofs only *consume* them as hypotheses | Never into the memory model (D5). The checker is a pure gate whose output is hypotheses — rustc's architecture. |
 | N4 | Pointer provenance, int↔ptr cast semantics | The borrow layer above (spatial shadow of Tree Borrows); flat `mem`, addresses are integers | Revisit only if `container_of`/pointer-tagging idioms are ever required — then RefinedC's PNVI/VIP is the reference, *paid per function*, not globally. |
 | N5 | Undefined behavior | Nowhere — **UB does not exist at this level by construction**: `exec` is total modulo fuel; `mem` is total. "Going wrong" is a C-level notion, and LowIR is not C | If a C-like surface is ever built above, *its* UB is discharged by *its* checker/verifier before reaching LowIR (thesis 9: no UB nooks). |
