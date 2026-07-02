@@ -4,6 +4,9 @@ Documentation for the verified bootstrap tower (`/var/data/bootstrap`).
 New docs go in this directory; add a line for each new doc below.
 Outdated/inactive docs (completed handoffs, superseded plans, frozen status
 snapshots) move to [archive/](archive/README.md) — see the archive index there.
+Run `./docs/check_docs.py` to validate the corpus: link/anchor integrity,
+reachability from this index via down-links only, archive-index completeness,
+and that every active doc is indexed here.
 
 ## Specs
 
