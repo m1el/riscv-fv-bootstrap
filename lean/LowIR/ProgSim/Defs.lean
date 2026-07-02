@@ -192,17 +192,124 @@ def execT (P : Program) (dbase : Name → Option Word) (pad : Name → Nat)
               | none   => none
           else none
 
+/-- Erase a footprint-carrying result to a plain `exec` result. -/
+def eraseW : St × Outcome × List Word → St × Outcome := fun t => (t.1, t.2.1)
+
+/-- The core equivalence: erasing `execT`'s footprint (via `Option.map`) yields
+    `exec` EXACTLY. Both functions recurse only at `fuel` (structural), so a
+    plain fuel induction with the IH quantified over all `stmt`/`s` suffices;
+    every case is `exec`/`execT`'s shared control structure with the footprint
+    dropped by `eraseW`. -/
+theorem execT_map_exec (P : Program) (dbase : Name → Option Word) (pad : Name → Nat)
+    (stackLo : Word) :
+    ∀ (fuel : Nat) (stmt : PStmt) (s : St),
+      (execT P dbase pad stackLo fuel stmt s).map eraseW
+        = LowIR.Prog.exec P dbase pad stackLo fuel stmt s := by
+  intro fuel
+  induction fuel with
+  | zero => intro stmt s; rfl
+  | succ fuel ih =>
+    intro stmt s
+    cases stmt with
+    | skip => rfl
+    | annot a => rfl
+    | addi rd rs imm => rfl
+    | add rd r1 r2 => rfl
+    | sub rd r1 r2 => rfl
+    | orr rd r1 r2 => rfl
+    | slli rd rs sh => rfl
+    | srli rd rs sh => rfl
+    | lbu rd rs imm => rfl
+    | sb rb rv imm => rfl
+    | ld rd rs imm => rfl
+    | sd rb rv imm => rfl
+    | brkB k => rfl
+    | contL k => rfl
+    | ret => rfl
+    | cref rd d =>
+        simp only [execT, LowIR.Prog.exec]; cases dbase d <;> rfl
+    | clen rd d =>
+        simp only [execT, LowIR.Prog.exec]; cases List.lookup d P.data <;> rfl
+    | ife c a b t e =>
+        simp only [execT, LowIR.Prog.exec, apply_ite (Option.map eraseW), ih t s, ih e s]
+    | seq a b =>
+        simp only [execT, LowIR.Prog.exec, ← ih a s]
+        cases execT P dbase pad stackLo fuel a s with
+        | none => rfl
+        | some t =>
+            obtain ⟨sa, oa, wa⟩ := t
+            cases oa with
+            | normal =>
+                simp only [Option.map_some, eraseW, ← ih b sa]
+                cases execT P dbase pad stackLo fuel b sa with
+                | none => rfl
+                | some t2 => obtain ⟨sb, ob, wb⟩ := t2; rfl
+            | brk k => rfl
+            | cont k => rfl
+            | ret => rfl
+    | block body =>
+        simp only [execT, LowIR.Prog.exec, ← ih body s]
+        cases execT P dbase pad stackLo fuel body s with
+        | none => rfl
+        | some t =>
+            obtain ⟨sb, ob, wb⟩ := t
+            cases ob with
+            | normal => rfl
+            | brk k => cases k <;> rfl
+            | cont k => rfl
+            | ret => rfl
+    | «while» c a b body =>
+        simp only [execT, LowIR.Prog.exec]
+        split
+        · simp only [← ih body s]
+          cases execT P dbase pad stackLo fuel body s with
+          | none => rfl
+          | some t =>
+              obtain ⟨s', oc, ws⟩ := t
+              cases oc with
+              | normal =>
+                  simp only [Option.map_some, eraseW, ← ih (.while c a b body) s']
+                  cases execT P dbase pad stackLo fuel (.while c a b body) s' with
+                  | none => rfl
+                  | some t2 => obtain ⟨s2, o2, ws2⟩ := t2; rfl
+              | cont k =>
+                  cases k with
+                  | zero =>
+                      simp only [Option.map_some, eraseW, ← ih (.while c a b body) s']
+                      cases execT P dbase pad stackLo fuel (.while c a b body) s' with
+                      | none => rfl
+                      | some t2 => obtain ⟨s2, o2, ws2⟩ := t2; rfl
+                  | succ k => rfl
+              | brk k => rfl
+              | ret => rfl
+        · rfl
+    | call argc rvc f args rets =>
+        simp only [execT, LowIR.Prog.exec]
+        cases hL : List.lookup f P.env with
+        | none => simp [hL]
+        | some fd =>
+            cases ha : (fd.argc == argc && fd.rvc == rvc) with
+            | false => simp [hL, ha]
+            | true =>
+                cases hF : frameEnter stackLo fd (pad f) (args.toList.map s.rget) s.mem s.sp with
+                | none => simp [hL, ha, hF]
+                | some callee =>
+                    simp only [hL, ha, hF, if_true, ← ih fd.body callee]
+                    cases execT P dbase pad stackLo fuel fd.body callee with
+                    | none => rfl
+                    | some t => obtain ⟨s1, o1, ws⟩ := t; cases o1 <;> rfl
+
 /-- **`execT_erase`** — the footprint instrumentation is observationally
     invisible: whenever `execT` succeeds with some footprint, `exec` succeeds
-    with the SAME final state and outcome. (Statement now; proof — a mechanical
-    fuel induction mirroring the two functions' identical structure — in the
-    Phase 0.3 chunk.) -/
+    with the SAME final state and outcome (corollary of `execT_map_exec`). -/
 theorem execT_erase (P : Program) (dbase : Name → Option Word) (pad : Name → Nat)
     (stackLo : Word) (fuel : Nat) (stmt : PStmt) (s s' : St) (o : Outcome)
     (ws : List Word) :
     execT P dbase pad stackLo fuel stmt s = some (s', o, ws) →
     LowIR.Prog.exec P dbase pad stackLo fuel stmt s = some (s', o) := by
-  sorry
+  intro h
+  rw [← execT_map_exec P dbase pad stackLo fuel stmt s, h]
+  rfl
 
 /-- Instrumented top-level runner (mirrors `Prog.run`, keeps the footprint) —
     the executable interface `execT_erase` and the #guards go through. -/

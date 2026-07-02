@@ -26,9 +26,12 @@ the address gap P1 closes is thus real, not vacuous.
 - §3.1/§3.4: `Layout` + `layoutOf` (from the FROZEN `compileProgT`),
   `Installed` (+ computable `codeInstalledB`/`dataInstalledB`, #guard'd by
   loading real blobs into the trusted `Rv64i` machine), `execT` (write-
-  footprint instrumentation) + `runT` + `execT_erase` (sorry). Footprints
-  #guard'd exactly: sub3→0, frameLocal's sd→its 8 frame addresses, caller
-  inherits them.
+  footprint instrumentation) + `runT`. Footprints #guard'd exactly: sub3→0,
+  frameLocal's sd→its 8 frame addresses, caller inherits them.
+- **`execT_erase` PROVED** (via `execT_map_exec`: erasing the footprint by
+  `Option.map` yields `exec` exactly — a structural fuel induction, both
+  functions recursing only at `fuel`). Axioms: `[propext, Quot.sound]` only,
+  no `sorryAx`. The Phase 0.3 footprint-erasure obligation is discharged.
 - §3.1 relation: `memRange`/`MachPriv` (+ computable `machPrivB`, #guard'd:
   blob byte private, slot byte private, user-frame byte NOT — and the P1
   tiling `sp + userOff = sp0 − frameSize`), `MachStack`, `StInv` (sp≡x2,
@@ -41,8 +44,8 @@ the address gap P1 closes is thus real, not vacuous.
 `lower_sim`/`call_sim` (§3.2) are DEFERRED to the StmtSim/CallSim phases: their
 statements need the compile-time `Emitted` predicate that Phase 2 characterizes
 and the Phase 4.1 vertical slice validates — stating them blind is the
-expensive failure mode. Next: prove `execT_erase` (mechanical) + port the
-one-layer `exec_*` unfolder lemmas (Phase 0.2/0.3), then the vertical slice.
+expensive failure mode. Next: port the one-layer `exec_*` unfolder lemmas
+(Phase 0.2), then the vertical slice.
 
 ## 2026-07-02 (later still) — Ext. 12: const data segment + cref/clen
 
