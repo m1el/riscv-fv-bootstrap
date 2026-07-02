@@ -36,4 +36,6 @@ New docs go in this directory; add a line for each new doc below.
 ## Analyses
 
 - [LEAN-VS-COQ.md](LEAN-VS-COQ.md) — implementation-difficulty comparison of the Lean vs Coq proofs, measured from the recorded [agent sessions](../sessions/README.md).
+- [RADIX-DESIGN.md](RADIX-DESIGN.md) — design-choice analysis of `third-party/RadixExperiment` (Radix, the AI-built verified DSL in Lean 4): proof-shaped language design, two-semantics bridge, soundness-first optimizations, linear ownership layer, Verso deck.
+- [VERUS-DESIGN.md](VERUS-DESIGN.md) — design-choice analysis of `third-party/verus` (the SMT-based Rust verifier): spec/proof/exec modes, rustc-as-front-end (forked THIR erasure + real borrowck on ghost code), VIR/AIR pipeline, quantifier-hygiene SMT encoding (Poly boxing, fuel, triggers), linearity-instead-of-separation-logic, tokenized state machines, trust story.
 - [PITCH-REVIEW.md](PITCH-REVIEW.md) — proofread and review of the root `pitch.md` (spelling/grammar fixes, argument clarity, structural suggestions).
