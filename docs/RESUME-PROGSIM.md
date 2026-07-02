@@ -36,24 +36,29 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   (`hnw`/`hseg`/`hblob`/`hbd`) are explicit hypotheses here — Phases 4/5 discharge
   them from `SimPre`. Reg binders are `Nat` (a `≤` at type `Reg = abbrev Nat`
   hides from `omega`). In `defaultTargets` (added to `LowIRProgSim` roots).
-- **Phase 4.1 vertical slice — GO (design validated).** `ProgSim/StmtSim.lean`:
-  `emit` (resolved straight-line lowering, `#guard`'d == real `Compile.lower` of
-  `sub3.body`), `Emitted` (+ append-split), `decode_emitted`/`decode_at` (fetch
-  bridge from `Installed`), `stepN`/`stepN_add`, the `step_*` one-instruction
-  lemmas, `signExtend_ofNat_lt` (slot immediates, `[propext, Quot.sound]` via
-  `toInt_eq_toNat_bmod`), `StInv_congr`/`StInv_scratch` (StInv insensitive to
-  scratch regs + pc), `load_step`, `pc_add4`. **`lower_sim`** (the `.normal`
-  simulation, fuel induction) has skip/annot and the **`addi` (rs,rd ≠ 0)** case
-  fully proven end-to-end — the go/no-go: the plain-equality `StInv` relation +
-  `StInv_store_slot` compose across a real ld/addi/sd instruction sequence. The
-  design works. `sorry` remains for addi's r=0 subcases, the other ops, seq, and
-  control-flow/memory (Phases 4.2–4.4).
-- **NEXT:** finish `lower_sim` — the addi r=0 subcases (load_step already handles
-  rs=0; rd=0 = skip the store, s'=s), then add/sub/orr/slli/srli (same shape,
-  add/sub/orr have two `load_step`s), then **seq** (the composition case — split
-  `Emitted` via `Emitted_append_*`, `stepN_add`, apply `ih` twice). Then the toy
-  `prog_sim` corollary against the sub3 oracle, then Phases 2 (AsmFacts:
-  `Emitted L pos (emit stmt)` from the real pipeline), 5 (call), 6 (prog_sim).
+- **Phase 4.1 vertical slice — GO, straight-line slice COMPLETE.**
+  `ProgSim/StmtSim.lean`: `emit` (resolved straight-line lowering, `#guard`'d ==
+  real `Compile.lower` of `sub3.body`), `Emitted` (+ append-split),
+  `decode_emitted`/`decode_at` (fetch bridge from `Installed`), `stepN`/`stepN_add`,
+  the `step_*` one-instruction lemmas, `signExtend_ofNat_lt` (slot immediates,
+  `[propext, Quot.sound]` via `toInt_eq_toNat_bmod`), `StInv_congr`/`StInv_scratch`,
+  `load_step`, `pc_add4`/`pc_congr`, `StInv_sp_eq`. **`lower_sim`** (the `.normal`
+  simulation, fuel induction) now proves the WHOLE straight-line fragment:
+  skip, annot, all six arithmetic ops (**addi/add/sub/orr/slli/srli**, every
+  register value including 0), and **seq**. The op cases are factored through two
+  reusable simulators — `run_load`/`run_store` (uniform over `r=0`; the `rd=0`/`≠0`
+  split lives once inside `run_store`) and `single_op_sim`/`two_op_sim` (abstract
+  compute `C`/`vC`, each op supplies its `step_*` lemma as `hC`) — all
+  `[propext, Quot.sound]`. `seq` chains the fuel `ih` (stepN_add + pc_congr;
+  frame side conditions transfer via `StInv_sp_eq`). `sorry` remains ONLY for
+  control-flow (ife/while/block/ret/brk/cont/call) and memory (lbu/ld/sb/sd/cref/
+  clen) — Phases 4.2–4.4.
+- **NEXT:** the toy `prog_sim`/sub3 corollary against the differential oracle
+  (sub3 is skip/arith/seq only — now fully within `lower_sim`'s proven fragment),
+  then Phase 4.2 memory ops (`ld/sd/lbu/sb` via WordMem + MachStack), 4.3 control
+  flow (branches — the outcome selects a label; needs the `Emitted` label-offset
+  algebra), Phase 2 (AsmFacts: `Emitted L pos (emit stmt)` from the real
+  pipeline), 5 (call), 6 (prog_sim).
 
 ## 0. Mission and payoff
 
@@ -436,10 +441,15 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
   `rget/rset` ↔ slot-store (`StInv_store_slot`), 8-byte slot disjointness,
   `Installed`/off-MachPriv preservation under a slot store. All `[propext,
   Quot.sound]` (retrofitted the same onto WordMem's `byte_bit`/round-trip).
-- [x] **Vertical slice (Phase 4.1) — GO.** `ProgSim/StmtSim.lean`: `emit`/
-  `Emitted`/`lower_sim` stated; skip/annot + `addi` (rs,rd ≠ 0) proven end-to-end
-  against the machine `step`. The relation design is validated (commit 9329154).
-- [ ] Finish `lower_sim`: addi r=0 subcases, add/sub/orr/slli/srli, seq; then the
-  toy `prog_sim`/sub3 corollary.
+- [x] **Vertical slice (Phase 4.1) — GO, straight-line slice COMPLETE.**
+  `ProgSim/StmtSim.lean`: `emit`/`Emitted`/`lower_sim`; skip, annot, all six
+  arithmetic ops (addi/add/sub/orr/slli/srli, every register value) and seq proven
+  end-to-end against the machine `step`, factored through `run_load`/`run_store` +
+  `single_op_sim`/`two_op_sim`, all `[propext, Quot.sound]` (commits 9329154,
+  e688c5a, dade03c).
+- [ ] Toy `prog_sim`/sub3 corollary against the differential oracle (sub3 is now
+  within the proven fragment).
+- [ ] Finish `lower_sim`: memory ops (ld/sd/lbu/sb/cref/clen), control flow
+  (ife/while/block/ret/brk/cont/call) — Phases 4.2–4.4.
 - [ ] Then Phases 1/2 (encode/decode, assembler) in parallel-friendly chunks,
   the rest of 4, 5, 6 in order.
