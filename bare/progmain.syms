@@ -1,0 +1,7 @@
+--add-symbol entry_stub=.text:0,function,global
+--add-symbol halt_pad=.text:4,function,global
+--add-symbol strlen=.text:8,function,global
+--add-symbol strtoull=.text:180,function,global
+--add-symbol hex0=.text:1112,function,global
+--add-symbol hex1=.text:2696,function,global
+--add-symbol main=.text:7772,function,global

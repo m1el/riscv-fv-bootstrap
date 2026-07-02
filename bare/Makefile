@@ -53,15 +53,26 @@ progmain.elf: shellmain.s progmain.bin progmain.inc link.ld
 run-progmain: progmain.elf
 	$(RUNENV) $(QEMU) $(QFLAGS) progmain.elf
 
-# Disassemble the compiled blob as raw code (gas marks .incbin data with a
-# $d mapping symbol, so objdump -d on the ELF renders it as .word). Raw-bin
-# addresses = blob byte offsets = the Lean fn table (progmain.inc MAIN_OFF).
+# Disassemble the compiled blob WITH the compiler's function labels:
+# synthesize an ELF from the raw bytes (addresses = blob byte offsets) and
+# inject the fn table (progmain.syms, emitted by DumpProgMain.lean) as
+# symbols. Done on the raw .bin rather than progmain.elf because gas marks
+# .incbin data with a $d mapping symbol, which makes objdump print .word.
 # no-aliases so the mnemonics can be eyeballed against the 16-encoding
 # trusted surface. For the (unverified) shim: $(OBJDUMP) -d progmain.elf.
-dismain: progmain.bin
-	$(OBJDUMP) -D -b binary -m riscv:rv64 -M no-aliases progmain.bin
+# (Two objcopy steps: rename-with-flags on a binary-input section zeroes
+# the contents in this binutils, and --set-section-flags must name the
+# section by its OLD name — it applies before --rename-section.)
+progmain-blob.elf: progmain.bin progmain.syms
+	$(OBJCOPY) -I binary -O elf64-littleriscv -B riscv:rv64 progmain.bin $@.tmp
+	$(OBJCOPY) --set-section-flags .data=alloc,load,readonly,code \
+	  --rename-section .data=.text $$(tr '\n' ' ' < progmain.syms) $@.tmp $@
+	rm -f $@.tmp
+
+dismain: progmain-blob.elf
+	$(OBJDUMP) -d $< -M no-aliases
 
 clean:
-	rm -f hex0.elf hex0.bin hex1.elf hex1.bin progmain.elf
+	rm -f hex0.elf hex0.bin hex1.elf hex1.bin progmain.elf progmain-blob.elf
 
 .PHONY: all dis dis1 dismain run run1 run-progmain clean
