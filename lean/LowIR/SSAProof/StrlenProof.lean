@@ -6,9 +6,10 @@
   This is the smallest SSA loop with a loop-carried result: args `(6, 7) =
   (cursor, byte-at-cursor)`, the guard-false `dflt` computes the length from the
   final cursor. The point of the slice is to exercise the WHOLE Phase-0 pipeline
-  once — `exec_while_cont0` / `exec_while_F_brk0`, the args-tuple invariant, the
-  frame theorem, `exec_mono_le` for fuel reconciliation, `run`-level assembly —
-  before paying hex0 prices.
+  once — the `exec_while` entry + `iterWhile_cont0`/`iterWhile_F_brk0` head
+  steps, the args-tuple invariant, the frame theorem, `iterWhile_mono`/
+  `exec_mono_le` for fuel reconciliation, `run`-level assembly — before paying
+  hex0 prices.
 
   Headline contrast with the flat `LowIR.StrlenProof`: the loop invariant is a
   statement about the args tuple `(cur, byte)`, not about a mutable register
@@ -28,7 +29,7 @@ variable (env : Env) (sl : Word)
 
 def slBody : Stmt := .seq (.addi 8 6 1) (.seq (.lbu 9 8 0) (.cont 0 [.reg 8, .reg 9]))
 def slDflt : Stmt := .seq (.sub 13 6 10) (.brk 0 [.reg 13])
-def slWhile (inits : List Opnd) : Stmt := .«while» [12] inits [6, 7] .geu 7 16 slBody slDflt
+def slWhile : Stmt := .«while» [12] [.reg 10, .reg 5] [6, 7] .geu 7 16 slBody slDflt
 
 /-! ### Arithmetic / condition facts. -/
 
@@ -77,45 +78,42 @@ theorem slDflt_exec (s0 : St) (cur p : Word) (h6 : s0.rget 6 = cur) (h10 : s0.rg
   show exec env sl (1+1) (.seq (.sub 13 6 10) (.brk 0 [.reg 13])) s0 = _
   rw [exec_seq_normal (h := hs), exec_brk]; simp
 
-/-! ### The loop lemma — args-tuple invariant, induction on the distance to NUL,
-    existential fuel reconciled with `exec_mono_le`. -/
+/-! ### The loop lemma — args-tuple invariant stated DIRECTLY over the value
+    tuple (§8 rebind-in-env: the loop term is fixed, so there is no `inits`
+    parameter and no `.map .const` round-trip), induction on the distance to
+    NUL, existential fuel reconciled with `iterWhile_mono`/`exec_mono_le`. -/
 
 theorem strlen_loop (p : Word) (n : Nat) :
-    ∀ (s : St) (cur : Word) (inits : List Opnd),
-      inits.map (evalOpnd s) = [cur, (s.mem cur).setWidth 64] →
+    ∀ (s : St) (cur : Word),
       s.rget 16 = 1 → s.rget 10 = p →
       (∀ k, k < n → s.mem (cur + BitVec.ofNat 64 k) ≠ 0) →
       s.mem (cur + BitVec.ofNat 64 n) = 0 →
-      ∃ F s', exec env sl F (slWhile inits) s = some (s', .normal)
+      ∃ F s', iterWhile (exec env sl F) [12] [6, 7] .geu 7 16 slBody slDflt F s
+          [cur, (s.mem cur).setWidth 64] = some (s', .normal)
         ∧ s'.rget 12 = (cur + BitVec.ofNat 64 n) - p
         ∧ s'.mem = s.mem := by
   induction n with
   | zero =>
-    intro s cur inits hev h16 h10 _ hz
+    intro s cur h16 h10 _ hz
     rw [cur_zero] at hz
-    have hlen : inits.length = [6, 7].length := by
-      have := congrArg List.length hev; simpa using this
-    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [6, 7] (inits.map (evalOpnd s)) := ⟨_, rfl⟩
-    have hbo : s0 = (s.rset 6 cur).rset 7 ((s.mem cur).setWidth 64) := by rw [hs0, hev]; rfl
+    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [6, 7] [cur, (s.mem cur).setWidth 64] := ⟨_, rfl⟩
+    have hbo : s0 = (s.rset 6 cur).rset 7 ((s.mem cur).setWidth 64) := by rw [hs0]; rfl
     have hg7 : s0.rget 7 = (s.mem cur).setWidth 64 := by rw [hbo]; simp
     have hg16 : s0.rget 16 = 1 := by rw [hbo]; simp [h16]
     have hg6 : s0.rget 6 = cur := by rw [hbo]; simp
     have hg10 : s0.rget 10 = p := by rw [hbo]; simp [h10]
     have hcond : evalCond .geu (s0.rget 7) (s0.rget 16) = false := by
       rw [hg7, hg16, hz]; exact geu_one_false
-    refine ⟨3, (s0.rset 13 (cur - p)).rset 12 (cur - p), ?_, ?_, ?_⟩
-    · show exec env sl (2 + 1) (slWhile inits) s = _
-      rw [slWhile, exec_while_F_brk0 (hlen := hlen) (hs0 := hs0) (hc := hcond)
+    refine ⟨2, (s0.rset 13 (cur - p)).rset 12 (cur - p), ?_, ?_, ?_⟩
+    · rw [show (2:Nat) = 1+1 from rfl, iterWhile_F_brk0 (hs0 := hs0) (hc := hcond)
             (hb := slDflt_exec env sl s0 cur p hg6 hg10) (hvs := rfl)]
       rfl
     · simp
     · rw [hbo]; simp
   | succ n ih =>
-    intro s cur inits hev h16 h10 hpre hz
-    have hlen : inits.length = [6, 7].length := by
-      have := congrArg List.length hev; simpa using this
-    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [6, 7] (inits.map (evalOpnd s)) := ⟨_, rfl⟩
-    have hbo : s0 = (s.rset 6 cur).rset 7 ((s.mem cur).setWidth 64) := by rw [hs0, hev]; rfl
+    intro s cur h16 h10 hpre hz
+    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [6, 7] [cur, (s.mem cur).setWidth 64] := ⟨_, rfl⟩
+    have hbo : s0 = (s.rset 6 cur).rset 7 ((s.mem cur).setWidth 64) := by rw [hs0]; rfl
     have hg7 : s0.rget 7 = (s.mem cur).setWidth 64 := by rw [hbo]; simp
     have hg16 : s0.rget 16 = 1 := by rw [hbo]; simp [h16]
     have hg6 : s0.rget 6 = cur := by rw [hbo]; simp
@@ -133,21 +131,20 @@ theorem strlen_loop (p : Word) (n : Nat) :
     have hs1_16 : s1.rget 16 = 1 := by rw [hs1]; simp [hg16]
     have hs1_10 : s1.rget 10 = p := by rw [hs1]; simp [hg10]
     have hmemcur1 : s0.mem (cur + 1) = s.mem (cur + 1) := by rw [hmem0]
-    have hev' : ([Opnd.const (cur + 1), Opnd.const ((s0.mem (cur + 1)).setWidth 64)].map
-          (evalOpnd s1)) = [cur + 1, (s1.mem (cur + 1)).setWidth 64] := by
-      simp only [List.map_cons, evalOpnd_const, List.map_nil, hs1mem, hmemcur1]
     have hpre' : ∀ k, k < n → s1.mem ((cur + 1) + BitVec.ofNat 64 k) ≠ 0 := by
       intro k hk; rw [hs1mem, ← cur_step]; exact hpre (k + 1) (by omega)
     have hz' : s1.mem ((cur + 1) + BitVec.ofNat 64 n) = 0 := by
       rw [hs1mem, ← cur_step]; exact hz
-    obtain ⟨F, s', hF, h12, hmem⟩ := ih s1 (cur + 1) _ hev' hs1_16 hs1_10 hpre' hz'
+    obtain ⟨F, s', hF, h12, hmem⟩ := ih s1 (cur + 1) hs1_16 hs1_10 hpre' hz'
+    rw [hs1mem] at hF
     refine ⟨max 3 F + 1, s', ?_, ?_, ?_⟩
-    · show exec env sl (max 3 F + 1) (slWhile inits) s = _
-      rw [slWhile, exec_while_cont0 (hlen := hlen) (hs0 := hs0) (hc := hcond)
-            (hb := exec_mono_le env sl (Nat.le_max_left 3 F) hbody) (hvs := rfl)]
-      rw [show ([cur + 1, (s0.mem (cur + 1)).setWidth 64].map Opnd.const)
-            = [Opnd.const (cur + 1), Opnd.const ((s0.mem (cur + 1)).setWidth 64)] from rfl]
-      exact exec_mono_le env sl (Nat.le_max_right 3 F) hF
+    · rw [iterWhile_cont0 (hs0 := hs0) (hc := hcond)
+            (hb := exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_left 3 F)) hbody)
+            (hvs := rfl),
+          hmemcur1]
+      exact iterWhile_mono
+        (fun stmt st r h => exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_right 3 F)) h)
+        _ _ _ _ _ _ _ F (max 3 F) (Nat.le_max_right 3 F) s1 _ _ hF
     · rw [h12, cur_step]
     · rw [hmem, hs1mem]
 
@@ -184,23 +181,26 @@ theorem strlenS_correct (mem : Word → Byte) (p sp : Word) (n : Nat)
   have hev : ([Opnd.reg 10, Opnd.reg 5].map (evalOpnd sb)) = [p, (sb.mem p).setWidth 64] := by
     simp only [List.map_cons, evalOpnd_reg, List.map_nil, hsb10, hsb5, hsbmem]
   obtain ⟨F, s', hF, h12, _⟩ :=
-    strlen_loop env sl p n sb p [.reg 10, .reg 5] hev hsb16 hsb10
+    strlen_loop env sl p n sb p hsb16 hsb10
       (fun k hk => by rw [hsbmem]; exact hpre k hk) (by rw [hsbmem]; exact hnul)
   have h12n : s'.rget 12 = BitVec.ofNat 64 n := by rw [h12]; bv_omega
   refine ⟨F + 4, s', ?_⟩
-  -- preamble (2) + loop (bumped to fuel F+1) + ret (1) = fuel F+4 on the body
+  -- preamble (2) + loop (entered at fuel F+1) + ret (1) = fuel F+4 on the body
   have hbody : exec env sl (F + 4) Lib.strlenS.body st0
       = some (s', .ret [BitVec.ofNat 64 n]) := by
     show exec env sl (F + 4)
       (.seq (.lbu 5 10 0) (.seq (.addi 16 0 (BitVec.ofNat 12 1))
-        (.seq (slWhile [.reg 10, .reg 5]) (.ret [.reg 12])))) st0 = _
+        (.seq slWhile (.ret [.reg 12])))) st0 = _
     have e1 : exec env sl (F + 3) (.lbu 5 10 0) st0 = some (sa, .normal) := by
       rw [show F + 3 = (F + 2) + 1 from rfl, exec_lbu, hst0_10, hsa]; simp
     have e2 : exec env sl (F + 2) (.addi 16 0 (BitVec.ofNat 12 1)) sa = some (sb, .normal) := by
       have hv : sa.rget 0 + (BitVec.ofNat 12 1).signExtend 64 = (1 : Word) := by rw [rget_zero]; decide
       rw [show F + 2 = (F + 1) + 1 from rfl, exec_addi, hv, hsb]
-    have eloop : exec env sl (F + 1) (slWhile [.reg 10, .reg 5]) sb = some (s', .normal) :=
-      exec_mono_le env sl (Nat.le_succ F) hF
+    -- loop entry: one-time evaluation of the inits, then the iterWhile run
+    have eloop : exec env sl (F + 1) slWhile sb = some (s', .normal) := by
+      rw [slWhile, exec_while (hlen := rfl), hev]
+      exact iterWhile_mono (fun stmt st r h => h) _ _ _ _ _ _ _ F (F + 1) (Nat.le_succ F)
+        sb _ _ hF
     rw [show F + 4 = (F + 3) + 1 from rfl, exec_seq_normal (h := e1),
         show F + 3 = (F + 2) + 1 from rfl, exec_seq_normal (h := e2),
         show F + 2 = (F + 1) + 1 from rfl, exec_seq_normal (h := eloop), exec_ret]

@@ -8,9 +8,10 @@
 
   Modelled on `LowIR.ProgSim.ExecFacts` / `LowIR.Ctrl`'s unfolder set, but the
   SSA `exec` has valued outcomes, `catch0` for the `block`/`ife` break-scopes,
-  and block-parameter `while` (the back-edge re-executes a *rebuilt* while at
-  the same fuel). Everything lives in `namespace LowIR.SSA` so `exec`/`Stmt`/
-  `St`/`Outcome` resolve to the SSA versions directly.
+  and block-parameter `while` in the rebind-in-environment form (`iterWhile`:
+  the loop term is FIXED, carried values thread through the value list —
+  docs/RESUME-SSA-HEX0.md §8). Everything lives in `namespace LowIR.SSA` so
+  `exec`/`Stmt`/`St`/`Outcome` resolve to the SSA versions directly.
 -/
 import LowIR.SSA
 
@@ -175,140 +176,21 @@ theorem exec_ife_else (fuel : Nat) (c : Cond) (ca cb : Reg) (outs : List Reg) (t
     exec env stackLo (fuel+1) (.ife c ca cb outs t e) s
       = catch0 outs (exec env stackLo fuel e s) := by simp [exec, hc]
 
-/-! ### `while` — block-parameter loop. `exec_while_unfold` peels one head
-    entry (the length check + guard + arg binding) into the post-branch match;
-    the resolved lemmas below fix a branch outcome. `s0` is the arg-bound
-    entry state, `branch` the guard-selected body/dflt. -/
+/-! ### `while` — block-parameter loop, rebind-in-environment form (§8 of
+    docs/RESUME-SSA-HEX0.md). `exec_while` peels the entry (length check + the
+    ONE-TIME `inits` evaluation) into `iterWhile` on the value tuple; the
+    `iterWhile_*` head-step lemmas fix one head entry's branch outcome. The
+    loop TERM is fixed throughout — no `vs.map .const` rebuild, the carried
+    values are the `vals` list. `s0` is the arg-bound entry state. -/
 
-theorem exec_while_unfold (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
+theorem exec_while (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
     (c : Cond) (ca cb : Reg) (body dflt : Stmt) (s : St)
     (hlen : inits.length = args.length) :
     exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s
-      = (match exec env stackLo fuel
-             (if evalCond c ((bindOuts s args (inits.map (evalOpnd s))).rget ca)
-                            ((bindOuts s args (inits.map (evalOpnd s))).rget cb) then body else dflt)
-             (bindOuts s args (inits.map (evalOpnd s))) with
-         | some (s1, .cont 0 vs) =>
-             if vs.length == args.length then
-               exec env stackLo fuel (.«while» outs (vs.map .const) args c ca cb body dflt) s1
-             else none
-         | some (s1, .brk 0 vs)  =>
-             if vs.length == outs.length then some (bindOuts s1 outs vs, .normal) else none
-         | some (s1, .brk (k+1) vs)  => some (s1, .brk k vs)
-         | some (s1, .cont (k+1) vs) => some (s1, .cont k vs)
-         | some (s1, .ret vs)        => some (s1, .ret vs)
-         | some (_, .normal)         => none
-         | none                      => none) := by
+      = iterWhile (exec env stackLo fuel) outs args c ca cb body dflt (fuel+1) s
+          (inits.map (evalOpnd s)) := by
   simp only [exec]
   rw [if_pos (by rw [hlen]; exact beq_self_eq_true _)]
-  rfl
-
-/-- Guard-true, body continues the loop (`cont 0`): re-execute the rebuilt while. -/
-theorem exec_while_cont0 (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
-    (c : Cond) (ca cb : Reg) (body dflt : Stmt) (s s1 : St) (vs : List Word) (s0 : St)
-    (hlen : inits.length = args.length)
-    (hs0 : s0 = bindOuts s args (inits.map (evalOpnd s)))
-    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
-    (hb : exec env stackLo fuel body s0 = some (s1, .cont 0 vs))
-    (hvs : vs.length = args.length) :
-    exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s
-      = exec env stackLo fuel (.«while» outs (vs.map .const) args c ca cb body dflt) s1 := by
-  rw [exec_while_unfold (hlen := hlen)]
-  simp only [← hs0, hc, if_true, hb]
-  rw [if_pos (by rw [hvs]; exact beq_self_eq_true _)]
-
-/-- Guard-true, body escapes one level up (`cont (k+1)`): shift to `cont k`. -/
-theorem exec_while_contS (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
-    (c : Cond) (ca cb : Reg) (body dflt : Stmt) (s s1 : St) (k : Nat) (vs : List Word) (s0 : St)
-    (hlen : inits.length = args.length)
-    (hs0 : s0 = bindOuts s args (inits.map (evalOpnd s)))
-    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
-    (hb : exec env stackLo fuel body s0 = some (s1, .cont (k+1) vs)) :
-    exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s
-      = some (s1, .cont k vs) := by
-  rw [exec_while_unfold (hlen := hlen)]; simp only [← hs0, hc, if_true, hb]
-
-/-- Guard-true, body breaks out (`brk 0`): bind outs, normalize. -/
-theorem exec_while_brk0 (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
-    (c : Cond) (ca cb : Reg) (body dflt : Stmt) (s s1 : St) (vs : List Word) (s0 : St)
-    (hlen : inits.length = args.length)
-    (hs0 : s0 = bindOuts s args (inits.map (evalOpnd s)))
-    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
-    (hb : exec env stackLo fuel body s0 = some (s1, .brk 0 vs))
-    (hvs : vs.length = outs.length) :
-    exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s
-      = some (bindOuts s1 outs vs, .normal) := by
-  rw [exec_while_unfold (hlen := hlen)]
-  simp only [← hs0, hc, if_true, hb]
-  rw [if_pos (by rw [hvs]; exact beq_self_eq_true _)]
-
-/-- Guard-true, body breaks further out (`brk (k+1)`): shift to `brk k`. -/
-theorem exec_while_brkS (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
-    (c : Cond) (ca cb : Reg) (body dflt : Stmt) (s s1 : St) (k : Nat) (vs : List Word) (s0 : St)
-    (hlen : inits.length = args.length)
-    (hs0 : s0 = bindOuts s args (inits.map (evalOpnd s)))
-    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
-    (hb : exec env stackLo fuel body s0 = some (s1, .brk (k+1) vs)) :
-    exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s
-      = some (s1, .brk k vs) := by
-  rw [exec_while_unfold (hlen := hlen)]; simp only [← hs0, hc, if_true, hb]
-
-/-- Guard-true, body returns from the function (`ret`): pass it out. -/
-theorem exec_while_ret (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
-    (c : Cond) (ca cb : Reg) (body dflt : Stmt) (s s1 : St) (vs : List Word) (s0 : St)
-    (hlen : inits.length = args.length)
-    (hs0 : s0 = bindOuts s args (inits.map (evalOpnd s)))
-    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
-    (hb : exec env stackLo fuel body s0 = some (s1, .ret vs)) :
-    exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s
-      = some (s1, .ret vs) := by
-  rw [exec_while_unfold (hlen := hlen)]; simp only [← hs0, hc, if_true, hb]
-
-/-! Guard-FALSE (branch = `dflt`) counterparts — only the outcomes the ports use. -/
-
-/-- Guard-false, dflt breaks out with the loop-carried outs (`brk 0`). -/
-theorem exec_while_F_brk0 (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
-    (c : Cond) (ca cb : Reg) (body dflt : Stmt) (s s1 : St) (vs : List Word) (s0 : St)
-    (hlen : inits.length = args.length)
-    (hs0 : s0 = bindOuts s args (inits.map (evalOpnd s)))
-    (hc : evalCond c (s0.rget ca) (s0.rget cb) = false)
-    (hb : exec env stackLo fuel dflt s0 = some (s1, .brk 0 vs))
-    (hvs : vs.length = outs.length) :
-    exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s
-      = some (bindOuts s1 outs vs, .normal) := by
-  rw [exec_while_unfold (hlen := hlen)]
-  simp only [← hs0]
-  rw [if_neg (show ¬ (evalCond c (s0.rget ca) (s0.rget cb) = true) by rw [hc]; decide)]
-  simp only [hb]
-  rw [if_pos (by rw [hvs]; exact beq_self_eq_true _)]
-
-/-- Guard-false, dflt returns from the function (`ret`) — hex0's success exit. -/
-theorem exec_while_F_ret (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
-    (c : Cond) (ca cb : Reg) (body dflt : Stmt) (s s1 : St) (vs : List Word) (s0 : St)
-    (hlen : inits.length = args.length)
-    (hs0 : s0 = bindOuts s args (inits.map (evalOpnd s)))
-    (hc : evalCond c (s0.rget ca) (s0.rget cb) = false)
-    (hb : exec env stackLo fuel dflt s0 = some (s1, .ret vs)) :
-    exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s
-      = some (s1, .ret vs) := by
-  rw [exec_while_unfold (hlen := hlen)]
-  simp only [← hs0]
-  rw [if_neg (show ¬ (evalCond c (s0.rget ca) (s0.rget cb) = true) by rw [hc]; decide)]
-  simp only [hb]
-
-/-- Guard-false, dflt continues further out (`cont (k+1)`) — skipComment's dflt. -/
-theorem exec_while_F_contS (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
-    (c : Cond) (ca cb : Reg) (body dflt : Stmt) (s s1 : St) (k : Nat) (vs : List Word) (s0 : St)
-    (hlen : inits.length = args.length)
-    (hs0 : s0 = bindOuts s args (inits.map (evalOpnd s)))
-    (hc : evalCond c (s0.rget ca) (s0.rget cb) = false)
-    (hb : exec env stackLo fuel dflt s0 = some (s1, .cont (k+1) vs)) :
-    exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s
-      = some (s1, .cont k vs) := by
-  rw [exec_while_unfold (hlen := hlen)]
-  simp only [← hs0]
-  rw [if_neg (show ¬ (evalCond c (s0.rget ca) (s0.rget cb) = true) by rw [hc]; decide)]
-  simp only [hb]
 
 /-- Length mismatch on the loop args: `exec` is `none` regardless of fuel. -/
 theorem exec_while_badlen (fuel : Nat) (outs : List Reg) (inits : List Opnd) (args : List Reg)
@@ -317,6 +199,151 @@ theorem exec_while_badlen (fuel : Nat) (outs : List Reg) (inits : List Opnd) (ar
     exec env stackLo (fuel+1) (.«while» outs inits args c ca cb body dflt) s = none := by
   simp only [exec]
   rw [if_neg (by simpa using hlen)]
+
+/-- Zero budget: `iterWhile` is `none`. -/
+theorem iterWhile_zero (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt)
+    (s : St) (vals : List Word) :
+    iterWhile step outs args c ca cb body dflt 0 s vals = none := rfl
+
+/-- Guard-true, body continues the loop (`cont 0 vs`): iterate on the SAME
+    term with `vals := vs` — the args tuple threads as plain values. -/
+theorem iterWhile_cont0 (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt)
+    (k : Nat) (s s1 : St) (vals vs : List Word) (s0 : St)
+    (hs0 : s0 = bindOuts s args vals)
+    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
+    (hb : step body s0 = some (s1, .cont 0 vs))
+    (hvs : vs.length = args.length) :
+    iterWhile step outs args c ca cb body dflt (k+1) s vals
+      = iterWhile step outs args c ca cb body dflt k s1 vs := by
+  simp only [iterWhile, ← hs0, hc, if_true, hb]
+  rw [if_pos (by rw [hvs]; exact beq_self_eq_true _)]
+
+/-- Guard-true, body escapes one level up (`cont (j+1)`): shift to `cont j`. -/
+theorem iterWhile_contS (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt)
+    (k : Nat) (s s1 : St) (j : Nat) (vals vs : List Word) (s0 : St)
+    (hs0 : s0 = bindOuts s args vals)
+    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
+    (hb : step body s0 = some (s1, .cont (j+1) vs)) :
+    iterWhile step outs args c ca cb body dflt (k+1) s vals
+      = some (s1, .cont j vs) := by
+  simp only [iterWhile, ← hs0, hc, if_true, hb]
+
+/-- Guard-true, body breaks out (`brk 0`): bind outs, normalize. -/
+theorem iterWhile_brk0 (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt)
+    (k : Nat) (s s1 : St) (vals vs : List Word) (s0 : St)
+    (hs0 : s0 = bindOuts s args vals)
+    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
+    (hb : step body s0 = some (s1, .brk 0 vs))
+    (hvs : vs.length = outs.length) :
+    iterWhile step outs args c ca cb body dflt (k+1) s vals
+      = some (bindOuts s1 outs vs, .normal) := by
+  simp only [iterWhile, ← hs0, hc, if_true, hb]
+  rw [if_pos (by rw [hvs]; exact beq_self_eq_true _)]
+
+/-- Guard-true, body breaks further out (`brk (j+1)`): shift to `brk j`. -/
+theorem iterWhile_brkS (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt)
+    (k : Nat) (s s1 : St) (j : Nat) (vals vs : List Word) (s0 : St)
+    (hs0 : s0 = bindOuts s args vals)
+    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
+    (hb : step body s0 = some (s1, .brk (j+1) vs)) :
+    iterWhile step outs args c ca cb body dflt (k+1) s vals
+      = some (s1, .brk j vs) := by
+  simp only [iterWhile, ← hs0, hc, if_true, hb]
+
+/-- Guard-true, body returns from the function (`ret`): pass it out. -/
+theorem iterWhile_ret (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt)
+    (k : Nat) (s s1 : St) (vals vs : List Word) (s0 : St)
+    (hs0 : s0 = bindOuts s args vals)
+    (hc : evalCond c (s0.rget ca) (s0.rget cb) = true)
+    (hb : step body s0 = some (s1, .ret vs)) :
+    iterWhile step outs args c ca cb body dflt (k+1) s vals
+      = some (s1, .ret vs) := by
+  simp only [iterWhile, ← hs0, hc, if_true, hb]
+
+/-! Guard-FALSE (branch = `dflt`) counterparts — only the outcomes the ports use. -/
+
+/-- Guard-false, dflt breaks out with the loop-carried outs (`brk 0`). -/
+theorem iterWhile_F_brk0 (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt)
+    (k : Nat) (s s1 : St) (vals vs : List Word) (s0 : St)
+    (hs0 : s0 = bindOuts s args vals)
+    (hc : evalCond c (s0.rget ca) (s0.rget cb) = false)
+    (hb : step dflt s0 = some (s1, .brk 0 vs))
+    (hvs : vs.length = outs.length) :
+    iterWhile step outs args c ca cb body dflt (k+1) s vals
+      = some (bindOuts s1 outs vs, .normal) := by
+  simp only [iterWhile, ← hs0, hc, Bool.false_eq_true, if_false, hb]
+  rw [if_pos (by rw [hvs]; exact beq_self_eq_true _)]
+
+/-- Guard-false, dflt returns from the function (`ret`) — hex0's success exit. -/
+theorem iterWhile_F_ret (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt)
+    (k : Nat) (s s1 : St) (vals vs : List Word) (s0 : St)
+    (hs0 : s0 = bindOuts s args vals)
+    (hc : evalCond c (s0.rget ca) (s0.rget cb) = false)
+    (hb : step dflt s0 = some (s1, .ret vs)) :
+    iterWhile step outs args c ca cb body dflt (k+1) s vals
+      = some (s1, .ret vs) := by
+  simp only [iterWhile, ← hs0, hc, Bool.false_eq_true, if_false, hb]
+
+/-- Guard-false, dflt continues further out (`cont (j+1)`) — skipComment's dflt. -/
+theorem iterWhile_F_contS (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt)
+    (k : Nat) (s s1 : St) (j : Nat) (vals vs : List Word) (s0 : St)
+    (hs0 : s0 = bindOuts s args vals)
+    (hc : evalCond c (s0.rget ca) (s0.rget cb) = false)
+    (hb : step dflt s0 = some (s1, .cont (j+1) vs)) :
+    iterWhile step outs args c ca cb body dflt (k+1) s vals
+      = some (s1, .cont j vs) := by
+  simp only [iterWhile, ← hs0, hc, Bool.false_eq_true, if_false, hb]
+
+/-- `iterWhile` monotonicity: a larger budget and a (pointwise) more-defined
+    step never change a `some` result. This is the loop half of `exec_mono`,
+    and the fuel-reconciliation workhorse for the loop clients. -/
+theorem iterWhile_mono {step step' : Stmt → St → Option (St × Outcome)}
+    (hstep : ∀ stmt st r, step stmt st = some r → step' stmt st = some r)
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt) :
+    ∀ (k k' : Nat), k ≤ k' → ∀ (s : St) (vals : List Word) (r : St × Outcome),
+      iterWhile step outs args c ca cb body dflt k s vals = some r →
+      iterWhile step' outs args c ca cb body dflt k' s vals = some r := by
+  intro k
+  induction k with
+  | zero => intro k' _ s vals r h; exact absurd h (by simp [iterWhile_zero])
+  | succ k ih =>
+    intro k' hk s vals r h
+    obtain ⟨k'', rfl⟩ : ∃ k'', k' = k''+1 := ⟨k'-1, by omega⟩
+    simp only [iterWhile] at h ⊢
+    generalize hBdef : bindOuts s args vals = B at h ⊢
+    generalize hbrdef : (if evalCond c (B.rget ca) (B.rget cb) then body else dflt) = branch at h ⊢
+    cases hbr : step branch B with
+    | none => rw [hbr] at h; exact absurd h (by simp)
+    | some r' =>
+      obtain ⟨s1, o1⟩ := r'
+      rw [hbr] at h; rw [hstep branch B (s1, o1) hbr]
+      cases o1 with
+      | normal => exact absurd h (by simp)
+      | ret vs => exact h
+      | brk j vs =>
+        cases j with
+        | zero =>
+          by_cases hvs : (vs.length == outs.length) = true
+          · simp only [hvs, if_true] at h ⊢; exact h
+          · simp only [Bool.not_eq_true] at hvs; simp only [hvs] at h; exact absurd h (by simp)
+        | succ j => exact h
+      | cont j vs =>
+        cases j with
+        | zero =>
+          by_cases hvs : (vs.length == args.length) = true
+          · simp only [hvs, if_true] at h ⊢
+            exact ih k'' (by omega) s1 vs r h
+          · simp only [Bool.not_eq_true] at hvs; simp only [hvs] at h; exact absurd h (by simp)
+        | succ j => exact h
 
 /-! ### `call` — activation record. `exec_call_body` exposes the callee body
     execution; the *-none lemmas cover the failure paths (used by `exec_mono`). -/
@@ -446,33 +473,9 @@ theorem exec_mono (f : Nat) : ∀ (stmt : Stmt) (s : St) (r : St × Outcome),
         | some r' => obtain ⟨se, oe⟩ := r'; rw [he] at h; rw [ih e s (se, oe) he]; exact h
     | «while» outs inits args c ca cb body dflt =>
       by_cases hlen : inits.length = args.length
-      · rw [exec_while_unfold (hlen := hlen)] at h ⊢
-        generalize hBdef : bindOuts s args (inits.map (evalOpnd s)) = B at h ⊢
-        generalize hbrdef : (if evalCond c (B.rget ca) (B.rget cb) then body else dflt) = branch at h ⊢
-        cases hbr : exec env stackLo f branch B with
-        | none => rw [hbr] at h; exact absurd h (by simp)
-        | some r' =>
-          obtain ⟨s1, o1⟩ := r'
-          have hb1 := ih branch B (s1, o1) hbr
-          rw [hbr] at h; rw [hb1]
-          cases o1 with
-          | normal => exact absurd h (by simp)
-          | ret vs => exact h
-          | brk k vs =>
-            cases k with
-            | zero =>
-              by_cases hvs : (vs.length == outs.length) = true
-              · simp only [hvs, if_true] at h ⊢; exact h
-              · simp only [Bool.not_eq_true] at hvs; simp only [hvs] at h; exact absurd h (by simp)
-            | succ k => exact h
-          | cont k vs =>
-            cases k with
-            | zero =>
-              by_cases hvs : (vs.length == args.length) = true
-              · simp only [hvs, if_true] at h ⊢
-                exact ih (.«while» outs (vs.map .const) args c ca cb body dflt) s1 r h
-              · simp only [Bool.not_eq_true] at hvs; simp only [hvs] at h; exact absurd h (by simp)
-            | succ k => exact h
+      · rw [exec_while (hlen := hlen)] at h ⊢
+        exact iterWhile_mono (fun stmt st r' h' => ih stmt st r' h')
+          outs args c ca cb body dflt (f+1) (f+1+1) (by omega) s _ r h
       · rw [exec_while_badlen (hlen := hlen)] at h; exact absurd h (by simp)
     | call f' argOps outs =>
       cases hlk : List.lookup f' env with
@@ -529,6 +532,61 @@ theorem catch0_frame (outs : List Reg) (sx : St) (ox : Outcome) (s' : St) (oc : 
     | succ k => rw [catch0_brkS] at hc; obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj hc); rfl
   | cont k vs => rw [catch0_cont] at hc; obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj hc); rfl
   | ret vs => rw [catch0_ret] at hc; obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj hc); rfl
+
+/-- Frame for the loop iterator: if the step executor writes only inside
+    `defs`, an `iterWhile` run preserves every register outside
+    `outs ∪ args ∪ defs body ∪ defs dflt`. Budget induction; the loop half of
+    `exec_frame`'s `while` case. -/
+theorem iterWhile_frame {step : Stmt → St → Option (St × Outcome)}
+    {outs args : List Reg} {c : Cond} {ca cb : Reg} {body dflt : Stmt}
+    (hstep : ∀ stmt st st' oc, step stmt st = some (st', oc) →
+      ∀ r, r ∉ defs stmt → st'.regs r = st.regs r) :
+    ∀ (k : Nat) (s : St) (vals : List Word) (s' : St) (oc : Outcome),
+      iterWhile step outs args c ca cb body dflt k s vals = some (s', oc) →
+      ∀ r, r ∉ outs → r ∉ args → r ∉ defs body → r ∉ defs dflt →
+        s'.regs r = s.regs r := by
+  intro k
+  induction k with
+  | zero => intro s vals s' oc h; exact absurd h (by simp [iterWhile_zero])
+  | succ k ih =>
+    intro s vals s' oc h r hro hrargs hrbody hrdflt
+    simp only [iterWhile] at h
+    have hBr : (bindOuts s args vals).regs r = s.regs r :=
+      bindOuts_regs_not_mem args vals s r hrargs
+    have hbrdefs : r ∉ defs (if evalCond c ((bindOuts s args vals).rget ca)
+                                 ((bindOuts s args vals).rget cb) then body else dflt) := by
+      split
+      · exact hrbody
+      · exact hrdflt
+    generalize hBdef : bindOuts s args vals = B at h hBr hbrdefs
+    generalize hbrdef : (if evalCond c (B.rget ca) (B.rget cb) then body else dflt) = branch
+      at h hbrdefs
+    cases hbr : step branch B with
+    | none => rw [hbr] at h; exact absurd h (by simp)
+    | some r' =>
+      obtain ⟨s1, o1⟩ := r'
+      have hs1 : s1.regs r = s.regs r := (hstep branch B s1 o1 hbr r hbrdefs).trans hBr
+      rw [hbr] at h
+      cases o1 with
+      | normal => exact absurd h (by simp)
+      | ret vs => obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj h); exact hs1
+      | brk j vs =>
+        cases j with
+        | zero =>
+          by_cases hvs : (vs.length == outs.length) = true
+          · simp only [hvs, if_true] at h
+            obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj h)
+            exact (bindOuts_regs_not_mem outs vs s1 r hro).trans hs1
+          · simp only [Bool.not_eq_true] at hvs; simp only [hvs] at h; exact absurd h (by simp)
+        | succ j => obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj h); exact hs1
+      | cont j vs =>
+        cases j with
+        | zero =>
+          by_cases hvs : (vs.length == args.length) = true
+          · simp only [hvs, if_true] at h
+            exact (ih s1 vs s' oc h r hro hrargs hrbody hrdflt).trans hs1
+          · simp only [Bool.not_eq_true] at hvs; simp only [hvs] at h; exact absurd h (by simp)
+        | succ j => obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj h); exact hs1
 
 theorem exec_frame (f : Nat) : ∀ (stmt : Stmt) (s s' : St) (oc : Outcome),
     exec env stackLo f stmt s = some (s', oc) → ∀ r, r ∉ defs stmt → s'.regs r = s.regs r := by
@@ -620,46 +678,9 @@ theorem exec_frame (f : Nat) : ∀ (stmt : Stmt) (s s' : St) (oc : Outcome),
       simp only [defs, List.mem_append, not_or] at hr
       obtain ⟨⟨⟨hro, hrargs⟩, hrbody⟩, hrdflt⟩ := hr
       by_cases hlen : inits.length = args.length
-      · have hBr : (bindOuts s args (inits.map (evalOpnd s))).regs r = s.regs r :=
-          bindOuts_regs_not_mem args _ s r hrargs
-        have hbrdefs : r ∉ defs (if evalCond c ((bindOuts s args (inits.map (evalOpnd s))).rget ca)
-                                      ((bindOuts s args (inits.map (evalOpnd s))).rget cb)
-                                 then body else dflt) := by
-          split
-          · exact hrbody
-          · exact hrdflt
-        rw [exec_while_unfold (hlen := hlen)] at h
-        generalize hBdef : bindOuts s args (inits.map (evalOpnd s)) = B at h hBr hbrdefs
-        generalize hbrdef : (if evalCond c (B.rget ca) (B.rget cb) then body else dflt) = branch
-          at h hbrdefs
-        cases hbr : exec env stackLo f branch B with
-        | none => rw [hbr] at h; exact absurd h (by simp)
-        | some r' =>
-          obtain ⟨s1, o1⟩ := r'
-          have hs1 : s1.regs r = s.regs r := (ih branch B s1 o1 hbr r hbrdefs).trans hBr
-          rw [hbr] at h
-          cases o1 with
-          | normal => exact absurd h (by simp)
-          | ret vs => obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj h); exact hs1
-          | brk k vs =>
-            cases k with
-            | zero =>
-              by_cases hvs : (vs.length == outs.length) = true
-              · simp only [hvs, if_true] at h
-                obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj h)
-                exact (bindOuts_regs_not_mem outs vs s1 r hro).trans hs1
-              · simp only [Bool.not_eq_true] at hvs; simp only [hvs] at h; exact absurd h (by simp)
-            | succ k => obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj h); exact hs1
-          | cont k vs =>
-            cases k with
-            | zero =>
-              by_cases hvs : (vs.length == args.length) = true
-              · simp only [hvs, if_true] at h
-                exact (ih (.«while» outs (vs.map .const) args c ca cb body dflt) s1 s' oc h r
-                  (by simpa only [defs, List.mem_append, not_or] using
-                    ⟨⟨⟨hro, hrargs⟩, hrbody⟩, hrdflt⟩)).trans hs1
-              · simp only [Bool.not_eq_true] at hvs; simp only [hvs] at h; exact absurd h (by simp)
-            | succ k => obtain ⟨rfl, _⟩ := Prod.mk.inj (Option.some.inj h); exact hs1
+      · rw [exec_while (hlen := hlen)] at h
+        exact iterWhile_frame (fun stmt st st' oc' h' r' hr' => ih stmt st st' oc' h' r' hr')
+          (f+1) s _ s' oc h r hro hrargs hrbody hrdflt
       · rw [exec_while_badlen (hlen := hlen)] at h; exact absurd h (by simp)
     | call f' argOps outs =>
       simp only [defs] at hr

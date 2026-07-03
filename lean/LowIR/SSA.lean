@@ -132,6 +132,32 @@ def frameEnter (stackLo : Word) (fd : FunDef) (argVals : List Word)
            mem  := mem
            sp   := frameBase }
 
+/-- The block-parameter loop iterator (the §8 rebind-in-environment redesign,
+    docs/RESUME-SSA-HEX0.md): the loop TERM stays fixed; the carried values
+    thread through `vals` and are rebound to `args` at each head entry. `step`
+    is the branch executor (`exec` one fuel level down); `k` bounds the number
+    of head entries. A body `cont 0 vs` recurses on the SAME loop with
+    `vals := vs` — no term reconstruction. -/
+def iterWhile (step : Stmt → St → Option (St × Outcome))
+    (outs args : List Reg) (c : Cond) (ca cb : Reg) (body dflt : Stmt) :
+    Nat → St → List Word → Option (St × Outcome)
+  | 0, _, _ => none
+  | k+1, s, vals =>
+    let s0 := bindOuts s args vals
+    let branch := if evalCond c (s0.rget ca) (s0.rget cb) then body else dflt
+    match step branch s0 with
+    | some (s1, .cont 0 vs) =>
+        if vs.length == args.length then
+          iterWhile step outs args c ca cb body dflt k s1 vs
+        else none
+    | some (s1, .brk 0 vs)  =>
+        if vs.length == outs.length then some (bindOuts s1 outs vs, .normal) else none
+    | some (s1, .brk (j+1) vs)  => some (s1, .brk j vs)
+    | some (s1, .cont (j+1) vs) => some (s1, .cont j vs)
+    | some (s1, .ret vs)        => some (s1, .ret vs)
+    | some (_, .normal)         => none   -- bodies are .never (checker bans this)
+    | none                      => none
+
 /-- The value-binding break-scope catch shared by `block` and `ife`:
     `brk 0 vs` binds the outs and normalizes; `normal` falls through only for
     `outs = []`; deeper brks shift; cont/ret pass (these are not cont scopes). -/
@@ -146,11 +172,12 @@ def catch0 (outs : List Reg) : Option (St × Outcome) → Option (St × Outcome)
 
 /-- Clocked big-step semantics, Prog's shape with valued outcomes.
 
-    `while`: bind args := inits, evaluate the guard WITH args in scope; true →
-    body, false → dflt (same scopes — dflt may brk 0 with loop-carried values,
-    or even cont 0 to restart). Iteration is re-execution of the `while` with
-    `inits := consts of the continued values` — the "tail call" made literal;
-    recursion is at `fuel` from `fuel+1` as everywhere else. -/
+    `while`: evaluate `inits` ONCE to a value tuple, then hand off to
+    `iterWhile`, which rebinds `args := vals` at each head entry, evaluates the
+    guard WITH args in scope (true → body, false → dflt — same scopes; dflt may
+    brk 0 with loop-carried values, or even cont 0 to restart), and iterates on
+    the SAME term with the continued values. The branch executor runs at `fuel`
+    (one level down, as everywhere else); the iteration budget is `fuel+1`. -/
 def exec (env : Env) (stackLo : Word) : Nat → Stmt → St → Option (St × Outcome)
   | 0,      _,    _ => none
   | fuel+1, stmt, s =>
@@ -184,20 +211,8 @@ def exec (env : Env) (stackLo : Word) : Nat → Stmt → St → Option (St × Ou
         catch0 outs (exec env stackLo fuel arm s)
     | .«while» outs inits args c ca cb body dflt =>
         if inits.length == args.length then
-          let s0 := bindOuts s args (inits.map (evalOpnd s))
-          let branch := if evalCond c (s0.rget ca) (s0.rget cb) then body else dflt
-          match exec env stackLo fuel branch s0 with
-          | some (s1, .cont 0 vs) =>
-              if vs.length == args.length then
-                exec env stackLo fuel (.«while» outs (vs.map .const) args c ca cb body dflt) s1
-              else none
-          | some (s1, .brk 0 vs)  =>
-              if vs.length == outs.length then some (bindOuts s1 outs vs, .normal) else none
-          | some (s1, .brk (k+1) vs)  => some (s1, .brk k vs)
-          | some (s1, .cont (k+1) vs) => some (s1, .cont k vs)
-          | some (s1, .ret vs)        => some (s1, .ret vs)
-          | some (_, .normal)         => none   -- bodies are .never (checker bans this)
-          | none                      => none
+          iterWhile (exec env stackLo fuel) outs args c ca cb body dflt (fuel+1) s
+            (inits.map (evalOpnd s))
         else none
     | .call f argOps outs =>
         match List.lookup f env with

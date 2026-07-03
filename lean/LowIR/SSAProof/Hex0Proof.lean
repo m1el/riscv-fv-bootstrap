@@ -6,11 +6,12 @@
   Slice/Wf layer) imports VERBATIM from `LowIR.CtrlHex0Proof`; only the
   IL-facing pieces are rebuilt on the SSA `exec`.
 
-  STATUS: in progress. Landed so far —
-    • Phase 2: `pnibS_eff` — the value-producing nibble `ife` writes `pnibR c`
-      into `dst` (all 5 leaves; frame follows separately from `exec_frame`).
-  Remaining: prelude / read-char / cond-dispatch (Phase 2 tail), `skipCommentS_eff`
-  (Phase 3), `body_step` (Phase 4), `main_loop` (Phase 5), assembly (Phase 6).
+  STATUS: complete (all phases 2–6; `hex0S_correct` at the bottom). Reworked
+  2026-07-03 for the §8 rebind-in-environment `while` semantics: the loop
+  lemmas (`skip_loopS`, `main_loop`) are stated over `iterWhile` on the plain
+  value tuple — the `inits`-parametrized `while` families, the
+  `.map .const` back-edge round-trips, and the `hev'` re-evaluation
+  obligations are gone.
 -/
 import LowIR.SSAProof.ExecFacts
 import LowIR.SSAProof.StrlenProof
@@ -281,12 +282,13 @@ def scBody (j j1 a b : Reg) : Stmt :=
         (.seq (.addi j1 j 1) (.cont 0 [.reg j1]))))
     (.cont 1 [.reg j, .reg 6])
 
-/-- The inner scan `while` with explicit `inits` (the back-edge rebinds them). -/
-def scWhile (j j1 a b : Reg) (inits : List Opnd) : Stmt :=
-  .«while» [] inits [j] .geu 0 0 (scBody j j1 a b) (.cont 1 [.reg j, .reg 6])
-
-theorem skipCommentS_eq (i1 j j1 a b : Reg) :
-    Lib.skipCommentS i1 j j1 a b = scWhile j j1 a b [.reg i1] := rfl
+/-- `Lib.skipCommentS` spelled as the `while` over `scBody` (defeq; used once
+    at the `exec_while` ENTRY — under the rebind-in-env semantics the term is
+    fixed across iterations, so no `inits`-parametrized family is needed). -/
+theorem skipCommentS_def (i1 j j1 a b : Reg) :
+    Lib.skipCommentS i1 j j1 a b
+      = .«while» [] [.reg i1] [j] .geu 0 0 (scBody j j1 a b)
+          (.cont 1 [.reg j, .reg 6]) := rfl
 
 /-- Register-distinctness bundle for the four scratch names (discharged by
     `decide` at each concrete call site). -/
@@ -300,22 +302,23 @@ def SCok (j j1 a b : Reg) : Prop :=
 
 /-- The comment-scan loop: from `cur`, advance `d` non-`\n` chars to the first
     `\n`/EOF, delivered as `cont 0 [cur + d, olen]` to the outer loop. Induction
-    on the skip distance `d` (the `commentSkip` length, connected in `main_loop`).
-    `s.mem` unchanged.
+    on the skip distance `d` (the `commentSkip` length, connected in `main_loop`);
+    the carried arg is the plain VALUE `cur` (§8 rebind-in-env — no `inits`,
+    no `.map .const` round-trip). `s.mem` unchanged.
 
     Fuels are written as `f + k` (never bare numerals) so the `f+k = (f+(k-1))+1`
     rewrites cannot accidentally hit the register literals (6, 10, 11, 24, …). -/
 theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
     (hL : L.toNat < 2^63) :
-    ∀ (d : Nat) (s : St) (cur : Word) (inits : List Opnd),
-      inits.map (evalOpnd s) = [cur] →
+    ∀ (d : Nat) (s : St) (cur : Word),
       s.rget 10 = p → s.rget 11 = L → s.rget 24 = 10 → s.rget 6 = olen →
       cur.toNat + d < 2^63 →
       (∀ k, k < d → (cur + BitVec.ofNat 64 k).toNat < L.toNat
               ∧ (s.mem (p + (cur + BitVec.ofNat 64 k))).toNat ≠ 10) →
       (L.toNat ≤ (cur + BitVec.ofNat 64 d).toNat
               ∨ (s.mem (p + (cur + BitVec.ofNat 64 d))).toNat = 10) →
-      ∃ F s', exec env sl F (scWhile j j1 a b inits) s
+      ∃ F s', iterWhile (exec env sl F) [] [j] .geu 0 0 (scBody j j1 a b)
+            (.cont 1 [.reg j, .reg 6]) F s [cur]
           = some (s', .cont 0 [cur + BitVec.ofNat 64 d, olen])
         ∧ s'.mem = s.mem := by
   obtain ⟨hj0,hj10,ha0,hb0,h6j,h10j,h11j,h24j,h24a,h24b,hja,hjb,h6a,h6b,
@@ -323,11 +326,11 @@ theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
   intro d
   induction d with
   | zero =>
-    intro s cur inits hev h10 h11 h24 h6 hbd _ hexit
+    intro s cur h10 h11 h24 h6 hbd _ hexit
     rw [cur_zero] at hexit
     have hcb : cur.toNat < 2^63 := by omega
-    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [j] (inits.map (evalOpnd s)) := ⟨_, rfl⟩
-    have hbo : s0 = s.rset j cur := by rw [hs0, hev]; rfl
+    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [j] [cur] := ⟨_, rfl⟩
+    have hbo : s0 = s.rset j cur := by rw [hs0]; rfl
     have hg_j : s0.rget j = cur := by rw [hbo]; exact rget_rset_eq _ _ _ hj0
     have hg_10 : s0.rget 10 = p := by rw [hbo, rget_rset_ne _ _ _ _ h10j]; exact h10
     have hg_11 : s0.rget 11 = L := by rw [hbo, rget_rset_ne _ _ _ _ h11j]; exact h11
@@ -335,7 +338,6 @@ theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
     have hg_6 : s0.rget 6 = olen := by rw [hbo, rget_rset_ne _ _ _ _ h6j]; exact h6
     have hg_mem : s0.mem = s.mem := by rw [hbo]; simp
     have hguard : evalCond .geu (s0.rget 0) (s0.rget 0) = true := by rw [rget_zero]; decide
-    have hlen1 : inits.length = [j].length := by have := congrArg List.length hev; simpa using this
     -- prefix (add/lbu), valid regardless of the exit branch
     have hadd : ∀ f, exec env sl (f+4) (.add a 10 j) s0 = some (s0.rset a (p+cur), .normal) := by
       intro f; rw [show f+4 = (f+3)+1 from rfl, exec_add, hg_10, hg_j]
@@ -377,9 +379,7 @@ theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
             show f+4 = (f+3)+1 from rfl, exec_seq_normal (h := hlbu f),
             hife2 f, catch0_cont]
       refine ⟨0+6+1, (s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64), ?_, by simp [hg_mem]⟩
-      unfold scWhile
-      rw [exec_while_contS (hlen := hlen1) (hs0 := hs0) (hc := hguard) (k := 0) (hb := hbody 0),
-          cur_zero]
+      rw [iterWhile_contS (hs0 := hs0) (hc := hguard) (j := 0) (hb := hbody 1), cur_zero]
     · -- EOF exit: cur ≥ L, ELSE branch
       have hcl : evalCond .lt (s0.rget j) (s0.rget 11) = false := by
         rw [hg_j, hg_11]; exact slt_false hcb hL (by omega)
@@ -392,15 +392,13 @@ theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
             show f+5 = (f+4)+1 from rfl, exec_cont, catch0_cont]
         simp only [List.map_cons, evalOpnd_reg, List.map_nil, hg_j, hg_6]
       refine ⟨0+6+1, s0, ?_, by rw [hg_mem]⟩
-      unfold scWhile
-      rw [exec_while_contS (hlen := hlen1) (hs0 := hs0) (hc := hguard) (k := 0) (hb := hbody 0),
-          cur_zero]
+      rw [iterWhile_contS (hs0 := hs0) (hc := hguard) (j := 0) (hb := hbody 1), cur_zero]
   | succ d0 ih =>
-    intro s cur inits hev h10 h11 h24 h6 hbd hdig hexit
+    intro s cur h10 h11 h24 h6 hbd hdig hexit
     have hcb : cur.toNat < 2^63 := by omega
     have hc1 : (cur+1).toNat = cur.toNat + 1 := by bv_omega
-    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [j] (inits.map (evalOpnd s)) := ⟨_, rfl⟩
-    have hbo : s0 = s.rset j cur := by rw [hs0, hev]; rfl
+    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [j] [cur] := ⟨_, rfl⟩
+    have hbo : s0 = s.rset j cur := by rw [hs0]; rfl
     have hg_j : s0.rget j = cur := by rw [hbo]; exact rget_rset_eq _ _ _ hj0
     have hg_10 : s0.rget 10 = p := by rw [hbo, rget_rset_ne _ _ _ _ h10j]; exact h10
     have hg_11 : s0.rget 11 = L := by rw [hbo, rget_rset_ne _ _ _ _ h11j]; exact h11
@@ -408,7 +406,6 @@ theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
     have hg_6 : s0.rget 6 = olen := by rw [hbo, rget_rset_ne _ _ _ _ h6j]; exact h6
     have hg_mem : s0.mem = s.mem := by rw [hbo]; simp
     have hguard : evalCond .geu (s0.rget 0) (s0.rget 0) = true := by rw [rget_zero]; decide
-    have hlen1 : inits.length = [j].length := by have := congrArg List.length hev; simpa using this
     have hd0 := hdig 0 (by omega); rw [cur_zero] at hd0
     obtain ⟨hlt0, hne0⟩ := hd0
     have hcl : evalCond .lt (s0.rget j) (s0.rget 11) = true := by
@@ -457,7 +454,6 @@ theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
     have hs1c_6 : s1c.rget 6 = olen := by
       rw [hs1c, rget_rset_ne _ _ _ _ h6j1, rget_rset_ne _ _ _ _ h6b, rget_rset_ne _ _ _ _ h6a]; exact hg_6
     have hs1c_mem : s1c.mem = s.mem := by rw [hs1c]; simp [hg_mem]
-    have hev' : ([Opnd.const (cur+1)].map (evalOpnd s1c)) = [cur+1] := by simp
     have hbd' : (cur+1).toNat + d0 < 2^63 := by rw [hc1]; omega
     have hdig' : ∀ k, k < d0 → ((cur+1) + BitVec.ofNat 64 k).toNat < L.toNat
         ∧ (s1c.mem (p + ((cur+1) + BitVec.ofNat 64 k))).toNat ≠ 10 := by
@@ -466,13 +462,15 @@ theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
         ∨ (s1c.mem (p + ((cur+1) + BitVec.ofNat 64 d0))).toNat = 10 := by
       rw [hs1c_mem, ← cur_step]; exact hexit
     obtain ⟨F, s', hF, hmem'⟩ :=
-      ih s1c (cur+1) [.const (cur+1)] hev' hs1c_10 hs1c_11 hs1c_24 hs1c_6 hbd' hdig' hexit'
+      ih s1c (cur+1) hs1c_10 hs1c_11 hs1c_24 hs1c_6 hbd' hdig' hexit'
     refine ⟨max 6 F + 1, s', ?_, by rw [hmem', hs1c_mem]⟩
-    unfold scWhile
-    rw [exec_while_cont0 (hlen := hlen1) (hs0 := hs0) (hc := hguard)
-          (hb := exec_mono_le env sl (Nat.le_max_left 6 F) (hbody 0)) (hvs := rfl)]
-    rw [show ([cur+1].map Opnd.const) = [Opnd.const (cur+1)] from rfl, cur_step]
-    exact exec_mono_le env sl (Nat.le_max_right 6 F) hF
+    rw [iterWhile_cont0 (hs0 := hs0) (hc := hguard)
+          (hb := exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_left 6 F)) (hbody 0))
+          (hvs := rfl),
+        cur_step]
+    exact iterWhile_mono
+      (fun stmt st r h => exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_right 6 F)) h)
+      _ _ _ _ _ _ _ F (max 6 F) (Nat.le_max_right 6 F) s1c _ _ hF
 
 /-! ### Phase 4 — the loop body. Straight-line composition helpers (existential
     fuel, `exec_mono_le` to align), then `body_space`/`body_comment`/`hexPathS_eff`
@@ -945,15 +943,19 @@ theorem body_comment (s : St) (p L q cap olen : Word) (idxNat d : Nat) (chi : By
   have pmem : ps.mem = s.mem := by rw [hps, prefSt_mem]
   have hev : ([Opnd.reg 41].map (evalOpnd ps)) = [BitVec.ofNat 64 idxNat + 1] := by
     simp only [List.map_cons, evalOpnd_reg, List.map_nil, p41]
-  -- run the inner comment loop (j/j1/a/b picked per site)
+  -- run the inner comment loop (j/j1/a/b picked per site): `exec_while` entry
+  -- (the ONE-TIME evaluation of `[.reg 41]`) + the `skip_loopS` iterWhile run
   have run_scc : ∀ (j j1 a b : Reg), SCok j j1 a b →
-      ∃ F s', exec env sl F (scWhile j j1 a b [.reg 41]) ps
+      ∃ F s', exec env sl F (Lib.skipCommentS 41 j j1 a b) ps
         = some (s', .cont 0 [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]) ∧ s'.mem = s.mem := by
     intro j j1 a b hok
     obtain ⟨F, s', hF, hmem⟩ := skip_loopS env sl p L olen j j1 a b hok hL d ps
-      (BitVec.ofNat 64 idxNat + 1) [.reg 41] hev p10 p11 p24 p6 (by rw [pmem] at *; exact hbd)
+      (BitVec.ofNat 64 idxNat + 1) p10 p11 p24 p6 (by rw [pmem] at *; exact hbd)
       (fun k hk => by rw [pmem]; exact hdig k hk) (by rw [pmem]; exact hexit)
-    exact ⟨F, s', hF, hmem.trans pmem⟩
+    refine ⟨F + 1, s', ?_, hmem.trans pmem⟩
+    rw [skipCommentS_def, exec_while (hlen := rfl), hev]
+    exact iterWhile_mono (fun stmt st r h => h) _ _ _ _ _ _ _ F (F + 1) (Nat.le_succ F)
+      ps _ _ hF
   have hpass : ∀ (s' : St), catch0 [] (some (s', Outcome.cont 0
         [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]))
       = some (s', .cont 0 [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]) :=
@@ -962,8 +964,7 @@ theorem body_comment (s : St) (p L q cap olen : Word) (idxNat d : Nat) (chi : By
   · obtain ⟨F, s', hsc, hmem⟩ := run_scc 42 43 44 45 (by unfold SCok; decide)
     have hd : ∃ f, exec env sl f hex0DispatchS ps
         = some (s', .cont 0 [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]) :=
-      exec_ifeE_then_pass env sl (ceqS_true 35 p7 p27 (by decide) h35) (hpass s')
-        ⟨_, by rw [skipCommentS_eq]; exact hsc⟩
+      exec_ifeE_then_pass env sl (ceqS_true 35 p7 p27 (by decide) h35) (hpass s') ⟨F, hsc⟩
     rw [hps] at hd
     obtain ⟨f, hf⟩ := body_lift env sl s p (BitVec.ofNat 64 idxNat) s' _ hr.h10 h5 hd
     exact ⟨f, s', hf, hmem⟩
@@ -971,21 +972,23 @@ theorem body_comment (s : St) (p L q cap olen : Word) (idxNat d : Nat) (chi : By
     have hd : ∃ f, exec env sl f hex0DispatchS ps
         = some (s', .cont 0 [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]) :=
       exec_ifeE_else_pass env sl (ceqS_false 35 p7 p27 (by decide) (by omega)) (hpass s')
-        (exec_ifeE_then_pass env sl (ceqS_true 59 p7 p18 (by decide) h59) (hpass s')
-          ⟨_, by rw [skipCommentS_eq]; exact hsc⟩)
+        (exec_ifeE_then_pass env sl (ceqS_true 59 p7 p18 (by decide) h59) (hpass s') ⟨F, hsc⟩)
     rw [hps] at hd
     obtain ⟨f, hf⟩ := body_lift env sl s p (BitVec.ofNat 64 idxNat) s' _ hr.h10 h5 hd
     exact ⟨f, s', hf, hmem⟩
 
 /-! ### Phase 5 — the main loop.
 
-    Strong induction on `n = |inp| − idx` with the args-tuple invariant
-    `inits.map (evalOpnd s) = [ofNat idx, ofNat olen]`; the frame theorem
-    (`RegsS.frame`) carries the 15 const/param registers across each body. -/
+    Strong induction on `n = |inp| − idx`; the args tuple IS the value pair
+    `[ofNat idx, ofNat olen]` carried by `iterWhile` (§8 rebind-in-env — no
+    `inits.map (evalOpnd s)` clause); the frame theorem (`RegsS.frame`)
+    carries the 15 const/param registers across each body. -/
 
-/-- The `hex0S` main loop as a standalone args-tuple `while`. -/
-def hex0WhileS (inits : List Opnd) : Stmt :=
-  .«while» [] inits [5, 6] .lt 5 11 Lib.hex0BodyS (.ret [.const 0, .reg 6])
+/-- The `hex0S` main loop `while` (the fixed surface term inside `Lib.hex0S`;
+    only the Phase-6 assembly mentions it — the loop lemma itself is stated
+    over `iterWhile`). -/
+def hex0WhileS : Stmt :=
+  .«while» [] [.const 0, .const 0] [5, 6] .lt 5 11 Lib.hex0BodyS (.ret [.const 0, .reg 6])
 
 /-- `RegsS` survives binding the two loop args (regs 5, 6). -/
 theorem RegsS.rset56 {s : St} {p L q cap : Word} (hr : RegsS s p L q cap) (a b : Word) :
@@ -1005,18 +1008,20 @@ theorem regionBytes_storeByte_self (s : St) (base : Word) (n : Nat) (b : Byte) (
   show (if base + BitVec.ofNat 64 k = base + BitVec.ofNat 64 n then b else s.mem _).toNat = _
   rw [if_neg (by bv_omega)]
 
-/-- **The hex0 main loop computes `boundedRun`.** -/
+/-- **The hex0 main loop computes `boundedRun`.** The loop-carried pair rides
+    the `iterWhile` value tuple directly — the invariant has no `inits` and no
+    register-file clauses. -/
 theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
     (hinp : ∀ x ∈ inp, x < 256) (hlenb : inp.length < 2^63) (hcap : capN < 2^63)
     (hdisj : Disjoint ⟨p, inp.length⟩ ⟨q, capN⟩) :
-    ∀ (n idx olen : Nat) (s : St) (produced : List Nat) (inits : List Opnd),
+    ∀ (n idx olen : Nat) (s : St) (produced : List Nat),
       n = inp.length - idx →
-      inits.map (evalOpnd s) = [BitVec.ofNat 64 idx, BitVec.ofNat 64 olen] →
       RegsS s p (BitVec.ofNat 64 inp.length) q (BitVec.ofNat 64 capN) →
       idx ≤ inp.length → olen ≤ capN → olen = produced.length →
       (∀ k : Word, k.toNat < inp.length → s.mem (p + k) = BitVec.ofNat 8 (inp[k.toNat]!)) →
       regionBytes s.mem q olen = produced →
-      ∃ F s' status outlen, exec env sl F (hex0WhileS inits) s
+      ∃ F s' status outlen, iterWhile (exec env sl F) [] [5, 6] .lt 5 11 Lib.hex0BodyS
+            (.ret [.const 0, .reg 6]) F s [BitVec.ofNat 64 idx, BitVec.ofNat 64 olen]
           = some (s', .ret [BitVec.ofNat 64 status, BitVec.ofNat 64 outlen])
         ∧ (status, regionBytes s'.mem q outlen, outlen)
             = boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
@@ -1024,12 +1029,11 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
   intro n
   induction n using Nat.strongRecOn with
   | ind n ih =>
-  intro idx olen s produced inits hn hev hregs hidx holen holenp hbridge hout
-  have hlen : inits.length = ([5, 6] : List Reg).length := by
-    have := congrArg List.length hev; simpa using this
-  obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [5, 6] (inits.map (evalOpnd s)) := ⟨_, rfl⟩
+  intro idx olen s produced hn hregs hidx holen holenp hbridge hout
+  obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [5, 6] [BitVec.ofNat 64 idx, BitVec.ofNat 64 olen] :=
+    ⟨_, rfl⟩
   have hbo : s0 = (s.rset 5 (BitVec.ofNat 64 idx)).rset 6 (BitVec.ofNat 64 olen) := by
-    rw [hs0, hev]; rfl
+    rw [hs0]; rfl
   have hs0_5 : s0.rget 5 = BitVec.ofNat 64 idx := by rw [hbo]; simp
   have hs0_6 : s0.rget 6 = BitVec.ofNat 64 olen := by rw [hbo]; simp
   have hs0_10 : s0.rget 10 = p := by rw [hbo]; simp [hregs.h10]
@@ -1070,25 +1074,22 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           (by rw [hcv]; exact hsp)
       have hr1 : RegsS st1 p (BitVec.ofNat 64 inp.length) q (BitVec.ofNat 64 capN) :=
         RegsS.frame env sl hr_s0 heb
-      have hev' : ([Opnd.const (BitVec.ofNat 64 idx + 1), Opnd.const (BitVec.ofNat 64 olen)].map
-            (evalOpnd st1)) = [BitVec.ofNat 64 (idx+1), BitVec.ofNat 64 olen] := by
-        simp only [List.map_cons, evalOpnd_const, List.map_nil, ofNat_succ]
       have ebridge : ∀ k : Word, k.toNat < inp.length → st1.mem (p+k) = BitVec.ofNat 8 (inp[k.toNat]!) := by
         intro k hk; rw [hbmem, hs0mem]; exact hbridge k hk
       have eout : regionBytes st1.mem q olen = produced := by rw [hbmem, hs0mem]; exact hout
       obtain ⟨F, s', status, outlen, her, hbr'⟩ :=
-        ih (inp.length - (idx+1)) (by omega) (idx+1) olen st1 produced
-          [.const (BitVec.ofNat 64 idx + 1), .const (BitVec.ofNat 64 olen)] rfl hev' hr1
+        ih (inp.length - (idx+1)) (by omega) (idx+1) olen st1 produced rfl hr1
           (by omega) holen holenp ebridge eout
       have hstep : Hex0.decodeS .High (inp.drop idx) = Hex0.decodeS .High (inp.drop (idx+1)) := by
         rw [hdropc]; exact decodeS_high_space _ _ hisC hisS
       refine ⟨max fb F + 1, s', status, outlen, ?_, ?_⟩
-      · show exec env sl (max fb F + 1) (hex0WhileS inits) s = _
-        rw [hex0WhileS, exec_while_cont0 (hlen := hlen) (hs0 := hs0) (hc := hcond)
-              (hb := exec_mono_le env sl (Nat.le_max_left fb F) heb) (hvs := rfl)]
-        rw [show ([BitVec.ofNat 64 idx + 1, BitVec.ofNat 64 olen].map Opnd.const)
-              = [Opnd.const (BitVec.ofNat 64 idx + 1), Opnd.const (BitVec.ofNat 64 olen)] from rfl]
-        exact exec_mono_le env sl (Nat.le_max_right fb F) her
+      · rw [iterWhile_cont0 (hs0 := hs0) (hc := hcond)
+              (hb := exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_left fb F)) heb)
+              (hvs := rfl),
+            ofNat_succ]
+        exact iterWhile_mono
+          (fun stmt st r h => exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_right fb F)) h)
+          _ _ _ _ _ _ _ F (max fb F) (Nat.le_max_right fb F) st1 _ _ her
       · rw [hstep]; exact hbr'
     · -- COMMENT: skip to newline/EOF, continue
       have hisCt : Hex0.isComment inp[idx]! = true := by
@@ -1152,34 +1153,27 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           (by intro k hk; rw [hs0mem]; exact hdig k hk) (by rw [hs0mem]; exact hz)
       have hr1 : RegsS st1 p (BitVec.ofNat 64 inp.length) q (BitVec.ofNat 64 capN) :=
         RegsS.frame env sl hr_s0 heb
-      have hev' : ([Opnd.const ((BitVec.ofNat 64 idx + 1) + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1)))),
-            Opnd.const (BitVec.ofNat 64 olen)].map (evalOpnd st1))
-          = [BitVec.ofNat 64 (idx + 1 + commentSkip (inp.drop (idx+1))), BitVec.ofNat 64 olen] := by
-        simp only [List.map_cons, evalOpnd_const, List.map_nil]
-        rw [show (BitVec.ofNat 64 idx + 1) + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1)))
-          = BitVec.ofNat 64 (idx + 1 + commentSkip (inp.drop (idx+1))) from by bv_omega]
       have ebridge : ∀ k : Word, k.toNat < inp.length → st1.mem (p+k) = BitVec.ofNat 8 (inp[k.toNat]!) := by
         intro k hk; rw [hbmem, hs0mem]; exact hbridge k hk
       have eout : regionBytes st1.mem q olen = produced := by rw [hbmem, hs0mem]; exact hout
       obtain ⟨F, s', status, outlen, her, hbr'⟩ :=
         ih (inp.length - (idx + 1 + commentSkip (inp.drop (idx+1)))) (by omega)
-          (idx + 1 + commentSkip (inp.drop (idx+1))) olen st1 produced
-          [.const ((BitVec.ofNat 64 idx + 1) + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1)))),
-            .const (BitVec.ofNat 64 olen)] rfl hev' hr1 (by omega) holen holenp ebridge eout
+          (idx + 1 + commentSkip (inp.drop (idx+1))) olen st1 produced rfl hr1
+          (by omega) holen holenp ebridge eout
       have hstep : Hex0.decodeS .High (inp.drop idx)
           = Hex0.decodeS .High (inp.drop (idx + 1 + commentSkip (inp.drop (idx+1)))) := by
         rw [hdropc, decodeS_high_comment _ _ hisCt, ← decodeS_comment_reconcile,
             show (inp.drop (idx+1)).drop (commentSkip (inp.drop (idx+1)))
               = inp.drop (idx + 1 + commentSkip (inp.drop (idx+1))) from by rw [List.drop_drop]]
       refine ⟨max fb F + 1, s', status, outlen, ?_, ?_⟩
-      · show exec env sl (max fb F + 1) (hex0WhileS inits) s = _
-        rw [hex0WhileS, exec_while_cont0 (hlen := hlen) (hs0 := hs0) (hc := hcond)
-              (hb := exec_mono_le env sl (Nat.le_max_left fb F) heb) (hvs := rfl)]
-        rw [show ([(BitVec.ofNat 64 idx + 1) + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1))),
-              BitVec.ofNat 64 olen].map Opnd.const)
-            = [Opnd.const ((BitVec.ofNat 64 idx + 1) + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1)))),
-              Opnd.const (BitVec.ofNat 64 olen)] from rfl]
-        exact exec_mono_le env sl (Nat.le_max_right fb F) her
+      · rw [iterWhile_cont0 (hs0 := hs0) (hc := hcond)
+              (hb := exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_left fb F)) heb)
+              (hvs := rfl),
+            show (BitVec.ofNat 64 idx + 1) + BitVec.ofNat 64 (commentSkip (inp.drop (idx+1)))
+              = BitVec.ofNat 64 (idx + 1 + commentSkip (inp.drop (idx+1))) from by bv_omega]
+        exact iterWhile_mono
+          (fun stmt st r h => exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_right fb F)) h)
+          _ _ _ _ _ _ _ F (max fb F) (Nat.le_max_right fb F) st1 _ _ her
       · rw [hstep]; exact hbr'
     · -- HEX: hex-digit dispatch
       have hisCf : Hex0.isComment inp[idx]! = false := by
@@ -1224,8 +1218,8 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
         have hsmem : st1.mem = s.mem := by rw [hsm, prefSt_mem, hs0mem]
         refine ⟨fB + 1, st1, 5, olen, ?_, ?_⟩
-        · show exec env sl (fB + 1) (hex0WhileS inits) s = _
-          rw [hex0WhileS, exec_while_ret (hlen := hlen) (hs0 := hs0) (hc := hcond) (hb := heb)]
+        · rw [iterWhile_ret (hs0 := hs0) (hc := hcond)
+                (hb := exec_mono_le env sl (Nat.le_succ fB) heb)]
         · rw [hbr, hsmem, hout, holenp]
       · -- ARM B: input exhausted → OddEnd (4)
         have hnib : Hex0.nibble inp[idx]! = some (pnibR (s.mem (p + BitVec.ofNat 64 idx))).toNat := by
@@ -1243,8 +1237,8 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
         have hsmem : st1.mem = s.mem := by rw [hsm, prefSt_mem, hs0mem]
         refine ⟨fB + 1, st1, 4, olen, ?_, ?_⟩
-        · show exec env sl (fB + 1) (hex0WhileS inits) s = _
-          rw [hex0WhileS, exec_while_ret (hlen := hlen) (hs0 := hs0) (hc := hcond) (hb := heb)]
+        · rw [iterWhile_ret (hs0 := hs0) (hc := hcond)
+                (hb := exec_mono_le env sl (Nat.le_succ fB) heb)]
         · rw [hbr, hsmem, hout, holenp]
       · -- ARM C: low-stop char → Split (3)
         have hnib : Hex0.nibble inp[idx]! = some (pnibR (s.mem (p + BitVec.ofNat 64 idx))).toNat := by
@@ -1272,8 +1266,8 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
         have hsmem : st1.mem = s.mem := by rw [hsm, prefSt_mem, hs0mem]
         refine ⟨fB + 1, st1, 3, olen, ?_, ?_⟩
-        · show exec env sl (fB + 1) (hex0WhileS inits) s = _
-          rw [hex0WhileS, exec_while_ret (hlen := hlen) (hs0 := hs0) (hc := hcond) (hb := heb)]
+        · rw [iterWhile_ret (hs0 := hs0) (hc := hcond)
+                (hb := exec_mono_le env sl (Nat.le_succ fB) heb)]
         · rw [hbr, hsmem, hout, holenp]
       · -- ARM D: bad low nibble → Unknown (5)
         have hnib : Hex0.nibble inp[idx]! = some (pnibR (s.mem (p + BitVec.ofNat 64 idx))).toNat := by
@@ -1305,8 +1299,8 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           rw [hdec]; simp [boundedRun, hpc, Hex0.statusCode]
         have hsmem : st1.mem = s.mem := by rw [hsm, prefSt_mem, hs0mem]
         refine ⟨fB + 1, st1, 5, olen, ?_, ?_⟩
-        · show exec env sl (fB + 1) (hex0WhileS inits) s = _
-          rw [hex0WhileS, exec_while_ret (hlen := hlen) (hs0 := hs0) (hc := hcond) (hb := heb)]
+        · rw [iterWhile_ret (hs0 := hs0) (hc := hcond)
+                (hb := exec_mono_le env sl (Nat.le_succ fB) heb)]
         · rw [hbr, hsmem, hout, holenp]
       · -- ARM E: output full → OutputShort (2)
         have hnib : Hex0.nibble inp[idx]! = some (pnibR (s.mem (p + BitVec.ofNat 64 idx))).toNat := by
@@ -1346,8 +1340,8 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           simp [show capN - produced.length = 0 from by omega]
         have hsmem : st1.mem = s.mem := by rw [hsm, prefSt_mem, hs0mem]
         refine ⟨fB + 1, st1, 2, olen, ?_, ?_⟩
-        · show exec env sl (fB + 1) (hex0WhileS inits) s = _
-          rw [hex0WhileS, exec_while_ret (hlen := hlen) (hs0 := hs0) (hc := hcond) (hb := heb)]
+        · rw [iterWhile_ret (hs0 := hs0) (hc := hcond)
+                (hb := exec_mono_le env sl (Nat.le_succ fB) heb)]
         · rw [hbr, hsmem, hout, holenp, hcapeq]
       · -- ARM F: write the byte, continue
         have hnib : Hex0.nibble inp[idx]! = some (pnibR (s.mem (p + BitVec.ofNat 64 idx))).toNat := by
@@ -1393,17 +1387,11 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           congr 1
           · rw [regionBytes_storeByte_self _ _ _ _ (by omega), hpm, hout]
           · rw [storeByte_mem_self, hbyteval]
-        have hev' : ([Opnd.const (BitVec.ofNat 64 (idx+1) + 1), Opnd.const (BitVec.ofNat 64 olen + 1)].map
-              (evalOpnd st1)) = [BitVec.ofNat 64 (idx+2), BitVec.ofNat 64 (olen+1)] := by
-          simp only [List.map_cons, evalOpnd_const, List.map_nil]
-          rw [show BitVec.ofNat 64 (idx+1) + 1 = BitVec.ofNat 64 (idx+2) from by bv_omega,
-              show BitVec.ofNat 64 olen + 1 = BitVec.ofNat 64 (olen+1) from by bv_omega]
         obtain ⟨F, s', status, outlen, her, hbr'⟩ :=
           ih (inp.length - (idx+2)) (by omega) (idx+2) (olen+1) st1
             (produced ++ [(pnibR (s.mem (p + BitVec.ofNat 64 idx))).toNat * 16
                 + (pnibR (s.mem (p + BitVec.ofNat 64 (idx+1)))).toNat])
-            [.const (BitVec.ofNat 64 (idx+1) + 1), .const (BitVec.ofNat 64 olen + 1)] rfl hev' hr1
-            (by omega) (by omega) (by simp [holenp]) ebridge eout
+            rfl hr1 (by omega) (by omega) (by simp [holenp]) ebridge eout
         have hbreq : boundedRun produced (Hex0.decodeS .High (inp.drop idx)).1
               (Hex0.decodeS .High (inp.drop idx)).2 capN
             = boundedRun (produced ++ [(pnibR (s.mem (p + BitVec.ofNat 64 idx))).toNat * 16
@@ -1412,12 +1400,14 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           rw [hdropc, decodeS_high_goodhi _ _ _ hisCf hisSf hnib, hdrop1, decodeS_low_goodlo _ _ _ _ hlsF hnib2]
           exact boundedRun_cons _ _ _ _ _ (by omega)
         refine ⟨max fB F + 1, s', status, outlen, ?_, ?_⟩
-        · show exec env sl (max fB F + 1) (hex0WhileS inits) s = _
-          rw [hex0WhileS, exec_while_cont0 (hlen := hlen) (hs0 := hs0) (hc := hcond)
-                (hb := exec_mono_le env sl (Nat.le_max_left fB F) heb) (hvs := rfl)]
-          rw [show ([BitVec.ofNat 64 (idx+1) + 1, BitVec.ofNat 64 olen + 1].map Opnd.const)
-                = [Opnd.const (BitVec.ofNat 64 (idx+1) + 1), Opnd.const (BitVec.ofNat 64 olen + 1)] from rfl]
-          exact exec_mono_le env sl (Nat.le_max_right fB F) her
+        · rw [iterWhile_cont0 (hs0 := hs0) (hc := hcond)
+                (hb := exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_left fB F)) heb)
+                (hvs := rfl),
+              show BitVec.ofNat 64 (idx+1) + 1 = BitVec.ofNat 64 (idx+2) from by bv_omega,
+              show BitVec.ofNat 64 olen + 1 = BitVec.ofNat 64 (olen+1) from by bv_omega]
+          exact iterWhile_mono
+            (fun stmt st r h => exec_mono_le env sl (Nat.le_succ_of_le (Nat.le_max_right fB F)) h)
+            _ _ _ _ _ _ _ F (max fB F) (Nat.le_max_right fB F) st1 _ _ her
         · rw [hbreq]; exact hbr'
   · -- base case: guard false, idx = |inp|
     have hidxlen : idx = inp.length := by omega
@@ -1432,9 +1422,8 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
         (Hex0.decodeS .High (inp.drop idx)).2 capN = (0, produced, produced.length) := by
       rw [show inp.drop idx = [] from by rw [List.drop_eq_nil_iff]; omega, decodeS_high_nil]
       simp [boundedRun, hpc, Hex0.statusCode]
-    refine ⟨0+1+1, s0, 0, olen, ?_, ?_⟩
-    · show exec env sl (0+1+1) (hex0WhileS inits) s = _
-      rw [hex0WhileS, exec_while_F_ret (hlen := hlen) (hs0 := hs0) (hc := hcond) (hb := hdflt),
+    refine ⟨0+1, s0, 0, olen, ?_, ?_⟩
+    · rw [iterWhile_F_ret (hs0 := hs0) (hc := hcond) (hb := hdflt),
           show (0 : Word) = BitVec.ofNat 64 0 from by decide]
     · rw [hbr, hs0mem, hout, holenp]
 
@@ -1493,7 +1482,7 @@ theorem hex0S_correct (inp : List Nat) (cap : Nat)
   -- run the main loop from idx = olen = 0
   obtain ⟨F, s', status, outlen, hF, hbr⟩ :=
     main_loop Lib.libEnvS 0 inp Lib.inBase Lib.outBase cap hinp hlen hcap hdisj
-      (inp.length - 0) 0 0 sb [] [.const 0, .const 0] rfl (by rfl) hr_sb
+      (inp.length - 0) 0 0 sb [] rfl hr_sb
       (by omega) (by omega) rfl hbridge (by simp [regionBytes])
   rw [List.drop_zero, boundedRun_nil_coreSpec] at hbr
   refine ⟨F + 12, s', ?_, ?_⟩
@@ -1504,7 +1493,7 @@ theorem hex0S_correct (inp : List Nat) (cap : Nat)
         (.seq (Lib.lit 17 55) (.seq (Lib.lit 18 59) (.seq (Lib.lit 19 255) (.seq (Lib.lit 20 48)
           (.seq (Lib.lit 21 57) (.seq (Lib.lit 22 65) (.seq (Lib.lit 23 70) (.seq (Lib.lit 24 10)
           (.seq (Lib.lit 25 32) (.seq (Lib.lit 26 95) (.seq (Lib.lit 27 35)
-            (hex0WhileS [.const 0, .const 0])))))))))))) st0 = _
+            hex0WhileS))))))))))) st0 = _
       rw [show F+12 = (F+11)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+10) 17 55 _ (by decide)),
           show F+11 = (F+10)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+9) 18 59 _ (by decide)),
           show F+10 = (F+9)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+8) 19 255 _ (by decide)),
@@ -1516,7 +1505,10 @@ theorem hex0S_correct (inp : List Nat) (cap : Nat)
           show F+4 = (F+3)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+2) 25 32 _ (by decide)),
           show F+3 = (F+2)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+1) 26 95 _ (by decide)),
           show F+2 = (F+1)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 F 27 35 _ (by decide))]
-      rw [← hsb]; exact exec_mono_le Lib.libEnvS 0 (Nat.le_succ F) hF
+      -- loop entry: one-time evaluation of the [.const 0, .const 0] inits
+      rw [← hsb, hex0WhileS, exec_while (hlen := rfl)]
+      exact iterWhile_mono (fun stmt st r h => h) _ _ _ _ _ _ _ F (F + 1) (Nat.le_succ F)
+        sb _ _ hF
     show run Lib.libEnvS 0 (F+12) "hex0" _ _ _ = _
     unfold run
     rw [show List.lookup "hex0" Lib.libEnvS = some Lib.hex0S from rfl]
