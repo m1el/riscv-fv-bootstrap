@@ -6,7 +6,29 @@ scopes, `defaultBody`, never/thru typing) and the baseline this campaign is
 measured against: `lean/LowIR/CtrlHex0Proof.lean` (1703 lines, sorry-free,
 the Ctrl-IL hex0 proof).
 
-## STATUS (updated 2026-07-02) — Phases 0, 1 DONE; Phase 2 underway
+## STATUS (updated 2026-07-03) — ✅ CAMPAIGN COMPLETE, all 6 phases DONE
+
+`LowIR.SSA.hex0S_correct` is proved sorry-free; `#print axioms` =
+`[propext, Classical.choice, Quot.sound]` — **no `native_decide`, no `sorry`**
+in the chain (same axiom base as the Ctrl baseline). The whole SSA `hex0S`,
+`run` on `memIn (asBytes inp)`, returns `Hex0.coreSpec`'s status and output
+length as its two `.ret` values, with the output region holding `coreSpec`'s
+bytes. Builds under `lake build LowIRSSA`. Both deliverables landed: (a) the
+theorem, (b) the per-section comparison table (§6).
+
+- **Phase 2 DONE** — commits `f567a00`, `a1e3095`, Phase-2-tail. `pnibS_eff`,
+  `exec_lit`, the `ceqS`/`weqS`/`geu_wwS` char-class dispatch lemmas, the
+  `RegsS` register-context struct + `RegsS.of_agree`/`.frame` (the frame
+  theorem in action — P2), `prefSt` read-char prefix + `hexPrefix_exec`.
+- **Phase 3 DONE** — `skipCommentS_eq` (defeq to the inner `scWhile`),
+  `skip_loopS` (induction on the `commentSkip` distance, exit via `cont 1`).
+- **Phase 4 DONE** — `hexPathS_eff` (6-arm disjunction), `hex0DispatchS` +
+  `body_lift`, `body_space`/`body_comment`/`body_hex_lift`.
+- **Phase 5 DONE** — `main_loop` (strong induction on `|inp|−idx`, args-tuple
+  invariant, `RegsS.rset56`/`.frame` carry the const/param regs; dispatch on
+  char class; connected to `boundedRun`/`decodeS`).
+- **Phase 6 DONE** — `hex0S_correct` (frameEnter + 11-lit prelude peel +
+  `boundedRun_nil_coreSpec`).
 
 All landed code is sorry-free, builds under `lake build LowIRSSA`, and its
 axioms track the Ctrl baseline `[propext, Classical.choice, Quot.sound]`
@@ -33,23 +55,18 @@ axioms track the Ctrl baseline `[propext, Classical.choice, Quot.sound]`
   comes from `exec_frame`), `signExtend_ofNat_small` + `exec_lit`. Commit
   `f567a00`.
 
-### Frontier (next, in order)
-- Phase 2 tail: the read-char triple (`add`/`lbu`/`addi`), the `.ife .eq`
-  char-class dispatch lemmas (restated over `Prog.St`'s `rget`).
-- Phase 3 `skipCommentS_eff`: the inner scan `while`, exit via `cont 1` →
-  outer `cont 0` at position `i1 + commentSkip (inp.drop i1)`. Inner induction
-  on the skip distance; reuse `commentSkip`/`commentSkip_le/get/run_ne`.
-- Phase 4 `body_step` (the 3 char-classes; the 12-`ife` hexPath cascade uses
-  `pnibS_eff` twice + `hexbyte_val`).
-- Phase 5 `main_loop` (strong induction on `|inp| − idx`; the invariant is a
-  function of `(idx, olen, mem)` + the frame side-conditions discharged once by
-  `exec_frame` — NO `Regs`/`Pres`, NO status register).
-- Phase 6 assembly (`run` unfold, 11-`lit` prelude peel via `exec_lit`,
-  `boundedRun_nil_coreSpec`, `#print axioms hex0S_correct`).
+### Frontier — none; campaign complete
 
-The Phase-1 pattern (existential fuel, `obtain ⟨x,h⟩ : ∃ y, y = E := ⟨_,rfl⟩`
-to name states without Mathlib's `set`, `generalize … at h ⊢` for the
-guard-agnostic while step) transfers directly to Phases 3–5.
+All phases (0–6) landed and sorry-free. The proof lives in
+`lean/LowIR/SSAProof/{ExecFacts,StrlenProof,Hex0Proof}.lean`; the headline
+theorem is `LowIR.SSA.hex0S_correct`. See §6 for the size comparison.
+
+The Phase-1 pattern that carried the whole campaign (existential fuel,
+`obtain ⟨x,h⟩ : ∃ y, y = E := ⟨_,rfl⟩` to name states without Mathlib's `set`,
+fuel written as `f+k` variable form to avoid corrupting register literals,
+existential-fuel composition via `exec_seqE`/`exec_mono_le`, and defeq bridges
+between the surface `Stmt` defs and their nested-`seq` unfoldings) is the
+reusable recipe for the next SSA proof (hex1, or the ProgSim `compile_sim`).
 
 ## 0. Mission and the metric
 
@@ -243,28 +260,46 @@ with `lake env lean` while working). Keep `SSADump` a root too.
 
 ## 6. The comparison table (fill as phases land — this IS the second deliverable)
 
+Measured on the landed files (SSA `Hex0Proof.lean` = **1527**, reusable
+`ExecFacts.lean` = **715**, `StrlenProof.lean` = **214**; Ctrl
+`CtrlHex0Proof.lean` = **1703**, which *includes* the ~600-line spec-side layer
+the SSA proof imports verbatim rather than recounting).
+
 | item | Ctrl baseline (lines) | SSA (lines) | notes |
 |---|---|---|---|
-| cond/BitVec bridges | ~90 | reused verbatim + ~16 (`geuR_*`) | Ctrl's `geuL/slt/tn/pnibR*` import as-is |
+| cond/BitVec bridges | ~90 | reused verbatim + ~50 (`geuR_*`, `ceqS`/`weqS`/`geu_wwS`) | Ctrl's `geuL/slt/tn/pnibR*` import as-is; SSA restates the reg-vs-reg / byte-vs-const guards over `Prog.St` |
 | pnib | ~45 + `pnibR` model | `pnibS_eff` ~85 (5 leaves) | ife-outs+`catch0` vs assign-and-fall-through; `pnibR` model reused |
-| comment skip | ~170 (guard reg + poison) | *(pending)* | direct `cont 1`, no flag reg |
-| register context | ~45 (`Regs`/`Pres`/`transfer`) | **~0** + `exec_frame` (once, in toolbox) | the headline claim — CONFIRMED so far |
-| body dispatch + hexPath | ~420 | *(pending)* | status reg gone |
-| main loop | ~380 | *(pending)* — Phase-1 `strlen_loop` (args-tuple) is the template | invariant has no `Regs`/`rget-5/6`/status clauses |
-| assembly | ~100 | *(pending)* — Phase-1 `strlenS_correct` run-peel is the template | valued `run` results |
-| one-time toolbox | (amortized in Ctrl file) | ~640 reusable (`ExecFacts.lean`) | `exec_mono`, `exec_frame`, all unfolders |
+| comment skip | ~170 (guard reg + poison) | **~210** (Phase 3) | direct `cont 1`, no flag reg — but the block-param `while` rebuild + `SCok`/`scWhile` defeq bridge costs back what the flag reg saved |
+| register context | ~45 (`Regs`/`Pres`/`transfer`) | **~55** (`RegsS` + `of_agree` + `frame` + `rset56` + `pref`), **once** | headline CONFIRMED: `RegsS.frame` (one `exec_frame_rget` call) replaces all *per-body* `Pres`/`transfer` plumbing — the body/loop proofs carry ZERO register-preservation obligations |
+| body dispatch + hexPath | ~420 | **~500** (Phase 4) | status reg gone; cost shifts to `exec_seqE`/`exec_ifeE_*_pass` straight-line composition over defeq-checked `Stmt` structure |
+| main loop | ~380 | **~460** (Phase 5, `main_loop` 431 + helpers) | invariant has NO `Regs`/`rget-5/6`/status clauses — just `[ofNat idx, ofNat olen]` args-tuple + `RegsS` frame + memory; the extra lines are the 6-way hexPath arm plumbing, not invariant bookkeeping |
+| assembly | ~100 | **~86** (Phase 6) | valued `run` results — returns `coreSpec`'s `(status, len)` directly, no status/len register readback |
+| one-time toolbox | (amortized in Ctrl file) | **715** reusable (`ExecFacts.lean`) | `exec_mono`, `exec_frame`, all one-layer unfolders, block-param `while` lemmas — amortized across strlen/hex0/hex1/ProgSim |
 | **Phase 1 strlen (whole)** | flat `StrlenProof` ~200 | **214** | args-tuple invariant, no register-file clauses |
+| **hex0 per-program total** | **~1703** (incl. ~600 reused spec layer) | **1527** (`Hex0Proof.lean`) + 715 reusable toolbox | |
 
-Early read: the frame theorem does replace the `Regs`/`Pres` machinery with a
-single once-proved metatheorem (P2 confirmed). The `catch0` break-scope
-threading in `pnibS_eff` is new tax the Ctrl fall-through model avoids, but the
-`pnibR` decode model and all cond/decodeS/boundedRun lemmas import verbatim.
-Final totals pending Phases 3–6.
+Final read (all phases in): the experiment's central claim (P2) is **confirmed
+and visible** — the register-context row is the win. Ctrl spends `Regs`/`Pres`/
+`transfer` and threads a preservation obligation through *every* body and loop
+step; the SSA proof proves the frame theorem **once** (`exec_frame_rget`, in the
+toolbox) and each body/loop lemma carries zero register-preservation bookkeeping.
+The invariant of `main_loop` is a clean `(idx, olen, mem)` function with an
+args-tuple — no `Regs`, no `rget-5/6`, no status register — exactly as predicted.
 
-Honest expectation: total in the same 1.4–1.9k band, with the *per-program*
-part smaller and ~500 lines being reusable SSA infrastructure; the win, if
-real, shows in the invariant hypothesis lists and in Phases 3/4 statements,
-not necessarily in raw total. Record whatever comes out.
+But the raw per-section line counts are **flat-to-slightly-higher**, not lower:
+the SSA IR's structured control flow moves the cost rather than removing it.
+Three new taxes appear that the Ctrl fall-through model avoids: (1) `catch0`
+break-scope threading (`pnibS_eff`, `body_lift`, the `exec_ifeE_*_pass` chains);
+(2) the block-parameter `while` rebuild — the back-edge re-executes a *rebuilt*
+`while` with `inits := vals.map .const`, so every loop step carries a
+`vs.map .const` normalization and a defeq bridge (`skipCommentS_eq`, `hex0WhileS`);
+(3) valued outcomes (`.ret [status, olen]`) need explicit fuel-existential
+composition (`exec_seqE`/`exec_mono_le`) where Ctrl's flat `exec` chained
+straight. Net: hex0-specific code is **1527** vs Ctrl's ~1703 (the latter
+inflated by the reused spec layer), plus **715** of genuinely reusable SSA
+infrastructure — landing in the predicted 1.4–1.9k band. The win is
+**structural** (no per-step register plumbing, cleaner invariants), not a raw
+line-count reduction.
 
 ## 7. Cold-start order
 
