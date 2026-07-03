@@ -259,4 +259,213 @@ theorem hexPrefix_exec (f : Nat) (s0 : St) (p idx : Word) (rest : Stmt)
       show f+3=(f+2)+1 from rfl, exec_seq_normal (h := hl),
       show f+2=(f+1)+1 from rfl, exec_seq_normal (h := haa)]
 
+/-! ### Phase 3 — `skipCommentS`, the inner comment-scan `while`.
+
+    An always-true inner loop; both exits `cont 1` (to the OUTER hex0 loop),
+    which the inner `while` shifts to `cont 0` and delivers. No guard register,
+    no `gOf` model, no poison flag — contrast Ctrl's `cgGuard`/`skip_body`/
+    `skip_loop`/`skipComment_eff` chain (~170 lines). -/
+
+/-- The inner scan body (matches `Lib.skipCommentS`'s body). -/
+def scBody (j j1 a b : Reg) : Stmt :=
+  .ife .lt j 11 []
+    (.seq (.add a 10 j) <| .seq (.lbu b a 0)
+      (.ife .eq b 24 []
+        (.cont 1 [.reg j, .reg 6])
+        (.seq (.addi j1 j 1) (.cont 0 [.reg j1]))))
+    (.cont 1 [.reg j, .reg 6])
+
+/-- The inner scan `while` with explicit `inits` (the back-edge rebinds them). -/
+def scWhile (j j1 a b : Reg) (inits : List Opnd) : Stmt :=
+  .«while» [] inits [j] .geu 0 0 (scBody j j1 a b) (.cont 1 [.reg j, .reg 6])
+
+theorem skipCommentS_eq (i1 j j1 a b : Reg) :
+    Lib.skipCommentS i1 j j1 a b = scWhile j j1 a b [.reg i1] := rfl
+
+/-- Register-distinctness bundle for the four scratch names (discharged by
+    `decide` at each concrete call site). -/
+def SCok (j j1 a b : Reg) : Prop :=
+  j ≠ 0 ∧ j1 ≠ 0 ∧ a ≠ 0 ∧ b ≠ 0 ∧
+  (6:Reg) ≠ j ∧ (10:Reg) ≠ j ∧ (11:Reg) ≠ j ∧ (24:Reg) ≠ j ∧
+  (24:Reg) ≠ a ∧ (24:Reg) ≠ b ∧ j ≠ a ∧ j ≠ b ∧ (6:Reg) ≠ a ∧ (6:Reg) ≠ b ∧
+  (10:Reg) ≠ j1 ∧ (10:Reg) ≠ a ∧ (10:Reg) ≠ b ∧
+  (11:Reg) ≠ j1 ∧ (11:Reg) ≠ a ∧ (11:Reg) ≠ b ∧
+  (24:Reg) ≠ j1 ∧ (6:Reg) ≠ j1
+
+/-- The comment-scan loop: from `cur`, advance `d` non-`\n` chars to the first
+    `\n`/EOF, delivered as `cont 0 [cur + d, olen]` to the outer loop. Induction
+    on the skip distance `d` (the `commentSkip` length, connected in `main_loop`).
+    `s.mem` unchanged.
+
+    Fuels are written as `f + k` (never bare numerals) so the `f+k = (f+(k-1))+1`
+    rewrites cannot accidentally hit the register literals (6, 10, 11, 24, …). -/
+theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
+    (hL : L.toNat < 2^63) :
+    ∀ (d : Nat) (s : St) (cur : Word) (inits : List Opnd),
+      inits.map (evalOpnd s) = [cur] →
+      s.rget 10 = p → s.rget 11 = L → s.rget 24 = 10 → s.rget 6 = olen →
+      cur.toNat + d < 2^63 →
+      (∀ k, k < d → (cur + BitVec.ofNat 64 k).toNat < L.toNat
+              ∧ (s.mem (p + (cur + BitVec.ofNat 64 k))).toNat ≠ 10) →
+      (L.toNat ≤ (cur + BitVec.ofNat 64 d).toNat
+              ∨ (s.mem (p + (cur + BitVec.ofNat 64 d))).toNat = 10) →
+      ∃ F s', exec env sl F (scWhile j j1 a b inits) s
+          = some (s', .cont 0 [cur + BitVec.ofNat 64 d, olen])
+        ∧ s'.mem = s.mem := by
+  obtain ⟨hj0,hj10,ha0,hb0,h6j,h10j,h11j,h24j,h24a,h24b,hja,hjb,h6a,h6b,
+          h10j1,h10a,h10b,h11j1,h11a,h11b,h24j1,h6j1⟩ := hok
+  intro d
+  induction d with
+  | zero =>
+    intro s cur inits hev h10 h11 h24 h6 hbd _ hexit
+    rw [cur_zero] at hexit
+    have hcb : cur.toNat < 2^63 := by omega
+    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [j] (inits.map (evalOpnd s)) := ⟨_, rfl⟩
+    have hbo : s0 = s.rset j cur := by rw [hs0, hev]; rfl
+    have hg_j : s0.rget j = cur := by rw [hbo]; exact rget_rset_eq _ _ _ hj0
+    have hg_10 : s0.rget 10 = p := by rw [hbo, rget_rset_ne _ _ _ _ h10j]; exact h10
+    have hg_11 : s0.rget 11 = L := by rw [hbo, rget_rset_ne _ _ _ _ h11j]; exact h11
+    have hg_24 : s0.rget 24 = 10 := by rw [hbo, rget_rset_ne _ _ _ _ h24j]; exact h24
+    have hg_6 : s0.rget 6 = olen := by rw [hbo, rget_rset_ne _ _ _ _ h6j]; exact h6
+    have hg_mem : s0.mem = s.mem := by rw [hbo]; simp
+    have hguard : evalCond .geu (s0.rget 0) (s0.rget 0) = true := by rw [rget_zero]; decide
+    have hlen1 : inits.length = [j].length := by have := congrArg List.length hev; simpa using this
+    -- prefix (add/lbu), valid regardless of the exit branch
+    have hadd : ∀ f, exec env sl (f+4) (.add a 10 j) s0 = some (s0.rset a (p+cur), .normal) := by
+      intro f; rw [show f+4 = (f+3)+1 from rfl, exec_add, hg_10, hg_j]
+    have e_b : ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64)).rget b
+        = (s.mem (p+cur)).setWidth 64 := rget_rset_eq _ _ _ hb0
+    have e_24 : ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64)).rget 24 = 10 := by
+      rw [rget_rset_ne _ _ _ _ h24b, rget_rset_ne _ _ _ _ h24a]; exact hg_24
+    have e_j : ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64)).rget j = cur := by
+      rw [rget_rset_ne _ b j _ hjb, rget_rset_ne _ a j _ hja]; exact hg_j
+    have e_6 : ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64)).rget 6 = olen := by
+      rw [rget_rset_ne _ _ _ _ h6b, rget_rset_ne _ _ _ _ h6a]; exact hg_6
+    have hlbu : ∀ f, exec env sl (f+3) (.lbu b a 0) (s0.rset a (p+cur))
+        = some ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64), .normal) := by
+      intro f; rw [show f+3 = (f+2)+1 from rfl, exec_lbu]
+      simp only [rget_rset_eq _ a _ ha0, zero_signExtend, wadd_zero, loadByte_eq, rset_mem, hg_mem]
+    by_cases hlt : cur.toNat < L.toNat
+    · -- newline exit: cur < L, so from hexit the byte is '\n'
+      have hmemnl : (s.mem (p+cur)).toNat = 10 := by
+        rcases hexit with h | h
+        · omega
+        · exact h
+      have hcl : evalCond .lt (s0.rget j) (s0.rget 11) = true := by
+        rw [hg_j, hg_11]; exact slt_true hcb hL hlt
+      have hife2 : ∀ f, exec env sl (f+3) (.ife .eq b 24 [] (.cont 1 [.reg j, .reg 6])
+            (.seq (.addi j1 j 1) (.cont 0 [.reg j1])))
+            ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64))
+          = some ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64), .cont 1 [cur, olen]) := by
+        intro f
+        rw [show f+3 = (f+2)+1 from rfl, exec_ife_then (hc := ceqS_true 10 e_b e_24 (by decide) hmemnl),
+            show f+2 = (f+1)+1 from rfl, exec_cont, catch0_cont]
+        simp only [List.map_cons, evalOpnd_reg, List.map_nil, e_j, e_6]
+      have hbody : ∀ f, exec env sl (f+6) (scBody j j1 a b) s0
+          = some ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64), .cont 1 [cur, olen]) := by
+        intro f
+        show exec env sl (f+6) (scBody j j1 a b) s0 = _
+        unfold scBody
+        rw [show f+6 = (f+5)+1 from rfl, exec_ife_then (hc := hcl),
+            show f+5 = (f+4)+1 from rfl, exec_seq_normal (h := hadd f),
+            show f+4 = (f+3)+1 from rfl, exec_seq_normal (h := hlbu f),
+            hife2 f, catch0_cont]
+      refine ⟨0+6+1, (s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64), ?_, by simp [hg_mem]⟩
+      unfold scWhile
+      rw [exec_while_contS (hlen := hlen1) (hs0 := hs0) (hc := hguard) (k := 0) (hb := hbody 0),
+          cur_zero]
+    · -- EOF exit: cur ≥ L, ELSE branch
+      have hcl : evalCond .lt (s0.rget j) (s0.rget 11) = false := by
+        rw [hg_j, hg_11]; exact slt_false hcb hL (by omega)
+      have hbody : ∀ f, exec env sl (f+6) (scBody j j1 a b) s0
+          = some (s0, .cont 1 [cur, olen]) := by
+        intro f
+        show exec env sl (f+6) (scBody j j1 a b) s0 = _
+        unfold scBody
+        rw [show f+6 = (f+5)+1 from rfl, exec_ife_else (hc := hcl),
+            show f+5 = (f+4)+1 from rfl, exec_cont, catch0_cont]
+        simp only [List.map_cons, evalOpnd_reg, List.map_nil, hg_j, hg_6]
+      refine ⟨0+6+1, s0, ?_, by rw [hg_mem]⟩
+      unfold scWhile
+      rw [exec_while_contS (hlen := hlen1) (hs0 := hs0) (hc := hguard) (k := 0) (hb := hbody 0),
+          cur_zero]
+  | succ d0 ih =>
+    intro s cur inits hev h10 h11 h24 h6 hbd hdig hexit
+    have hcb : cur.toNat < 2^63 := by omega
+    have hc1 : (cur+1).toNat = cur.toNat + 1 := by bv_omega
+    obtain ⟨s0, hs0⟩ : ∃ y, y = bindOuts s [j] (inits.map (evalOpnd s)) := ⟨_, rfl⟩
+    have hbo : s0 = s.rset j cur := by rw [hs0, hev]; rfl
+    have hg_j : s0.rget j = cur := by rw [hbo]; exact rget_rset_eq _ _ _ hj0
+    have hg_10 : s0.rget 10 = p := by rw [hbo, rget_rset_ne _ _ _ _ h10j]; exact h10
+    have hg_11 : s0.rget 11 = L := by rw [hbo, rget_rset_ne _ _ _ _ h11j]; exact h11
+    have hg_24 : s0.rget 24 = 10 := by rw [hbo, rget_rset_ne _ _ _ _ h24j]; exact h24
+    have hg_6 : s0.rget 6 = olen := by rw [hbo, rget_rset_ne _ _ _ _ h6j]; exact h6
+    have hg_mem : s0.mem = s.mem := by rw [hbo]; simp
+    have hguard : evalCond .geu (s0.rget 0) (s0.rget 0) = true := by rw [rget_zero]; decide
+    have hlen1 : inits.length = [j].length := by have := congrArg List.length hev; simpa using this
+    have hd0 := hdig 0 (by omega); rw [cur_zero] at hd0
+    obtain ⟨hlt0, hne0⟩ := hd0
+    have hcl : evalCond .lt (s0.rget j) (s0.rget 11) = true := by
+      rw [hg_j, hg_11]; exact slt_true hcb hL hlt0
+    have hadd : ∀ f, exec env sl (f+4) (.add a 10 j) s0 = some (s0.rset a (p+cur), .normal) := by
+      intro f; rw [show f+4 = (f+3)+1 from rfl, exec_add, hg_10, hg_j]
+    have e_b : ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64)).rget b
+        = (s.mem (p+cur)).setWidth 64 := rget_rset_eq _ _ _ hb0
+    have e_24 : ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64)).rget 24 = 10 := by
+      rw [rget_rset_ne _ _ _ _ h24b, rget_rset_ne _ _ _ _ h24a]; exact hg_24
+    have e_j : ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64)).rget j = cur := by
+      rw [rget_rset_ne _ b j _ hjb, rget_rset_ne _ a j _ hja]; exact hg_j
+    have hlbu : ∀ f, exec env sl (f+3) (.lbu b a 0) (s0.rset a (p+cur))
+        = some ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64), .normal) := by
+      intro f; rw [show f+3 = (f+2)+1 from rfl, exec_lbu]
+      simp only [rget_rset_eq _ a _ ha0, zero_signExtend, wadd_zero, loadByte_eq, rset_mem, hg_mem]
+    obtain ⟨s1c, hs1c⟩ : ∃ y, y = ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64)).rset j1 (cur+1) :=
+      ⟨_, rfl⟩
+    have hife2 : ∀ f, exec env sl (f+3) (.ife .eq b 24 [] (.cont 1 [.reg j, .reg 6])
+          (.seq (.addi j1 j 1) (.cont 0 [.reg j1])))
+          ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64))
+        = some (s1c, .cont 0 [cur+1]) := by
+      intro f
+      have haddi : ∀ g, exec env sl (g+1) (.addi j1 j 1)
+            ((s0.rset a (p+cur)).rset b ((s.mem (p+cur)).setWidth 64)) = some (s1c, .normal) := by
+        intro g; rw [exec_addi, e_j, one_signExtend, hs1c]
+      have hcont : ∀ g, exec env sl (g+1) (.cont 0 [.reg j1]) s1c = some (s1c, .cont 0 [cur+1]) := by
+        intro g; rw [exec_cont]
+        simp only [List.map_cons, evalOpnd_reg, List.map_nil, hs1c, rget_rset_eq _ j1 _ hj10]
+      rw [show f+3 = (f+2)+1 from rfl, exec_ife_else (hc := ceqS_false 10 e_b e_24 (by decide) hne0),
+          show f+2 = (f+1)+1 from rfl, exec_seq_normal (h := haddi f), hcont f, catch0_cont]
+    have hbody : ∀ f, exec env sl (f+6) (scBody j j1 a b) s0 = some (s1c, .cont 0 [cur+1]) := by
+      intro f
+      show exec env sl (f+6) (scBody j j1 a b) s0 = _
+      unfold scBody
+      rw [show f+6 = (f+5)+1 from rfl, exec_ife_then (hc := hcl),
+          show f+5 = (f+4)+1 from rfl, exec_seq_normal (h := hadd f),
+          show f+4 = (f+3)+1 from rfl, exec_seq_normal (h := hlbu f),
+          hife2 f, catch0_cont]
+    have hs1c_10 : s1c.rget 10 = p := by
+      rw [hs1c, rget_rset_ne _ _ _ _ h10j1, rget_rset_ne _ _ _ _ h10b, rget_rset_ne _ _ _ _ h10a]; exact hg_10
+    have hs1c_11 : s1c.rget 11 = L := by
+      rw [hs1c, rget_rset_ne _ _ _ _ h11j1, rget_rset_ne _ _ _ _ h11b, rget_rset_ne _ _ _ _ h11a]; exact hg_11
+    have hs1c_24 : s1c.rget 24 = 10 := by
+      rw [hs1c, rget_rset_ne _ _ _ _ h24j1, rget_rset_ne _ _ _ _ h24b, rget_rset_ne _ _ _ _ h24a]; exact hg_24
+    have hs1c_6 : s1c.rget 6 = olen := by
+      rw [hs1c, rget_rset_ne _ _ _ _ h6j1, rget_rset_ne _ _ _ _ h6b, rget_rset_ne _ _ _ _ h6a]; exact hg_6
+    have hs1c_mem : s1c.mem = s.mem := by rw [hs1c]; simp [hg_mem]
+    have hev' : ([Opnd.const (cur+1)].map (evalOpnd s1c)) = [cur+1] := by simp
+    have hbd' : (cur+1).toNat + d0 < 2^63 := by rw [hc1]; omega
+    have hdig' : ∀ k, k < d0 → ((cur+1) + BitVec.ofNat 64 k).toNat < L.toNat
+        ∧ (s1c.mem (p + ((cur+1) + BitVec.ofNat 64 k))).toNat ≠ 10 := by
+      intro k hk; rw [hs1c_mem, ← cur_step]; exact hdig (k+1) (by omega)
+    have hexit' : L.toNat ≤ ((cur+1) + BitVec.ofNat 64 d0).toNat
+        ∨ (s1c.mem (p + ((cur+1) + BitVec.ofNat 64 d0))).toNat = 10 := by
+      rw [hs1c_mem, ← cur_step]; exact hexit
+    obtain ⟨F, s', hF, hmem'⟩ :=
+      ih s1c (cur+1) [.const (cur+1)] hev' hs1c_10 hs1c_11 hs1c_24 hs1c_6 hbd' hdig' hexit'
+    refine ⟨max 6 F + 1, s', ?_, by rw [hmem', hs1c_mem]⟩
+    unfold scWhile
+    rw [exec_while_cont0 (hlen := hlen1) (hs0 := hs0) (hc := hguard)
+          (hb := exec_mono_le env sl (Nat.le_max_left 6 F) (hbody 0)) (hvs := rfl)]
+    rw [show ([cur+1].map Opnd.const) = [Opnd.const (cur+1)] from rfl, cur_step]
+    exact exec_mono_le env sl (Nat.le_max_right 6 F) hF
+
 end LowIR.SSA
