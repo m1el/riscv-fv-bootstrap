@@ -55,11 +55,16 @@ axioms track the Ctrl baseline `[propext, Classical.choice, Quot.sound]`
   comes from `exec_frame`), `signExtend_ofNat_small` + `exec_lit`. Commit
   `f567a00`.
 
-### Frontier — none; campaign complete
+### Frontier — proof done; next is a semantics cleanup
 
 All phases (0–6) landed and sorry-free. The proof lives in
 `lean/LowIR/SSAProof/{ExecFacts,StrlenProof,Hex0Proof}.lean`; the headline
 theorem is `LowIR.SSA.hex0S_correct`. See §6 for the size comparison.
+
+**Next task (to implement): the loop-arg redesign — §8.** Switch the `while`
+back-edge from *rebuilding the term* (`inits := vs.map .const`) to *rebinding in
+the environment*, which deletes the one measurable proof tax (§6 tax #2). Do it
+before proving the next loop on this IR.
 
 The Phase-1 pattern that carried the whole campaign (existential fuel,
 `obtain ⟨x,h⟩ : ∃ y, y = E := ⟨_,rfl⟩` to name states without Mathlib's `set`,
@@ -307,3 +312,87 @@ line-count reduction.
 - [ ] §3 statements sorry'd + battery `#guard` instantiations.
 - [ ] Phase 1 `strlenS_correct` — GO/NO-GO on the whole approach.
 - [ ] Phases 2→6 in order, comparison table updated per phase.
+
+## 8. NEXT (to implement) — loop-arg redesign: rebind-in-environment, not rebuild-the-`while`
+
+**Decision: do this before proving the next loop on this IR.** It removes the
+single measurable proof tax the hex0 campaign surfaced (§6 tax #2). It is a
+*semantics change*, so it is a rework, not a free refactor.
+
+### The problem (what the current encoding costs)
+
+The `while` back-edge steps to a **different term**. From `exec_while_cont0`:
+
+```
+exec (fuel+1) (.«while» outs inits args c ca cb body dflt) s
+  = exec fuel  (.«while» outs (vs.map .const) args c ca cb body dflt) s1     -- body yielded `cont 0 vs`
+```
+
+The `inits` field is overwritten with `vs.map .const` each iteration, i.e. the
+loop is defined by structural recursion that **rebuilds the `Stmt`**, carrying
+the loop values *inside the term*. Because the term is not stable across
+iterations, induction is over a *family* of `while` terms indexed by `inits`,
+which forces two frictions (both visible in `main_loop`):
+
+- **A per-iteration round-trip** values → `.const` → `evalOpnd` → values: the
+  `rw [show ([a, b].map Opnd.const) = [.const a, .const b] from rfl]` steps and
+  the `hev'` obligations `([.const a, .const b].map (evalOpnd s)) = [a, b]`.
+- **Term-shape reconciliation**: `hex0WhileS` had to be parametrized by `inits`
+  (the term isn't fixed), and the defeq bridge `skipCommentS_eq :
+  skipCommentS i1 j j1 a b = scWhile j j1 a b [.reg i1]` exists purely to
+  re-align the surface loop def with its rebuilt form.
+
+Both are pure ceremony: they exist only because the carried values live in the
+*term* instead of the *state*.
+
+### The fix (rebind in the environment)
+
+Keep the loop *term* fixed; thread the carried values through the **state**.
+Evaluate `inits` **once** at entry to a value tuple, then iterate a primitive
+that rebinds `args := vals` each time and recurses on `(state, value-list)` —
+the *same* term throughout:
+
+```
+loop fuel (while outs args c ca cb body dflt) s vals =
+  let s' := bindOuts s args vals            -- rebind params to carried values
+  if guard s' then
+    match exec fuel body s' with
+    | some (s'', cont 0 vs) => loop fuel (while …) s'' vs   -- SAME term, vs threaded as values
+    | …                                                     -- brk 0 / brk (k+1) / cont (k+1) / ret as today
+  else exec fuel dflt s'
+```
+
+The induction hypothesis becomes "for all `vals` satisfying the invariant,
+`loop … s vals = …`", and the args-tuple **is** `vals`. No `.map .const`, no
+wrap/unwrap, no `hev'`, no `skipCommentS_eq`-style bridges. The `while`
+constructor's surface semantics is `loop` started from `inits.map (evalOpnd s)`
+evaluated once.
+
+### Migration checklist (what it ripples through)
+
+- [ ] `LowIR/SSA.lean` — `exec` `while` clause: split into "evaluate `inits`
+      once → seed `vals`" + a `loop`/`iterate` step relation (or an inner
+      recursion on a value list) that does **not** reconstruct the term.
+      (Decide: separate `loop` relation vs. an internal fuel-recursion — keep
+      `while` as the single *surface* constructor either way.)
+- [ ] `LowIR/SSAProof/ExecFacts.lean` — restate the `exec_while_*` family
+      (`_unfold`, `_cont0`/`_contS`/`_brk0`/`_brkS`/`_ret`/`_F_*`, `_badlen`)
+      against the fixed-term/value-list form; `exec_mono`/`_le` and
+      `exec_frame`/`_frame_rget` should carry over (the frame theorem is
+      orthogonal to this change).
+- [ ] Reprove the three loop clients: `StrlenProof.strlen_loop`,
+      `Hex0Proof.skip_loopS`, `Hex0Proof.main_loop`. Expect each to **shrink** —
+      delete the `.map .const` `rw`s and the `hev'`/`skipCommentS_eq`/`hex0WhileS`
+      scaffolding; the invariant is stated directly over the value tuple.
+- [ ] Keep the `native_decide` batteries (`hex0S_matches_spec`, `strlenS_ok`)
+      green — the *surface* `run` behaviour must be unchanged (this is a proof-
+      side/semantics-cleanliness change, not a language change).
+- [ ] Re-check `#print axioms hex0S_correct` = `[propext, Classical.choice,
+      Quot.sound]` after the rework.
+
+### Success criterion
+
+`main_loop` + `skip_loopS` + `strlen_loop` reprove with the per-iteration
+`.map .const` round-trips and the `skipCommentS_eq`/`hex0WhileS` bridges gone,
+and the §6 "comment skip" / "main loop" rows drop. If the loop lemmas do **not**
+get simpler, the redesign didn't pay — revert.
