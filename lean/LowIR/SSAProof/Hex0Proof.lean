@@ -1438,4 +1438,90 @@ theorem main_loop (inp : List Nat) (p q : Word) (capN : Nat)
           show (0 : Word) = BitVec.ofNat 64 0 from by decide]
     · rw [hbr, hs0mem, hout, holenp]
 
+/-! ### Phase 6 — assembly: the whole `hex0S` against `Hex0.coreSpec`.
+
+    `run`s the SSA `hex0S` on `memIn (asBytes inp)`: it returns exactly the
+    `coreSpec` status and output length in its two `.ret` values, and the bytes
+    it wrote to the output region `[outBase, outBase+len)` are `coreSpec`'s
+    output. No `native_decide` — the axiom base is `[propext, Classical.choice,
+    Quot.sound]`. -/
+theorem hex0S_correct (inp : List Nat) (cap : Nat)
+    (hinp : ∀ x ∈ inp, x < 256) (hlen : inp.length < 2^63) (hcap : cap < 2^63)
+    (hdisj : Disjoint ⟨Lib.inBase, inp.length⟩ ⟨Lib.outBase, cap⟩) :
+    ∃ fuel s', run Lib.libEnvS 0 fuel "hex0"
+          [Lib.inBase, BitVec.ofNat 64 inp.length, Lib.outBase, BitVec.ofNat 64 cap]
+          (Lib.memIn (Lib.asBytes inp)) Prog.SP0
+        = some (s', [BitVec.ofNat 64 (Hex0.coreSpec inp cap).1,
+                     BitVec.ofNat 64 (Hex0.coreSpec inp cap).2.2])
+      ∧ regionBytes s'.mem Lib.outBase (Hex0.coreSpec inp cap).2.2 = (Hex0.coreSpec inp cap).2.1 := by
+  -- frameEnter: frameSize 0, so it always succeeds; st0 holds the 4 params + mem
+  have hcond : ¬ (Prog.SP0.toNat < (0 : Word).toNat + Lib.hex0S.frameSize) := by
+    show ¬ (Prog.SP0.toNat < (0 : Word).toNat + 0); simp
+  obtain ⟨st0, hfe⟩ : ∃ st0, frameEnter 0 Lib.hex0S
+      [Lib.inBase, BitVec.ofNat 64 inp.length, Lib.outBase, BitVec.ofNat 64 cap]
+      (Lib.memIn (Lib.asBytes inp)) Prog.SP0 = some st0 := by
+    unfold frameEnter; rw [if_neg hcond]; exact ⟨_, rfl⟩
+  have hst0_10 : st0.rget 10 = Lib.inBase := by
+    have h := hfe; unfold frameEnter at h; rw [if_neg hcond] at h; rw [← Option.some.inj h]; rfl
+  have hst0_11 : st0.rget 11 = BitVec.ofNat 64 inp.length := by
+    have h := hfe; unfold frameEnter at h; rw [if_neg hcond] at h; rw [← Option.some.inj h]; rfl
+  have hst0_12 : st0.rget 12 = Lib.outBase := by
+    have h := hfe; unfold frameEnter at h; rw [if_neg hcond] at h; rw [← Option.some.inj h]; rfl
+  have hst0_13 : st0.rget 13 = BitVec.ofNat 64 cap := by
+    have h := hfe; unfold frameEnter at h; rw [if_neg hcond] at h; rw [← Option.some.inj h]; rfl
+  have hst0mem : st0.mem = Lib.memIn (Lib.asBytes inp) := by
+    have h := hfe; unfold frameEnter at h; rw [if_neg hcond] at h; rw [← Option.some.inj h]
+  -- the 11-literal prelude → loop-entry state sb
+  obtain ⟨sb, hsb⟩ : ∃ y, y = (((((((((((st0.rset 17 (BitVec.ofNat 64 55)).rset 18 (BitVec.ofNat 64 59)).rset
+      19 (BitVec.ofNat 64 255)).rset 20 (BitVec.ofNat 64 48)).rset 21 (BitVec.ofNat 64 57)).rset
+      22 (BitVec.ofNat 64 65)).rset 23 (BitVec.ofNat 64 70)).rset 24 (BitVec.ofNat 64 10)).rset
+      25 (BitVec.ofNat 64 32)).rset 26 (BitVec.ofNat 64 95)).rset 27 (BitVec.ofNat 64 35)) := ⟨_, rfl⟩
+  have hsbmem : sb.mem = Lib.memIn (Lib.asBytes inp) := by rw [hsb]; simp [hst0mem]
+  have hr_sb : RegsS sb Lib.inBase (BitVec.ofNat 64 inp.length) Lib.outBase (BitVec.ofNat 64 cap) := by
+    refine ⟨?_,?_,?_,?_,?_,?_,?_,?_,?_,?_,?_,?_,?_,?_,?_⟩ <;>
+      (rw [hsb]; simp [hst0_10, hst0_11, hst0_12, hst0_13])
+  -- bridge: memIn holds inp at inBase
+  have hbridge : ∀ k : Word, k.toNat < inp.length → sb.mem (Lib.inBase + k) = BitVec.ofNat 8 (inp[k.toNat]!) := by
+    intro k hk
+    rw [hsbmem]
+    have hia : ((Lib.inBase + k) - Lib.inBase).toNat = k.toNat := by bv_omega
+    have hlen' : (Lib.asBytes inp).length = inp.length := by simp [Lib.asBytes]
+    show (if ((Lib.inBase + k) - Lib.inBase).toNat < (Lib.asBytes inp).length
+        then _ else _) = _
+    rw [hia, hlen', if_pos hk, List.getElem?_eq_getElem (by rw [hlen']; exact hk)]
+    simp [Lib.asBytes, List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hk]
+  -- run the main loop from idx = olen = 0
+  obtain ⟨F, s', status, outlen, hF, hbr⟩ :=
+    main_loop Lib.libEnvS 0 inp Lib.inBase Lib.outBase cap hinp hlen hcap hdisj
+      (inp.length - 0) 0 0 sb [] [.const 0, .const 0] rfl (by rfl) hr_sb
+      (by omega) (by omega) rfl hbridge (by simp [regionBytes])
+  rw [List.drop_zero, boundedRun_nil_coreSpec] at hbr
+  refine ⟨F + 12, s', ?_, ?_⟩
+  · -- run: peel frameEnter + 11 lits, land on the loop, read the ret
+    have hbody : exec Lib.libEnvS 0 (F+12) Lib.hex0S.body st0
+        = some (s', .ret [BitVec.ofNat 64 status, BitVec.ofNat 64 outlen]) := by
+      show exec Lib.libEnvS 0 (F+12)
+        (.seq (Lib.lit 17 55) (.seq (Lib.lit 18 59) (.seq (Lib.lit 19 255) (.seq (Lib.lit 20 48)
+          (.seq (Lib.lit 21 57) (.seq (Lib.lit 22 65) (.seq (Lib.lit 23 70) (.seq (Lib.lit 24 10)
+          (.seq (Lib.lit 25 32) (.seq (Lib.lit 26 95) (.seq (Lib.lit 27 35)
+            (hex0WhileS [.const 0, .const 0])))))))))))) st0 = _
+      rw [show F+12 = (F+11)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+10) 17 55 _ (by decide)),
+          show F+11 = (F+10)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+9) 18 59 _ (by decide)),
+          show F+10 = (F+9)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+8) 19 255 _ (by decide)),
+          show F+9 = (F+8)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+7) 20 48 _ (by decide)),
+          show F+8 = (F+7)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+6) 21 57 _ (by decide)),
+          show F+7 = (F+6)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+5) 22 65 _ (by decide)),
+          show F+6 = (F+5)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+4) 23 70 _ (by decide)),
+          show F+5 = (F+4)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+3) 24 10 _ (by decide)),
+          show F+4 = (F+3)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+2) 25 32 _ (by decide)),
+          show F+3 = (F+2)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 (F+1) 26 95 _ (by decide)),
+          show F+2 = (F+1)+1 from rfl, exec_seq_normal (h := exec_lit Lib.libEnvS 0 F 27 35 _ (by decide))]
+      rw [← hsb]; exact exec_mono_le Lib.libEnvS 0 (Nat.le_succ F) hF
+    show run Lib.libEnvS 0 (F+12) "hex0" _ _ _ = _
+    unfold run
+    rw [show List.lookup "hex0" Lib.libEnvS = some Lib.hex0S from rfl]
+    simp only [List.length_cons, List.length_nil, hfe, hbody]
+    rw [← hbr]; rfl
+  · rw [← hbr]
+
 end LowIR.SSA
