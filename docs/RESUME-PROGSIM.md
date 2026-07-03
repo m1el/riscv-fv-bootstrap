@@ -5,7 +5,7 @@ Plan written 2026-07-02, immediately after the executable cut landed. Read with
 [PROGRESS.md](PROGRESS.md) (what exists), [archive/RESUME-LOWIR.md](archive/RESUME-LOWIR.md)
 (the hex0-era proof toolbox and gotchas — much of it ports).
 
-**Status (updated 2026-07-02).** Phase 0 is essentially done and the relation
+**Status (updated 2026-07-03).** Phase 0 is essentially done and the relation
 skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
 - **Phase 0.1 (P1 oracle) — DONE.** `pad : Name → Nat` in `frameEnter`/`exec`/
   `run` (default `fun _ => 0`, everything re-greens); `CompileTests.lean` has
@@ -99,6 +99,28 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   conditional branch (`step_beq`… + `evalCond`) selecting then/else or loop
   body/exit, and the back-edge `jmp lTop` (a backward `jump_sim`). All the atoms
   (branch/jump steps, offset arithmetic, `jump_sim`) are already in place.
+
+  **The `while` case — shape confirmed by the SSA §8 rework (2026-07-03).**
+  Prog's back-edge re-executes the SAME `.while c a b body` term at `fuel`
+  (`exec_while_normal`/`_cont0` in `ProgSim/ExecFacts.lean`; the loop-carried
+  values ride the mutable registers), so the `lower_sim_cf` fuel IH applies to
+  the back-edge DIRECTLY — the recursive occurrence is the identical
+  `Emitted`/`emitCF` instance at the same position, with only the machine's
+  backward `jmp lTop` (`jump_sim`) in between. No quantification over a
+  family of loop terms is needed. This is exactly the fixed-term shape the SSA
+  campaign had to BUY by reworking its `while` to rebind-in-environment
+  (`iterWhile`, [RESUME-SSA-HEX0.md](RESUME-SSA-HEX0.md) §8, commit `ef17bbd`)
+  — Prog had it from day one, so **no Prog-side semantics change is needed or
+  wanted**. Per-case skeleton: guard `run_load`s + `cond_taken`/`_not_taken`
+  (as `ife`); guard-false → branch to `lEnd`, `.normal`; guard-true → body IH
+  at `fuel−1` with `lTop :: contPos`, `lEnd :: brkPos` (scoping exactly like
+  `block`), then a six-way outcome walk: `.normal` → the emitted back-edge
+  `jmp lTop` (`jump_sim`) then the fuel IH on the same while; `.cont 0` → the
+  body's own lowered jump ALREADY landed at `lTop` (that is `contL_sim`'s
+  conclusion), fuel IH directly; `.brk 0` → landed at `lEnd`, `.normal` out;
+  `.brk (k+1)`/`.cont (k+1)` shift; `.ret` propagates. The outcome plumbing
+  mirrors the six-way match the SSA `iterWhile_mono`/`iterWhile_frame` proofs
+  walk — same-term recursion makes the IH application one line in both.
 - **Phase 4.3 label-aware emit — DONE + VALIDATED (`CtrlSim.lean`).** `emitCF`
   (`brkPos contPos : List Nat`, `epiPos here : Nat → PStmt → List Instr`): the
   position/label-resolved extension of `emit` to control flow — the concrete stream
@@ -176,6 +198,16 @@ executable oracle to test against while it is being stated.
   shapes from old T1 (`LowIR.lean:325`). Old T1 `compile_sim` (line 370, the
   original flat IL) stays as a historical statement; **this campaign
   supersedes it — do not prove it**.
+- `LowIR/SSA.lean` + `SSAProof/{ExecFacts,StrlenProof,Hex0Proof}.lean` — the
+  upstream SSA experiment, since 2026-07-03 on the §8 rebind-in-environment
+  `while` semantics (`iterWhile`: fixed loop term, carried values threaded as
+  a value list — [RESUME-SSA-HEX0.md](RESUME-SSA-HEX0.md) §8). Not an input
+  to `compile_sim` (Prog is the source IR here), but two things transfer:
+  (a) its loop-proof pattern — per-head-entry step lemma, existential fuel
+  per lemma, `*_mono` reconciliation — is the freshest worked style for the
+  Phase-4.3 loop cases; (b) the planned SSA→Prog lowering simulation
+  (LOWIR-SSA-EXPERIMENT assessment §1) will consume THIS campaign's theorems
+  downstream — see the composability note in §7.
 
 ## 2. THE design obstacle, and decision P1 (resolve before any proving)
 
@@ -507,6 +539,20 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
 5. Whether `exec.induct` (functional induction) beats hand-rolled fuel
    induction — try on the vertical slice; abandon without sentiment if the
    generated motive fights back.
+6. **SSA→Prog composability (post-campaign; SSA side unblocked 2026-07-03).**
+   The SSA experiment's graduation path lowers SSA→Prog and reuses this
+   campaign unchanged (LOWIR-SSA-EXPERIMENT assessment §1 — do not fork the
+   compiler). With the §8 `iterWhile` semantics the loop terms are fixed on
+   BOTH sides, so the lowering simulation's `while` case becomes a
+   per-head-entry correspondence: an SSA `iterWhile` entry (value tuple
+   `vals`) ↔ a Prog `while` entry (the lowered `args` registers hold `vals`;
+   an SSA `cont 0 [vs]` edge = the parallel copy into them), with
+   `iterWhile_mono`/`iterWhile_frame` as the ready-made SSA-side interface —
+   under the old rebuild semantics this would have related a *family* of SSA
+   terms to one Prog term. Consequence for NOW: keep `lower_sim`/`prog_sim`
+   statement shapes friendly to that composition (fuel-indexed,
+   outcome-carrying, plain-equality state relation), so SSA→Prog→RV64I chains
+   without re-litigating either pass.
 
 ## 8. Immediate next actions (cold-start order)
 
