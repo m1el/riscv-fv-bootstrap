@@ -797,4 +797,181 @@ theorem hexPathS_eff (s : St) (p L q cap olen : Word) (idx : Nat) (chi : Byte)
             exact storeByte_mem_congr _ _ (by
               rw [rset_mem, rset_mem, rset_mem]; exact hs7mem')
 
+/-! ### Dispatch on the read char: the loop body `hex0BodyS`. -/
+
+/-- The char-dispatch chain of `hex0BodyS` (after the read prefix). -/
+def hex0DispatchS : Stmt :=
+  .ife .eq 7 27 [] (Lib.skipCommentS 41 42 43 44 45)
+  (.ife .eq 7 18 [] (Lib.skipCommentS 41 46 47 48 49)
+  (.ife .eq 7 24 [] (.cont 0 [.reg 41, .reg 6])
+  (.ife .eq 7 25 [] (.cont 0 [.reg 41, .reg 6])
+  (.ife .eq 7 26 [] (.cont 0 [.reg 41, .reg 6]) Lib.hexPathS))))
+
+/-- Existential `ife _ _ _ [] t e`, guard true, arm outcome passes `catch0 []`. -/
+theorem exec_ifeE_then_pass {s s'' : St} {c : Cond} {ca cb : Reg} {t e : Stmt} {oc : Outcome}
+    (hc : evalCond c (s.rget ca) (s.rget cb) = true)
+    (hpass : catch0 [] (some (s'', oc)) = some (s'', oc))
+    (ht : ∃ f, exec env sl f t s = some (s'', oc)) :
+    ∃ f, exec env sl f (.ife c ca cb [] t e) s = some (s'', oc) := by
+  obtain ⟨f, ht⟩ := ht; exact ⟨f+1, by rw [exec_ife_then (hc := hc), ht, hpass]⟩
+
+theorem exec_ifeE_else_pass {s s'' : St} {c : Cond} {ca cb : Reg} {t e : Stmt} {oc : Outcome}
+    (hc : evalCond c (s.rget ca) (s.rget cb) = false)
+    (hpass : catch0 [] (some (s'', oc)) = some (s'', oc))
+    (he : ∃ f, exec env sl f e s = some (s'', oc)) :
+    ∃ f, exec env sl f (.ife c ca cb [] t e) s = some (s'', oc) := by
+  obtain ⟨f, he⟩ := he; exact ⟨f+1, by rw [exec_ife_else (hc := hc), he, hpass]⟩
+
+/-! ### `prefSt` register/memory access. -/
+
+theorem prefSt_rget_pres (s : St) (p idx : Word) (r : Reg)
+    (h41 : r ≠ 41) (h7 : r ≠ 7) (h40 : r ≠ 40) : (prefSt s p idx).rget r = s.rget r := by
+  unfold prefSt; rw [rget_rset_ne _ _ _ _ h41, rget_rset_ne _ _ _ _ h7, rget_rset_ne _ _ _ _ h40]
+
+theorem prefSt_rget_7 (s : St) (p idx : Word) :
+    (prefSt s p idx).rget 7 = (s.mem (p + idx)).setWidth 64 := by
+  unfold prefSt; rw [rget_rset_ne _ 41 7 _ (by decide), rget_rset_eq _ 7 _ (by decide)]
+
+theorem prefSt_rget_41 (s : St) (p idx : Word) : (prefSt s p idx).rget 41 = idx + 1 := by
+  unfold prefSt; rw [rget_rset_eq _ 41 _ (by decide)]
+
+theorem prefSt_mem (s : St) (p idx : Word) : (prefSt s p idx).mem = s.mem := by
+  unfold prefSt; simp
+
+theorem RegsS.pref {s : St} {p L q cap : Word} (hr : RegsS s p L q cap) (idx : Word) :
+    RegsS (prefSt s p idx) p L q cap :=
+  hr.of_agree (fun r hrmem => prefSt_rget_pres s p idx r
+    (by rcases (by simpa using hrmem : _) with h|h|h|h|h|h|h|h|h|h|h|h|h|h|h <;> subst h <;> decide)
+    (by rcases (by simpa using hrmem : _) with h|h|h|h|h|h|h|h|h|h|h|h|h|h|h <;> subst h <;> decide)
+    (by rcases (by simpa using hrmem : _) with h|h|h|h|h|h|h|h|h|h|h|h|h|h|h <;> subst h <;> decide))
+
+/-- Lift a `hex0DispatchS` execution (from the post-prefix state) to `hex0BodyS`. -/
+theorem body_lift (s : St) (p : Word) (idx : Word) (s'' : St) (oc : Outcome)
+    (h10 : s.rget 10 = p) (h5 : s.rget 5 = idx)
+    (hd : ∃ f, exec env sl f hex0DispatchS (prefSt s p idx) = some (s'', oc)) :
+    ∃ f, exec env sl f Lib.hex0BodyS s = some (s'', oc) := by
+  obtain ⟨fd, hd⟩ := hd
+  refine ⟨fd + 4, ?_⟩
+  rw [show Lib.hex0BodyS
+        = .seq (.add 40 10 5) (.seq (.lbu 7 40 0) (.seq (.addi 41 5 1) hex0DispatchS)) from rfl,
+      hexPrefix_exec env sl fd s p idx hex0DispatchS h10 h5]
+  exact exec_mono_le env sl (Nat.le_succ fd) hd
+
+/-- Space class (`\n`/` `/`_`): advance one char, continue. -/
+theorem body_space (s : St) (p L q cap olen : Word) (idxNat : Nat) (chi : Byte)
+    (hr : RegsS s p L q cap) (h5 : s.rget 5 = BitVec.ofNat 64 idxNat) (h6 : s.rget 6 = olen)
+    (hchar : s.mem (p + BitVec.ofNat 64 idxNat) = chi)
+    (hsp : chi.toNat = 10 ∨ chi.toNat = 32 ∨ chi.toNat = 95) :
+    ∃ f st', exec env sl f Lib.hex0BodyS s
+      = some (st', .cont 0 [BitVec.ofNat 64 idxNat + 1, olen]) ∧ st'.mem = s.mem := by
+  obtain ⟨ps, hps⟩ : ∃ y, y = prefSt s p (BitVec.ofNat 64 idxNat) := ⟨_, rfl⟩
+  have p7 : ps.rget 7 = chi.setWidth 64 := by rw [hps, prefSt_rget_7, hchar]
+  have p41 : ps.rget 41 = BitVec.ofNat 64 idxNat + 1 := by rw [hps, prefSt_rget_41]
+  have p6 : ps.rget 6 = olen := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide), h6]
+  have p27 : ps.rget 27 = 35 := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h27
+  have p18 : ps.rget 18 = 59 := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h18
+  have p24 : ps.rget 24 = 10 := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h24
+  have p25 : ps.rget 25 = 32 := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h25
+  have p26 : ps.rget 26 = 95 := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h26
+  have pmem : ps.mem = s.mem := by rw [hps, prefSt_mem]
+  have hleaf : ∃ f, exec env sl f (.cont 0 [.reg 41, .reg 6]) ps
+      = some (ps, .cont 0 [BitVec.ofNat 64 idxNat + 1, olen]) := by
+    refine ⟨0+1, ?_⟩; rw [exec_cont]; simp only [List.map_cons, evalOpnd_reg, List.map_nil, p41, p6]
+  have hpass : catch0 [] (some (ps, Outcome.cont 0 [BitVec.ofNat 64 idxNat + 1, olen]))
+      = some (ps, .cont 0 [BitVec.ofNat 64 idxNat + 1, olen]) := catch0_cont _ _ _ _
+  have hd : ∃ f, exec env sl f hex0DispatchS ps
+      = some (ps, .cont 0 [BitVec.ofNat 64 idxNat + 1, olen]) := by
+    rcases hsp with h | h | h
+    · exact exec_ifeE_else_pass env sl (ceqS_false 35 p7 p27 (by decide) (by omega)) hpass
+        (exec_ifeE_else_pass env sl (ceqS_false 59 p7 p18 (by decide) (by omega)) hpass
+        (exec_ifeE_then_pass env sl (ceqS_true 10 p7 p24 (by decide) h) hpass hleaf))
+    · exact exec_ifeE_else_pass env sl (ceqS_false 35 p7 p27 (by decide) (by omega)) hpass
+        (exec_ifeE_else_pass env sl (ceqS_false 59 p7 p18 (by decide) (by omega)) hpass
+        (exec_ifeE_else_pass env sl (ceqS_false 10 p7 p24 (by decide) (by omega)) hpass
+        (exec_ifeE_then_pass env sl (ceqS_true 32 p7 p25 (by decide) h) hpass hleaf)))
+    · exact exec_ifeE_else_pass env sl (ceqS_false 35 p7 p27 (by decide) (by omega)) hpass
+        (exec_ifeE_else_pass env sl (ceqS_false 59 p7 p18 (by decide) (by omega)) hpass
+        (exec_ifeE_else_pass env sl (ceqS_false 10 p7 p24 (by decide) (by omega)) hpass
+        (exec_ifeE_else_pass env sl (ceqS_false 32 p7 p25 (by decide) (by omega)) hpass
+        (exec_ifeE_then_pass env sl (ceqS_true 95 p7 p26 (by decide) h) hpass hleaf))))
+  rw [hps] at hd
+  obtain ⟨f, hf⟩ := body_lift env sl s p (BitVec.ofNat 64 idxNat) _ _ hr.h10 h5 hd
+  exact ⟨f, _, hf, by rw [prefSt_mem]⟩
+
+/-- Lift a `hexPathS` execution to `hex0BodyS` (all five dispatch tests fail). -/
+theorem body_hex_lift (s : St) (p L q cap : Word) (idx : Word) (chi : Byte) (s'' : St) (oc : Outcome)
+    (hr : RegsS s p L q cap) (h10 : s.rget 10 = p) (h5 : s.rget 5 = idx)
+    (hchar : s.mem (p + idx) = chi)
+    (hns : chi.toNat ≠ 10 ∧ chi.toNat ≠ 32 ∧ chi.toNat ≠ 95 ∧ chi.toNat ≠ 35 ∧ chi.toNat ≠ 59)
+    (hpass : catch0 [] (some (s'', oc)) = some (s'', oc))
+    (hx : ∃ f, exec env sl f Lib.hexPathS (prefSt s p idx) = some (s'', oc)) :
+    ∃ f, exec env sl f Lib.hex0BodyS s = some (s'', oc) := by
+  have p7 : (prefSt s p idx).rget 7 = chi.setWidth 64 := by rw [prefSt_rget_7, hchar]
+  have p27 : (prefSt s p idx).rget 27 = 35 := by rw [prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h27
+  have p18 : (prefSt s p idx).rget 18 = 59 := by rw [prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h18
+  have p24 : (prefSt s p idx).rget 24 = 10 := by rw [prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h24
+  have p25 : (prefSt s p idx).rget 25 = 32 := by rw [prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h25
+  have p26 : (prefSt s p idx).rget 26 = 95 := by rw [prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h26
+  exact body_lift env sl s p idx s'' oc h10 h5
+    (exec_ifeE_else_pass env sl (ceqS_false 35 p7 p27 (by decide) hns.2.2.2.1) hpass
+    (exec_ifeE_else_pass env sl (ceqS_false 59 p7 p18 (by decide) hns.2.2.2.2) hpass
+    (exec_ifeE_else_pass env sl (ceqS_false 10 p7 p24 (by decide) hns.1) hpass
+    (exec_ifeE_else_pass env sl (ceqS_false 32 p7 p25 (by decide) hns.2.1) hpass
+    (exec_ifeE_else_pass env sl (ceqS_false 95 p7 p26 (by decide) hns.2.2.1) hpass hx)))))
+
+/-- Comment class (`#`/`;`): skip to newline/EOF via the inner loop, continue. -/
+theorem body_comment (s : St) (p L q cap olen : Word) (idxNat d : Nat) (chi : Byte)
+    (hr : RegsS s p L q cap) (h5 : s.rget 5 = BitVec.ofNat 64 idxNat) (h6 : s.rget 6 = olen)
+    (hchar : s.mem (p + BitVec.ofNat 64 idxNat) = chi) (hcm : chi.toNat = 35 ∨ chi.toNat = 59)
+    (hL : L.toNat < 2^63) (hbd : (BitVec.ofNat 64 idxNat + 1).toNat + d < 2^63)
+    (hdig : ∀ k, k < d → ((BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 k).toNat < L.toNat
+        ∧ (s.mem (p + ((BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 k))).toNat ≠ 10)
+    (hexit : L.toNat ≤ ((BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d).toNat
+        ∨ (s.mem (p + ((BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d))).toNat = 10) :
+    ∃ f st', exec env sl f Lib.hex0BodyS s
+      = some (st', .cont 0 [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]) ∧ st'.mem = s.mem := by
+  obtain ⟨ps, hps⟩ : ∃ y, y = prefSt s p (BitVec.ofNat 64 idxNat) := ⟨_, rfl⟩
+  have p7 : ps.rget 7 = chi.setWidth 64 := by rw [hps, prefSt_rget_7, hchar]
+  have p41 : ps.rget 41 = BitVec.ofNat 64 idxNat + 1 := by rw [hps, prefSt_rget_41]
+  have p10 : ps.rget 10 = p := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h10
+  have p11 : ps.rget 11 = L := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h11
+  have p24 : ps.rget 24 = 10 := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h24
+  have p27 : ps.rget 27 = 35 := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h27
+  have p18 : ps.rget 18 = 59 := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide)]; exact hr.h18
+  have p6 : ps.rget 6 = olen := by rw [hps, prefSt_rget_pres _ _ _ _ (by decide) (by decide) (by decide), h6]
+  have pmem : ps.mem = s.mem := by rw [hps, prefSt_mem]
+  have hev : ([Opnd.reg 41].map (evalOpnd ps)) = [BitVec.ofNat 64 idxNat + 1] := by
+    simp only [List.map_cons, evalOpnd_reg, List.map_nil, p41]
+  -- run the inner comment loop (j/j1/a/b picked per site)
+  have run_scc : ∀ (j j1 a b : Reg), SCok j j1 a b →
+      ∃ F s', exec env sl F (scWhile j j1 a b [.reg 41]) ps
+        = some (s', .cont 0 [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]) ∧ s'.mem = s.mem := by
+    intro j j1 a b hok
+    obtain ⟨F, s', hF, hmem⟩ := skip_loopS env sl p L olen j j1 a b hok hL d ps
+      (BitVec.ofNat 64 idxNat + 1) [.reg 41] hev p10 p11 p24 p6 (by rw [pmem] at *; exact hbd)
+      (fun k hk => by rw [pmem]; exact hdig k hk) (by rw [pmem]; exact hexit)
+    exact ⟨F, s', hF, hmem.trans pmem⟩
+  have hpass : ∀ (s' : St), catch0 [] (some (s', Outcome.cont 0
+        [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]))
+      = some (s', .cont 0 [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]) :=
+    fun s' => catch0_cont _ _ _ _
+  rcases hcm with h35 | h59
+  · obtain ⟨F, s', hsc, hmem⟩ := run_scc 42 43 44 45 (by unfold SCok; decide)
+    have hd : ∃ f, exec env sl f hex0DispatchS ps
+        = some (s', .cont 0 [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]) :=
+      exec_ifeE_then_pass env sl (ceqS_true 35 p7 p27 (by decide) h35) (hpass s')
+        ⟨_, by rw [skipCommentS_eq]; exact hsc⟩
+    rw [hps] at hd
+    obtain ⟨f, hf⟩ := body_lift env sl s p (BitVec.ofNat 64 idxNat) s' _ hr.h10 h5 hd
+    exact ⟨f, s', hf, hmem⟩
+  · obtain ⟨F, s', hsc, hmem⟩ := run_scc 46 47 48 49 (by unfold SCok; decide)
+    have hd : ∃ f, exec env sl f hex0DispatchS ps
+        = some (s', .cont 0 [(BitVec.ofNat 64 idxNat + 1) + BitVec.ofNat 64 d, olen]) :=
+      exec_ifeE_else_pass env sl (ceqS_false 35 p7 p27 (by decide) (by omega)) (hpass s')
+        (exec_ifeE_then_pass env sl (ceqS_true 59 p7 p18 (by decide) h59) (hpass s')
+          ⟨_, by rw [skipCommentS_eq]; exact hsc⟩)
+    rw [hps] at hd
+    obtain ⟨f, hf⟩ := body_lift env sl s p (BitVec.ofNat 64 idxNat) s' _ hr.h10 h5 hd
+    exact ⟨f, s', hf, hmem⟩
+
 end LowIR.SSA
