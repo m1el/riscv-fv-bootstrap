@@ -55,16 +55,17 @@ axioms track the Ctrl baseline `[propext, Classical.choice, Quot.sound]`
   comes from `exec_frame`), `signExtend_ofNat_small` + `exec_lit`. Commit
   `f567a00`.
 
-### Frontier — proof done; next is a semantics cleanup
+### Frontier — proof done; §8 loop-arg redesign DONE (2026-07-03)
 
 All phases (0–6) landed and sorry-free. The proof lives in
 `lean/LowIR/SSAProof/{ExecFacts,StrlenProof,Hex0Proof}.lean`; the headline
 theorem is `LowIR.SSA.hex0S_correct`. See §6 for the size comparison.
 
-**Next task (to implement): the loop-arg redesign — §8.** Switch the `while`
-back-edge from *rebuilding the term* (`inits := vs.map .const`) to *rebinding in
-the environment*, which deletes the one measurable proof tax (§6 tax #2). Do it
-before proving the next loop on this IR.
+**The §8 loop-arg redesign is implemented** (commit `ef17bbd`): the `while`
+back-edge now *rebinds in the environment* (`iterWhile`) instead of rebuilding
+the term. All three loop clients reproved; the `inits` families,
+`skipCommentS_eq` bridge, `.map .const` round-trips and `hev'` obligations are
+gone; axioms unchanged. Outcome in §8.
 
 The Phase-1 pattern that carried the whole campaign (existential fuel,
 `obtain ⟨x,h⟩ : ∃ y, y = E := ⟨_,rfl⟩` to name states without Mathlib's `set`,
@@ -268,7 +269,9 @@ with `lake env lean` while working). Keep `SSADump` a root too.
 Measured on the landed files (SSA `Hex0Proof.lean` = **1527**, reusable
 `ExecFacts.lean` = **715**, `StrlenProof.lean` = **214**; Ctrl
 `CtrlHex0Proof.lean` = **1703**, which *includes* the ~600-line spec-side layer
-the SSA proof imports verbatim rather than recounting).
+the SSA proof imports verbatim rather than recounting). After the §8
+rebind-in-env rework the counts are `Hex0Proof` **1519**, `ExecFacts` **736**,
+`StrlenProof` **213** — see §8 for the per-row deltas.
 
 | item | Ctrl baseline (lines) | SSA (lines) | notes |
 |---|---|---|---|
@@ -313,11 +316,12 @@ line-count reduction.
 - [ ] Phase 1 `strlenS_correct` — GO/NO-GO on the whole approach.
 - [ ] Phases 2→6 in order, comparison table updated per phase.
 
-## 8. NEXT (to implement) — loop-arg redesign: rebind-in-environment, not rebuild-the-`while`
+## 8. DONE (2026-07-03) — loop-arg redesign: rebind-in-environment, not rebuild-the-`while`
 
-**Decision: do this before proving the next loop on this IR.** It removes the
-single measurable proof tax the hex0 campaign surfaced (§6 tax #2). It is a
-*semantics change*, so it is a rework, not a free refactor.
+**Implemented in commit `ef17bbd`** (design + migration checklist below kept as
+the record; measured outcome at the end of this section). It removed the
+single measurable proof tax the hex0 campaign surfaced (§6 tax #2). It was a
+*semantics change*, so it was a rework, not a free refactor.
 
 ### The problem (what the current encoding costs)
 
@@ -370,29 +374,49 @@ evaluated once.
 
 ### Migration checklist (what it ripples through)
 
-- [ ] `LowIR/SSA.lean` — `exec` `while` clause: split into "evaluate `inits`
-      once → seed `vals`" + a `loop`/`iterate` step relation (or an inner
-      recursion on a value list) that does **not** reconstruct the term.
-      (Decide: separate `loop` relation vs. an internal fuel-recursion — keep
-      `while` as the single *surface* constructor either way.)
-- [ ] `LowIR/SSAProof/ExecFacts.lean` — restate the `exec_while_*` family
-      (`_unfold`, `_cont0`/`_contS`/`_brk0`/`_brkS`/`_ret`/`_F_*`, `_badlen`)
-      against the fixed-term/value-list form; `exec_mono`/`_le` and
-      `exec_frame`/`_frame_rget` should carry over (the frame theorem is
-      orthogonal to this change).
-- [ ] Reprove the three loop clients: `StrlenProof.strlen_loop`,
-      `Hex0Proof.skip_loopS`, `Hex0Proof.main_loop`. Expect each to **shrink** —
-      delete the `.map .const` `rw`s and the `hev'`/`skipCommentS_eq`/`hex0WhileS`
-      scaffolding; the invariant is stated directly over the value tuple.
-- [ ] Keep the `native_decide` batteries (`hex0S_matches_spec`, `strlenS_ok`)
-      green — the *surface* `run` behaviour must be unchanged (this is a proof-
-      side/semantics-cleanliness change, not a language change).
-- [ ] Re-check `#print axioms hex0S_correct` = `[propext, Classical.choice,
-      Quot.sound]` after the rework.
+- [x] `LowIR/SSA.lean` — `exec` `while` clause: evaluates `inits` once, then
+      hands off to the new top-level `iterWhile` iterator (budgeted recursion
+      on a value list; the term is never reconstructed). Resolution of the
+      open decision: a separate *function* `iterWhile` taking the branch
+      executor `step : Stmt → St → Option (St × Outcome)` as an argument —
+      `exec` passes itself one fuel level down (`exec env sl fuel`), which
+      Lean's structural recursion accepts as a partial application; `while`
+      stays the single surface constructor. Iteration budget `fuel+1` ≥ the
+      old accounting, so surface behaviour is unchanged.
+- [x] `LowIR/SSAProof/ExecFacts.lean` — `exec_while` (entry) + the
+      `iterWhile_*` head-step family (`_cont0`/`_contS`/`_brk0`/`_brkS`/
+      `_ret`/`_F_*`, `_zero`; `_badlen` unchanged); `iterWhile_mono` and
+      `iterWhile_frame` factor the loop halves of `exec_mono`/`exec_frame`,
+      whose `while` cases collapsed to one-line calls (−70 lines there, +90
+      for the new iterator lemmas; file 715 → 736).
+- [x] The three loop clients reproved: `strlen_loop`, `skip_loopS`,
+      `main_loop` — stated over `iterWhile` on the plain value tuple; the
+      `inits` quantification, `hev`/`hev'` obligations, `hlen` hypotheses,
+      per-iteration `.map .const` `rw`s, and the `scWhile`/`skipCommentS_eq`/
+      `hex0WhileS inits` term families are all deleted (only a one-time
+      `inits.map (evalOpnd s)` evaluation survives, at each `run`-level entry
+      — that one is inherent: inits ARE operands).
+- [x] `native_decide` batteries (`hex0S_matches_spec`, `strlenS_ok`) and the
+      SSA.lean `#guard` battery green, unchanged.
+- [x] `#print axioms hex0S_correct` = `[propext, Classical.choice,
+      Quot.sound]` (and `strlenS_correct` likewise).
 
-### Success criterion
+### Success criterion → outcome
 
 `main_loop` + `skip_loopS` + `strlen_loop` reprove with the per-iteration
 `.map .const` round-trips and the `skipCommentS_eq`/`hex0WhileS` bridges gone,
 and the §6 "comment skip" / "main loop" rows drop. If the loop lemmas do **not**
 get simpler, the redesign didn't pay — revert.
+
+**Outcome: kept.** All bridges/round-trips are gone and the induction is no
+longer over a *family* of `while` terms — the invariant is a statement about
+`(vals, mem)` with the loop term fixed, which is the structurally honest form
+(and what hex1/`compile_sim` should build on). The §6 rows did drop, but only
+modestly: comment-skip ~210 → **~206**, main-loop section ~460 → **~450**,
+strlen 214 → **213**, `Hex0Proof.lean` 1527 → **1519**. Offsets: `SSA.lean`
++15 (the `iterWhile` def), `ExecFacts.lean` +21 net. Honest reading: the
+`.map .const` ceremony was *small in lines* (the §6 flat-to-higher totals were
+dominated by taxes #1/#3, which this rework does not touch); the payoff is in
+statement shape — loop lemmas take 2–3 fewer hypotheses each, and the
+`iterWhile_mono`/`iterWhile_frame` pair now amortizes over every future loop
+proof on this IR.

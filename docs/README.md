@@ -26,7 +26,7 @@ indexed by the README.md of its own directory.
 ## Status & handoffs
 
 - [RESUME-PROGSIM.md](RESUME-PROGSIM.md) — **the ACTIVE handoff: proving `compile_sim` for Prog** (compiler correctness for the D7/D8 IR): the address-divergence obstacle and the P1 two-stack lowering decision, the simulation relation and theorem statements, the footprint side-condition design, six proof phases with risk/size estimates, file/build plan, and the vertical-slice go/no-go checkpoint.
-- [RESUME-SSA-HEX0.md](RESUME-SSA-HEX0.md) — plan (not started) for proving hex0 correct on the LowIRSSA experiment IR: the args-tuple loop invariant, the syntactic frame theorem replacing `Regs`/`Pres`, what imports verbatim from the Ctrl proof, six phases with the `strlenS` vertical slice as go/no-go, and the per-section size-comparison table against `CtrlHex0Proof.lean` (the comparison is the second deliverable).
+- [RESUME-SSA-HEX0.md](RESUME-SSA-HEX0.md) — the hex0-on-LowIRSSA campaign (**COMPLETE**, incl. the §8 rebind-in-env `while` rework): the args-tuple loop invariant, the syntactic frame theorem replacing `Regs`/`Pres`, what imports verbatim from the Ctrl proof, the per-section size-comparison table against `CtrlHex0Proof.lean` (the second deliverable), and the §8 loop-arg redesign record (`iterWhile` semantics + measured outcome).
 - [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) — handoff for the executable LowIR compiler cut (**DONE 2026-07-02**; kept for the design rationale): survey findings, Prog.lean IR core, memory-locals compilation strategy, differential-testing regime.
 
 (Handoffs for completed campaigns — hex0/hex1 status, task-#7 cross-check, the

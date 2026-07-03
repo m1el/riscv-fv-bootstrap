@@ -68,11 +68,15 @@ SSA IR sits noticeably closer to the Wasm text idiom than Prog does.
    validator's "unreachable polymorphism" in miniature; approximated here by
    the syntactic `mayBrk` over-approximation (cheap, admits some dead code,
    never rejects live code).
-6. **Loop iteration in `exec` is re-execution with `inits := consts of the
-   continued values`** — the tail call made literal, recursion at `fuel` from
-   `fuel+1` like every other case, so the clocked-semantics proof toolbox
-   (`exec_mono` style) carries over. Consequence: while-lemmas quantify over
-   `inits`.
+6. **Loop iteration in `exec` rebinds in the environment** (reworked
+   2026-07-03, RESUME-SSA-HEX0.md §8; originally it *rebuilt the term* with
+   `inits := consts of the continued values`, which forced while-lemmas to
+   quantify over `inits` and pay a `.map .const` round-trip per iteration).
+   Now `exec` evaluates `inits` ONCE and hands off to `iterWhile`, a budgeted
+   iterator that rebinds `args := vals` per head entry and recurses on the
+   SAME term with the continued values — loop lemmas are stated directly over
+   the value tuple; `iterWhile_mono`/`iterWhile_frame` give the loop halves of
+   `exec_mono`/`exec_frame`.
 
 ## What the battery validates (all `#guard`, executable)
 
