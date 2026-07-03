@@ -22,7 +22,10 @@ namespace LowIR.SSA
 open LowIR (Cond evalCond)
 open Rv64i (Word Byte)
 open LowIR.Ctrl.Hex0 (pnibR pnibR_nibble pnibR_eq_255_iff pnibR_lt_16 hexbyte_val
-  geuL_true geuL_false slt_true slt_false tn regionBytes boundedRun commentSkip)
+  geuL_true geuL_false slt_true slt_false tn regionBytes boundedRun commentSkip
+  lowStop lowStop_iff regionBytes_snoc regionBytes_store_self ofNat_succ
+  boundedRun_cons boundedRun_nil_coreSpec commentSkip_le commentSkip_get
+  commentSkip_run_ne decodeS_comment_reconcile)
 
 variable (env : Env) (sl : Word)
 
@@ -467,5 +470,331 @@ theorem skip_loopS (p L olen : Word) (j j1 a b : Reg) (hok : SCok j j1 a b)
           (hb := exec_mono_le env sl (Nat.le_max_left 6 F) (hbody 0)) (hvs := rfl)]
     rw [show ([cur+1].map Opnd.const) = [Opnd.const (cur+1)] from rfl, cur_step]
     exact exec_mono_le env sl (Nat.le_max_right 6 F) hF
+
+/-! ### Phase 4 — the loop body. Straight-line composition helpers (existential
+    fuel, `exec_mono_le` to align), then `body_space`/`body_comment`/`hexPathS_eff`
+    /`body_hex`, the three char-class outcomes of `hex0BodyS`. -/
+
+/-- Existential-fuel `seq` composition: a normal step then anything. -/
+theorem exec_seqE {s s' s'' : St} {a b : Stmt} {oc : Outcome}
+    (ha : ∃ fa, exec env sl fa a s = some (s', .normal))
+    (hb : ∃ fb, exec env sl fb b s' = some (s'', oc)) :
+    ∃ f, exec env sl f (.seq a b) s = some (s'', oc) := by
+  obtain ⟨fa, ha⟩ := ha; obtain ⟨fb, hb⟩ := hb
+  refine ⟨max fa fb + 1, ?_⟩
+  rw [exec_seq_normal (h := exec_mono_le env sl (Nat.le_max_left fa fb) ha)]
+  exact exec_mono_le env sl (Nat.le_max_right fa fb) hb
+
+/-- `err code` returns `[code, olen]` (status + current output length). -/
+theorem exec_errS (f code : Nat) (s : St) :
+    exec env sl (f+1) (Lib.err code) s = some (s, .ret [BitVec.ofNat 64 code, s.rget 6]) := by
+  unfold Lib.err; rw [exec_ret]; simp
+
+/-- `ife c a b [] (err code) .skip`, guard true → return `[code, olen]`. -/
+theorem ifeErrS_true (code : Nat) (c : Cond) (a b : Reg) (s : St)
+    (hc : evalCond c (s.rget a) (s.rget b) = true) :
+    ∃ f, exec env sl f (.ife c a b [] (Lib.err code) .skip) s
+      = some (s, .ret [BitVec.ofNat 64 code, s.rget 6]) := by
+  refine ⟨0+1+1, ?_⟩
+  rw [exec_ife_then (hc := hc), exec_errS, catch0_ret]
+
+/-- `ife c a b [] (err code) .skip`, guard false → fall through unchanged. -/
+theorem ifeErrS_false (code : Nat) (c : Cond) (a b : Reg) (s : St)
+    (hc : evalCond c (s.rget a) (s.rget b) = false) :
+    ∃ f, exec env sl f (.ife c a b [] (Lib.err code) .skip) s = some (s, .normal) := by
+  refine ⟨0+1+1, ?_⟩
+  rw [exec_ife_else (hc := hc), exec_skip, catch0_nil_normal]
+
+/-- Existential-fuel `seq` where the first statement returns from the function. -/
+theorem exec_seqE_ret {s s' : St} {a b : Stmt} {vs : List Word}
+    (ha : ∃ fa, exec env sl fa a s = some (s', .ret vs)) :
+    ∃ f, exec env sl f (.seq a b) s = some (s', .ret vs) := by
+  obtain ⟨fa, ha⟩ := ha; exact ⟨fa+1, exec_seq_ret (b := b) (h := ha)⟩
+
+/-- Memory congruence for `storeByte` under equal underlying memories. -/
+theorem storeByte_mem_congr {s0 s1 : St} (a : Word) (b : Byte) (h : s0.mem = s1.mem) :
+    (s0.storeByte a b).mem = (s1.storeByte a b).mem := by
+  show (fun x => if x = a then b else s0.mem x) = (fun x => if x = a then b else s1.mem x)
+  rw [h]
+
+/-- `storeByte` leaves the register file untouched. -/
+@[simp] theorem rget_storeByte (s : St) (a : Word) (b : Byte) (r : Reg) :
+    (s.storeByte a b).rget r = s.rget r := rfl
+
+/-! ### `hexPathS_eff` — the `<BYTE>` two-nibble path, six mutually-exclusive
+    outcomes. `err code = .ret [code, olen]`; the success arm `cont 0 [idx+2,
+    olen+1]` with the emitted byte stored at `q+olen`. The status register and
+    `Regs` re-establishment of the Ctrl version are gone. -/
+theorem hexPathS_eff (s : St) (p L q cap olen : Word) (idx : Nat) (chi : Byte)
+    (hr : RegsS s p L q cap) (h6 : s.rget 6 = olen)
+    (h41 : s.rget 41 = BitVec.ofNat 64 (idx+1)) (h7 : s.rget 7 = chi.setWidth 64)
+    (hidx1 : idx + 1 < 2^64) :
+    (pnibR chi = 255 ∧ ∃ f st', exec env sl f Lib.hexPathS s
+        = some (st', .ret [BitVec.ofNat 64 5, olen]) ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ L.toNat ≤ idx+1 ∧ ∃ f st', exec env sl f Lib.hexPathS s
+        = some (st', .ret [BitVec.ofNat 64 4, olen]) ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ idx+1 < L.toNat ∧ lowStop (s.mem (p + BitVec.ofNat 64 (idx+1)))
+        ∧ ∃ f st', exec env sl f Lib.hexPathS s = some (st', .ret [BitVec.ofNat 64 3, olen])
+        ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ idx+1 < L.toNat ∧ ¬ lowStop (s.mem (p + BitVec.ofNat 64 (idx+1)))
+        ∧ pnibR (s.mem (p + BitVec.ofNat 64 (idx+1))) = 255
+        ∧ ∃ f st', exec env sl f Lib.hexPathS s = some (st', .ret [BitVec.ofNat 64 5, olen])
+        ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ idx+1 < L.toNat ∧ ¬ lowStop (s.mem (p + BitVec.ofNat 64 (idx+1)))
+        ∧ pnibR (s.mem (p + BitVec.ofNat 64 (idx+1))) ≠ 255 ∧ cap.toNat ≤ olen.toNat
+        ∧ ∃ f st', exec env sl f Lib.hexPathS s = some (st', .ret [BitVec.ofNat 64 2, olen])
+        ∧ st'.mem = s.mem)
+  ∨ (pnibR chi ≠ 255 ∧ idx+1 < L.toNat ∧ ¬ lowStop (s.mem (p + BitVec.ofNat 64 (idx+1)))
+        ∧ pnibR (s.mem (p + BitVec.ofNat 64 (idx+1))) ≠ 255 ∧ olen.toNat < cap.toNat
+        ∧ ∃ f st', exec env sl f Lib.hexPathS s
+            = some (st', .cont 0 [BitVec.ofNat 64 (idx+1) + 1, olen + 1])
+        ∧ st'.mem = (s.storeByte (q + olen)
+              (((pnibR chi <<< 4) ||| pnibR (s.mem (p + BitVec.ofNat 64 (idx+1)))).setWidth 8)).mem) := by
+  -- s1 = after `pnibS 28 54 55 7`
+  obtain ⟨s1, hs1exec, hs1_28, hs1mem⟩ :=
+    pnibS_eff env sl s 28 54 55 7 chi h7 hr.h17 hr.h20 hr.h21 hr.h22 hr.h23
+      (by decide) (by decide) (by decide)
+  have hs1 : ∀ (r : Reg), r ∉ SSA.defs (Lib.pnibS 28 54 55 7) → s1.rget r = s.rget r :=
+    fun r h => exec_frame_rget env sl 6 _ s s1 .normal hs1exec r h
+  have hs1_19 : s1.rget 19 = 255 := (hs1 19 (by decide)).trans hr.h19
+  have hs1_6 : s1.rget 6 = olen := (hs1 6 (by decide)).trans h6
+  have hstep1 : ∃ f, exec env sl f (Lib.pnibS 28 54 55 7) s = some (s1, .normal) := ⟨6, hs1exec⟩
+  by_cases hbad : pnibR chi = 255
+  · -- ARM A: bad high nibble → Unknown (5)
+    refine Or.inl ⟨hbad, ?_⟩
+    obtain ⟨f, hf⟩ := exec_seqE env sl hstep1
+      (exec_seqE_ret env sl (ifeErrS_true env sl 5 .eq 28 19 s1 (weqS_true hs1_28 hs1_19 hbad)))
+    exact ⟨f, s1, by rw [← hs1_6]; exact hf, hs1mem⟩
+  · have hcond2 : evalCond .eq (s1.rget 28) (s1.rget 19) = false := weqS_false hs1_28 hs1_19 hbad
+    have hstep2 : ∃ f, exec env sl f (.ife .eq 28 19 [] (Lib.err 5) .skip) s1 = some (s1, .normal) :=
+      ifeErrS_false env sl 5 .eq 28 19 s1 hcond2
+    have hs1_10 : s1.rget 10 = p := (hs1 10 (by decide)).trans hr.h10
+    have hs1_41 : s1.rget 41 = BitVec.ofNat 64 (idx+1) := (hs1 41 (by decide)).trans h41
+    have hs1_11 : s1.rget 11 = L := (hs1 11 (by decide)).trans hr.h11
+    have hm1 : (BitVec.ofNat 64 (idx+1)).toNat = idx+1 := tn (idx+1) hidx1
+    by_cases hodd : L.toNat ≤ idx+1
+    · -- ARM B: input exhausted → OddEnd (4)
+      refine Or.inr (Or.inl ⟨hbad, hodd, ?_⟩)
+      have hcond3 : evalCond .geu (s1.rget 41) (s1.rget 11) = true :=
+        geu_wwS_true hs1_41 hs1_11 (by rw [hm1]; exact hodd)
+      obtain ⟨f, hf⟩ := exec_seqE env sl hstep1 (exec_seqE env sl hstep2
+        (exec_seqE_ret env sl (ifeErrS_true env sl 4 .geu 41 11 s1 hcond3)))
+      exact ⟨f, s1, by rw [← hs1_6]; exact hf, hs1mem⟩
+    · have hlt1 : idx+1 < L.toNat := by omega
+      have hcond3f : evalCond .geu (s1.rget 41) (s1.rget 11) = false :=
+        geu_wwS_false hs1_41 hs1_11 (by rw [hm1]; exact hlt1)
+      have hstep3 : ∃ f, exec env sl f (.ife .geu 41 11 [] (Lib.err 4) .skip) s1 = some (s1, .normal) :=
+        ifeErrS_false env sl 4 .geu 41 11 s1 hcond3f
+      -- read the low char: add 56 / lbu 57 / addi 58 → s6
+      have hstep4 : ∃ f, exec env sl f (.add 56 10 41) s1
+          = some (s1.rset 56 (p + BitVec.ofNat 64 (idx+1)), .normal) :=
+        ⟨0+1, by rw [exec_add, hs1_10, hs1_41]⟩
+      have hstep5 : ∃ f, exec env sl f (.lbu 57 56 0) (s1.rset 56 (p + BitVec.ofNat 64 (idx+1)))
+          = some ((s1.rset 56 (p + BitVec.ofNat 64 (idx+1))).rset 57
+              ((s.mem (p + BitVec.ofNat 64 (idx+1))).setWidth 64), .normal) := by
+        refine ⟨0+1, ?_⟩; rw [exec_lbu]
+        simp only [rget_rset_eq _ 56 _ (by decide), zero_signExtend, wadd_zero, loadByte_eq,
+          rset_mem, hs1mem]
+      obtain ⟨s6, hs6def⟩ : ∃ y, y = ((s1.rset 56 (p + BitVec.ofNat 64 (idx+1))).rset 57
+          ((s.mem (p + BitVec.ofNat 64 (idx+1))).setWidth 64)).rset 58 (BitVec.ofNat 64 (idx+1) + 1) :=
+        ⟨_, rfl⟩
+      have hstep6 : ∃ f, exec env sl f (.addi 58 41 1)
+            ((s1.rset 56 (p + BitVec.ofNat 64 (idx+1))).rset 57
+              ((s.mem (p + BitVec.ofNat 64 (idx+1))).setWidth 64)) = some (s6, .normal) := by
+        refine ⟨0+1, ?_⟩
+        rw [exec_addi, one_signExtend, rget_rset_ne _ 57 41 _ (by decide),
+            rget_rset_ne _ 56 41 _ (by decide), hs1_41, hs6def]
+      -- s6 register facts
+      have hs6 : ∀ (r : Reg), r ≠ 58 → r ≠ 57 → r ≠ 56 → s6.rget r = s1.rget r := by
+        intro r h58 h57 h56
+        rw [hs6def, rget_rset_ne _ _ _ _ h58, rget_rset_ne _ _ _ _ h57, rget_rset_ne _ _ _ _ h56]
+      have hs1_24 : s1.rget 24 = 10 := (hs1 24 (by decide)).trans hr.h24
+      have hs1_25 : s1.rget 25 = 32 := (hs1 25 (by decide)).trans hr.h25
+      have hs1_26 : s1.rget 26 = 95 := (hs1 26 (by decide)).trans hr.h26
+      have hs1_27 : s1.rget 27 = 35 := (hs1 27 (by decide)).trans hr.h27
+      have hs1_18 : s1.rget 18 = 59 := (hs1 18 (by decide)).trans hr.h18
+      have hs1_17 : s1.rget 17 = 55 := (hs1 17 (by decide)).trans hr.h17
+      have hs1_20 : s1.rget 20 = 48 := (hs1 20 (by decide)).trans hr.h20
+      have hs1_21 : s1.rget 21 = 57 := (hs1 21 (by decide)).trans hr.h21
+      have hs1_22 : s1.rget 22 = 65 := (hs1 22 (by decide)).trans hr.h22
+      have hs1_23 : s1.rget 23 = 70 := (hs1 23 (by decide)).trans hr.h23
+      have hs1_12 : s1.rget 12 = q := (hs1 12 (by decide)).trans hr.h12
+      have hs1_13 : s1.rget 13 = cap := (hs1 13 (by decide)).trans hr.h13
+      have hs6_57 : s6.rget 57 = (s.mem (p + BitVec.ofNat 64 (idx+1))).setWidth 64 := by
+        rw [hs6def, rget_rset_ne _ 58 57 _ (by decide), rget_rset_eq _ 57 _ (by decide)]
+      have hs6_58 : s6.rget 58 = BitVec.ofNat 64 (idx+1) + 1 := by
+        rw [hs6def, rget_rset_eq _ 58 _ (by decide)]
+      have hs6_24 : s6.rget 24 = 10 := (hs6 24 (by decide) (by decide) (by decide)).trans hs1_24
+      have hs6_25 : s6.rget 25 = 32 := (hs6 25 (by decide) (by decide) (by decide)).trans hs1_25
+      have hs6_26 : s6.rget 26 = 95 := (hs6 26 (by decide) (by decide) (by decide)).trans hs1_26
+      have hs6_27 : s6.rget 27 = 35 := (hs6 27 (by decide) (by decide) (by decide)).trans hs1_27
+      have hs6_18 : s6.rget 18 = 59 := (hs6 18 (by decide) (by decide) (by decide)).trans hs1_18
+      have hs6_17 : s6.rget 17 = 55 := (hs6 17 (by decide) (by decide) (by decide)).trans hs1_17
+      have hs6_20 : s6.rget 20 = 48 := (hs6 20 (by decide) (by decide) (by decide)).trans hs1_20
+      have hs6_21 : s6.rget 21 = 57 := (hs6 21 (by decide) (by decide) (by decide)).trans hs1_21
+      have hs6_22 : s6.rget 22 = 65 := (hs6 22 (by decide) (by decide) (by decide)).trans hs1_22
+      have hs6_23 : s6.rget 23 = 70 := (hs6 23 (by decide) (by decide) (by decide)).trans hs1_23
+      have hs6_6  : s6.rget 6  = olen := (hs6 6 (by decide) (by decide) (by decide)).trans hs1_6
+      have hs6_28 : s6.rget 28 = pnibR chi := (hs6 28 (by decide) (by decide) (by decide)).trans hs1_28
+      have hs6_12 : s6.rget 12 = q := (hs6 12 (by decide) (by decide) (by decide)).trans hs1_12
+      have hs6_13 : s6.rget 13 = cap := (hs6 13 (by decide) (by decide) (by decide)).trans hs1_13
+      have hs6_19 : s6.rget 19 = 255 := (hs6 19 (by decide) (by decide) (by decide)).trans hs1_19
+      have hmem6 : s6.mem = s.mem := by rw [hs6def]; simp [hs1mem]
+      -- compose the first six statements onto any tail starting at `ife 57 …`
+      have compose6 : ∀ {tail : Stmt} {s'' : St} {oc : Outcome},
+          (∃ f, exec env sl f tail s6 = some (s'', oc)) →
+          ∃ f, exec env sl f (.seq (Lib.pnibS 28 54 55 7) (.seq (.ife .eq 28 19 [] (Lib.err 5) .skip)
+            (.seq (.ife .geu 41 11 [] (Lib.err 4) .skip) (.seq (.add 56 10 41) (.seq (.lbu 57 56 0)
+            (.seq (.addi 58 41 1) tail)))))) s = some (s'', oc) := fun htail =>
+        exec_seqE env sl hstep1 (exec_seqE env sl hstep2 (exec_seqE env sl hstep3
+          (exec_seqE env sl hstep4 (exec_seqE env sl hstep5 (exec_seqE env sl hstep6 htail)))))
+      by_cases hls : lowStop (s.mem (p + BitVec.ofNat 64 (idx+1)))
+      · -- ARM C: low-stop char → Split (3)
+        refine Or.inr (Or.inr (Or.inl ⟨hbad, hlt1, hls, ?_⟩))
+        have hls' : (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat = 10
+            ∨ (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat = 32
+            ∨ (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat = 95
+            ∨ (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat = 35
+            ∨ (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat = 59 := hls
+        rcases hls' with h | h | h | h | h
+        · obtain ⟨f, hf⟩ := compose6 (exec_seqE_ret env sl
+            (ifeErrS_true env sl 3 .eq 57 24 s6 (ceqS_true 10 hs6_57 hs6_24 (by decide) h)))
+          exact ⟨f, s6, by rw [← hs6_6]; exact hf, hmem6⟩
+        · obtain ⟨f, hf⟩ := compose6 (exec_seqE env sl
+            (ifeErrS_false env sl 3 .eq 57 24 s6 (ceqS_false 10 hs6_57 hs6_24 (by decide) (by omega)))
+            (exec_seqE_ret env sl
+              (ifeErrS_true env sl 3 .eq 57 25 s6 (ceqS_true 32 hs6_57 hs6_25 (by decide) h))))
+          exact ⟨f, s6, by rw [← hs6_6]; exact hf, hmem6⟩
+        · obtain ⟨f, hf⟩ := compose6 (exec_seqE env sl
+            (ifeErrS_false env sl 3 .eq 57 24 s6 (ceqS_false 10 hs6_57 hs6_24 (by decide) (by omega)))
+            (exec_seqE env sl
+              (ifeErrS_false env sl 3 .eq 57 25 s6 (ceqS_false 32 hs6_57 hs6_25 (by decide) (by omega)))
+              (exec_seqE_ret env sl
+                (ifeErrS_true env sl 3 .eq 57 26 s6 (ceqS_true 95 hs6_57 hs6_26 (by decide) h)))))
+          exact ⟨f, s6, by rw [← hs6_6]; exact hf, hmem6⟩
+        · obtain ⟨f, hf⟩ := compose6 (exec_seqE env sl
+            (ifeErrS_false env sl 3 .eq 57 24 s6 (ceqS_false 10 hs6_57 hs6_24 (by decide) (by omega)))
+            (exec_seqE env sl
+              (ifeErrS_false env sl 3 .eq 57 25 s6 (ceqS_false 32 hs6_57 hs6_25 (by decide) (by omega)))
+              (exec_seqE env sl
+                (ifeErrS_false env sl 3 .eq 57 26 s6 (ceqS_false 95 hs6_57 hs6_26 (by decide) (by omega)))
+                (exec_seqE_ret env sl
+                  (ifeErrS_true env sl 3 .eq 57 27 s6 (ceqS_true 35 hs6_57 hs6_27 (by decide) h))))))
+          exact ⟨f, s6, by rw [← hs6_6]; exact hf, hmem6⟩
+        · obtain ⟨f, hf⟩ := compose6 (exec_seqE env sl
+            (ifeErrS_false env sl 3 .eq 57 24 s6 (ceqS_false 10 hs6_57 hs6_24 (by decide) (by omega)))
+            (exec_seqE env sl
+              (ifeErrS_false env sl 3 .eq 57 25 s6 (ceqS_false 32 hs6_57 hs6_25 (by decide) (by omega)))
+              (exec_seqE env sl
+                (ifeErrS_false env sl 3 .eq 57 26 s6 (ceqS_false 95 hs6_57 hs6_26 (by decide) (by omega)))
+                (exec_seqE env sl
+                  (ifeErrS_false env sl 3 .eq 57 27 s6 (ceqS_false 35 hs6_57 hs6_27 (by decide) (by omega)))
+                  (exec_seqE_ret env sl
+                    (ifeErrS_true env sl 3 .eq 57 18 s6 (ceqS_true 59 hs6_57 hs6_18 (by decide) h)))))))
+          exact ⟨f, s6, by rw [← hs6_6]; exact hf, hmem6⟩
+      · -- not a low-stop char: read the second nibble
+        have hn10 : (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat ≠ 10 := fun h => hls (Or.inl h)
+        have hn32 : (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat ≠ 32 := fun h => hls (Or.inr (Or.inl h))
+        have hn95 : (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat ≠ 95 := fun h => hls (Or.inr (Or.inr (Or.inl h)))
+        have hn35 : (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat ≠ 35 := fun h => hls (Or.inr (Or.inr (Or.inr (Or.inl h))))
+        have hn59 : (s.mem (p + BitVec.ofNat 64 (idx+1))).toNat ≠ 59 := fun h => hls (Or.inr (Or.inr (Or.inr (Or.inr h))))
+        obtain ⟨s7, hs7exec, hs7_29, hs7mem⟩ :=
+          pnibS_eff env sl s6 29 59 60 57 (s.mem (p + BitVec.ofNat 64 (idx+1)))
+            hs6_57 hs6_17 hs6_20 hs6_21 hs6_22 hs6_23 (by decide) (by decide) (by decide)
+        have hs7 : ∀ (r : Reg), r ∉ SSA.defs (Lib.pnibS 29 59 60 57) → s7.rget r = s6.rget r :=
+          fun r h => exec_frame_rget env sl 6 _ s6 s7 .normal hs7exec r h
+        have hs7_19 : s7.rget 19 = 255 := (hs7 19 (by decide)).trans hs6_19
+        have hs7_6  : s7.rget 6  = olen := (hs7 6 (by decide)).trans hs6_6
+        have hs7_13 : s7.rget 13 = cap := (hs7 13 (by decide)).trans hs6_13
+        have hs7_12 : s7.rget 12 = q := (hs7 12 (by decide)).trans hs6_12
+        have hs7_28 : s7.rget 28 = pnibR chi := (hs7 28 (by decide)).trans hs6_28
+        have hs7_58 : s7.rget 58 = BitVec.ofNat 64 (idx+1) + 1 := (hs7 58 (by decide)).trans hs6_58
+        have hs7mem' : s7.mem = s.mem := hs7mem.trans hmem6
+        -- 5 low-stop ifes (all false) + pnib29, then any tail on s7
+        have hmid : ∀ {tail : Stmt} {s'' : St} {oc : Outcome},
+            (∃ f, exec env sl f tail s7 = some (s'', oc)) →
+            ∃ f, exec env sl f (.seq (.ife .eq 57 24 [] (Lib.err 3) .skip)
+              (.seq (.ife .eq 57 25 [] (Lib.err 3) .skip) (.seq (.ife .eq 57 26 [] (Lib.err 3) .skip)
+              (.seq (.ife .eq 57 27 [] (Lib.err 3) .skip) (.seq (.ife .eq 57 18 [] (Lib.err 3) .skip)
+              (.seq (Lib.pnibS 29 59 60 57) tail)))))) s6 = some (s'', oc) := fun htail =>
+          exec_seqE env sl (ifeErrS_false env sl 3 .eq 57 24 s6 (ceqS_false 10 hs6_57 hs6_24 (by decide) hn10))
+            (exec_seqE env sl (ifeErrS_false env sl 3 .eq 57 25 s6 (ceqS_false 32 hs6_57 hs6_25 (by decide) hn32))
+            (exec_seqE env sl (ifeErrS_false env sl 3 .eq 57 26 s6 (ceqS_false 95 hs6_57 hs6_26 (by decide) hn95))
+            (exec_seqE env sl (ifeErrS_false env sl 3 .eq 57 27 s6 (ceqS_false 35 hs6_57 hs6_27 (by decide) hn35))
+            (exec_seqE env sl (ifeErrS_false env sl 3 .eq 57 18 s6 (ceqS_false 59 hs6_57 hs6_18 (by decide) hn59))
+            (exec_seqE env sl (show ∃ f, exec env sl f (Lib.pnibS 29 59 60 57) s6 = some (s7, .normal)
+                from ⟨6, hs7exec⟩) htail)))))
+        by_cases hbad2 : pnibR (s.mem (p + BitVec.ofNat 64 (idx+1))) = 255
+        · -- ARM D: bad low nibble → Unknown (5)
+          refine Or.inr (Or.inr (Or.inr (Or.inl ⟨hbad, hlt1, hls, hbad2, ?_⟩)))
+          obtain ⟨f, hf⟩ := compose6 (hmid (exec_seqE_ret env sl
+            (ifeErrS_true env sl 5 .eq 29 19 s7 (weqS_true hs7_29 hs7_19 hbad2))))
+          exact ⟨f, s7, by rw [← hs7_6]; exact hf, hs7mem'⟩
+        · by_cases hfull : cap.toNat ≤ olen.toNat
+          · -- ARM E: output full → OutputShort (2)
+            refine Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨hbad, hlt1, hls, hbad2, hfull, ?_⟩))))
+            obtain ⟨f, hf⟩ := compose6 (hmid (exec_seqE env sl
+              (ifeErrS_false env sl 5 .eq 29 19 s7 (weqS_false hs7_29 hs7_19 hbad2))
+              (exec_seqE_ret env sl
+                (ifeErrS_true env sl 2 .geu 6 13 s7 (geu_wwS_true hs7_6 hs7_13 hfull)))))
+            exact ⟨f, s7, by rw [← hs7_6]; exact hf, hs7mem'⟩
+          · -- ARM F: write the byte, continue
+            have hfull2 : olen.toNat < cap.toNat := by omega
+            refine Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨hbad, hlt1, hls, hbad2, hfull2, ?_⟩))))
+            -- the write steps: slli / orr / add / sb / addi / cont
+            have hslli : ∃ f, exec env sl f (.slli 50 28 4) s7
+                = some (s7.rset 50 (pnibR chi <<< 4), .normal) :=
+              ⟨0+1, by rw [exec_slli, hs7_28]⟩
+            have horr : ∃ f, exec env sl f (.orr 51 50 29) (s7.rset 50 (pnibR chi <<< 4))
+                = some ((s7.rset 50 (pnibR chi <<< 4)).rset 51
+                    ((pnibR chi <<< 4) ||| pnibR (s.mem (p + BitVec.ofNat 64 (idx+1)))), .normal) := by
+              refine ⟨0+1, ?_⟩
+              rw [exec_orr, rget_rset_eq _ 50 _ (by decide), rget_rset_ne _ 50 29 _ (by decide), hs7_29]
+            have hadd52 : ∃ f, exec env sl f (.add 52 12 6)
+                  ((s7.rset 50 (pnibR chi <<< 4)).rset 51
+                    ((pnibR chi <<< 4) ||| pnibR (s.mem (p + BitVec.ofNat 64 (idx+1)))))
+                = some (((s7.rset 50 (pnibR chi <<< 4)).rset 51
+                    ((pnibR chi <<< 4) ||| pnibR (s.mem (p + BitVec.ofNat 64 (idx+1))))).rset 52
+                    (q + olen), .normal) := by
+              refine ⟨0+1, ?_⟩
+              rw [exec_add, rget_rset_ne _ 51 12 _ (by decide), rget_rset_ne _ 50 12 _ (by decide), hs7_12,
+                  rget_rset_ne _ 51 6 _ (by decide), rget_rset_ne _ 50 6 _ (by decide), hs7_6]
+            obtain ⟨s11, hs11def⟩ : ∃ y, y = (((s7.rset 50 (pnibR chi <<< 4)).rset 51
+                ((pnibR chi <<< 4) ||| pnibR (s.mem (p + BitVec.ofNat 64 (idx+1))))).rset 52
+                (q + olen)).storeByte (q + olen)
+                (((pnibR chi <<< 4) ||| pnibR (s.mem (p + BitVec.ofNat 64 (idx+1)))).setWidth 8) := ⟨_, rfl⟩
+            have hsb : ∃ f, exec env sl f (.sb 52 51 0)
+                  (((s7.rset 50 (pnibR chi <<< 4)).rset 51
+                    ((pnibR chi <<< 4) ||| pnibR (s.mem (p + BitVec.ofNat 64 (idx+1))))).rset 52 (q + olen))
+                = some (s11, .normal) := by
+              refine ⟨0+1, ?_⟩
+              rw [exec_sb, rget_rset_eq _ 52 _ (by decide),
+                  rget_rset_ne _ 52 51 _ (by decide), rget_rset_eq _ 51 _ (by decide),
+                  zero_signExtend, wadd_zero, hs11def]
+            have hs11_6 : s11.rget 6 = olen := by
+              rw [hs11def, rget_storeByte, rget_rset_ne _ 52 6 _ (by decide),
+                  rget_rset_ne _ 51 6 _ (by decide), rget_rset_ne _ 50 6 _ (by decide), hs7_6]
+            have haddi53 : ∃ f, exec env sl f (.addi 53 6 1) s11 = some (s11.rset 53 (olen + 1), .normal) := by
+              refine ⟨0+1, ?_⟩; rw [exec_addi, one_signExtend, hs11_6]
+            have hs12_58 : (s11.rset 53 (olen + 1)).rget 58 = BitVec.ofNat 64 (idx+1) + 1 := by
+              rw [rget_rset_ne _ 53 58 _ (by decide), hs11def, rget_storeByte,
+                  rget_rset_ne _ 52 58 _ (by decide), rget_rset_ne _ 51 58 _ (by decide),
+                  rget_rset_ne _ 50 58 _ (by decide), hs7_58]
+            have hs12_53 : (s11.rset 53 (olen + 1)).rget 53 = olen + 1 := rget_rset_eq _ 53 _ (by decide)
+            have hcont : ∃ f, exec env sl f (.cont 0 [.reg 58, .reg 53]) (s11.rset 53 (olen + 1))
+                = some (s11.rset 53 (olen + 1), .cont 0 [BitVec.ofNat 64 (idx+1) + 1, olen + 1]) := by
+              refine ⟨0+1, ?_⟩; rw [exec_cont]
+              simp only [List.map_cons, evalOpnd_reg, List.map_nil, hs12_58, hs12_53]
+            obtain ⟨f, hf⟩ := compose6 (hmid (exec_seqE env sl
+              (ifeErrS_false env sl 5 .eq 29 19 s7 (weqS_false hs7_29 hs7_19 hbad2))
+              (exec_seqE env sl
+                (ifeErrS_false env sl 2 .geu 6 13 s7 (geu_wwS_false hs7_6 hs7_13 hfull2))
+                (exec_seqE env sl hslli (exec_seqE env sl horr (exec_seqE env sl hadd52
+                  (exec_seqE env sl hsb (exec_seqE env sl haddi53 hcont))))))))
+            refine ⟨f, s11.rset 53 (olen + 1), hf, ?_⟩
+            -- memory: the byte written at q+olen
+            rw [rset_mem, hs11def]
+            exact storeByte_mem_congr _ _ (by
+              rw [rset_mem, rset_mem, rset_mem]; exact hs7mem')
 
 end LowIR.SSA
