@@ -498,6 +498,307 @@ theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
         exact FramesPres_trans holes s.sp fd m (stepN ks m) (stepN k (stepN ks m))
           hFrs (by rw [hsp] at hFrK; exact hFrK)
 
+/-! ## The prologue simulator (`prologue_sim`, RESUME-CALL W5).
+
+    The machine prologue (`prologueI fd`) transforms a CALL-ENTRY machine state
+    (x2 = the caller's sp, `a0..` = the argument values, ra = the return address)
+    into the callee's entry state: it drops sp by `totalFrame` (= `userOff +
+    frameSize`), saves ra at `[sp', sp'+8)`, parks the params from `a0..`,
+    zero-inits every other register slot, and materializes the user-frame base
+    into `frameReg`'s slot. We show the resulting machine state satisfies the
+    callee's `StInv` against `frameEnter`'s IL state (with the P1 pad `= userOff`).
+
+    The heart is the last-wins agreement between the machine's sequential param
+    stores and the IL's `withParams` left fold: both write slot `params[i]` the
+    value `argVals[i]` in order, so the last write to any register wins on both
+    sides. We capture this with `parkFold` — literally `frameEnter`'s fold — and
+    show the machine memory tracks it pointwise on slots, off a shifted base. -/
+
+/-- The IL's `withParams` left fold, factored out (matches `frameEnter` verbatim):
+    fold the `(param, argVal)` pairs into a register file, last write winning. -/
+def parkFold (base : Nat → Word) (pairs : List (Nat × Word)) : Nat → Word :=
+  pairs.foldl (fun rf pv => fun r => if r = pv.1 then pv.2 else rf r) base
+
+@[simp] theorem parkFold_nil (base : Nat → Word) : parkFold base [] = base := rfl
+
+theorem parkFold_cons (base : Nat → Word) (p : Nat × Word) (ps : List (Nat × Word)) :
+    parkFold base (p :: ps) = parkFold (fun r => if r = p.1 then p.2 else base r) ps := rfl
+
+/-- `parkFold b ps target` depends on `b` only through `b target`: two bases that
+    agree at `target` give the same result (either `target` is a fold key — then
+    the answer is a paired value — or it isn't, and the answer is `b target`). -/
+theorem parkFold_base_congr (target : Nat) :
+    ∀ (ps : List (Nat × Word)) (b1 b2 : Nat → Word), b1 target = b2 target →
+      parkFold b1 ps target = parkFold b2 ps target
+  | [], _, _, h => h
+  | p :: ps, b1, b2, h => by
+      rw [parkFold_cons, parkFold_cons]
+      apply parkFold_base_congr target ps
+      by_cases hp : target = p.1
+      · rw [if_pos hp, if_pos hp]
+      · rw [if_neg hp, if_neg hp]; exact h
+
+/-- If `target` is not among the fold keys, `parkFold` just reads the base there. -/
+theorem parkFold_not_mem (target : Nat) :
+    ∀ (ps : List (Nat × Word)) (b : Nat → Word), target ∉ ps.map Prod.fst →
+      parkFold b ps target = b target
+  | [], _, _ => rfl
+  | p :: ps, b, h => by
+      simp only [List.map_cons, List.mem_cons, not_or] at h
+      rw [parkFold_cons, parkFold_not_mem target ps _ h.2]
+      simp only [if_neg h.1]
+
+/-- `Installed` reads `m` only through `m.mem` (fetch overrides `pc`), so a `pc`
+    write preserves it. -/
+theorem Installed_setPc (L : Layout) (m : State) (p : Word) (h : Installed L m) :
+    Installed L (m.setPc p) := h
+
+@[simp] theorem loadWord_setPc (m : State) (p a : Word) :
+    (m.setPc p).loadWord a = m.loadWord a := rfl
+
+/-- Run one prologue slot store `sd SP tsrc (slotOff r)` (`r ≠ 0`, `r ≤ maxRegF`)
+    from a machine state whose x2 already holds the callee sp `sp`: it writes
+    `m.rget tsrc` into slot `r`, advances pc, and leaves every register, the whole
+    memory outside the frame hole `[sp, sp+userOff)`, `Installed`, and every OTHER
+    live slot untouched. The bespoke (StInv-free) analogue of `run_storeFrom` used
+    inside the prologue, where no full `StInv` holds mid-parking. -/
+theorem run_slotStore (L : Layout) (fd : FunDef) (m : State) (sp : Word) (r tsrc q : Nat)
+    (hr1 : 1 ≤ r) (hrm : r ≤ maxRegF fd)
+    (hsp : m.rget SP = sp)
+    (hpc : m.pc = L.codeBase + BitVec.ofNat 64 q)
+    (hinst : Installed L m)
+    (hem : Emitted L q [Instr.sd SP tsrc (BitVec.ofNat 12 (slotOff r))])
+    (huser : userOff fd ≤ 2000)
+    (hnw : sp.toNat + userOff fd ≤ 2 ^ 64)
+    (hseg : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
+    (hbd : L.codeBase.toNat + L.blobLen ≤ sp.toNat ∨ sp.toNat + userOff fd ≤ L.codeBase.toNat) :
+    (step m).pc = L.codeBase + BitVec.ofNat 64 (q + 4)
+    ∧ (∀ t, (step m).rget t = m.rget t)
+    ∧ Installed L (step m)
+    ∧ (∀ a : Word, ¬ memRange a sp (userOff fd) → (step m).mem a = m.mem a)
+    ∧ (step m).loadWord (sp + BitVec.ofNat 64 (slotOff r)) = m.rget tsrc
+    ∧ (∀ target : Nat, target ≠ r → 1 ≤ target → target ≤ maxRegF fd →
+         (step m).loadWord (sp + BitVec.ofNat 64 (slotOff target))
+           = m.loadWord (sp + BitVec.ofNat 64 (slotOff target))) := by
+  have hslot8 : slotOff r + 8 ≤ userOff fd := slotOff_add8_le_userOff fd r hrm
+  have hslot : slotOff r < 2 ^ 11 := by omega
+  have hlen : (0 : Nat) < ([Instr.sd SP tsrc (BitVec.ofNat 12 (slotOff r))]).length := by simp
+  have hd : decode (fetch32 m) = Instr.sd SP tsrc (BitVec.ofNat 12 (slotOff r)) := by
+    have h := decode_at L m m q [Instr.sd SP tsrc (BitVec.ofNat 12 (slotOff r))] hem hinst 0 hlen
+                (by simpa using hpc) rfl
+    simpa using h
+  have hatoNat : (sp + BitVec.ofNat 64 (slotOff r)).toNat = sp.toNat + slotOff r :=
+    slotAddr_toNat sp r (by omega)
+  have hwa : (sp + BitVec.ofNat 64 (slotOff r)).toNat + 8 ≤ 2 ^ 64 := by rw [hatoNat]; omega
+  have hstep : step m
+      = (m.storeWord (sp + BitVec.ofNat 64 (slotOff r)) (m.rget tsrc)).setPc (m.pc + 4) := by
+    rw [step_sd m SP tsrc _ hd, hsp, signExtend_ofNat_lt (slotOff r) hslot]
+  have hInstStore : Installed L (m.storeWord (sp + BitVec.ofNat 64 (slotOff r)) (m.rget tsrc)) := by
+    apply Installed_storeWord_off_blob L m _ _ hinst hseg hblob hwa
+    rw [hatoNat]; rcases hbd with hbd | hbd
+    · exact Or.inl (by omega)
+    · exact Or.inr (by omega)
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hstep, pc_setPc, hpc, pc_add4]
+  · intro t; rw [hstep, rget_setPc, State_storeWord_rget]
+  · rw [hstep]; exact Installed_setPc L _ _ hInstStore
+  · intro a hna
+    rw [hstep, mem_setPc]
+    apply Rv64i.storeWord_mem_outside m _ _ a hwa
+    rw [hatoNat]
+    rcases Nat.lt_or_ge a.toNat sp.toNat with hlt | hge
+    · exact Or.inl (by omega)
+    · exact Or.inr (by
+        have : ¬ a.toNat < sp.toNat + userOff fd := fun hh => hna ⟨hge, hh⟩
+        omega)
+  · rw [hstep, loadWord_setPc]; exact loadWord_store_slot_same m sp (m.rget tsrc) r
+  · intro target htr _ htm
+    have htslot8 : slotOff target + 8 ≤ userOff fd := slotOff_add8_le_userOff fd target htm
+    rw [hstep, loadWord_setPc]
+    exact loadWord_store_slot_ne m sp (m.rget tsrc) r target (Ne.symm htr) (by omega) (by omega)
+
+/-- Run the prologue's param-parking segment (`params.zipIdx.flatMap (storeSlotI
+    pi.1 (A pi.2))`) from a machine state whose x2 = the callee sp and whose
+    `a(base+i)` hold the argument values: the machine memory's slot contents track
+    the IL `parkFold` (= `frameEnter`'s `withParams`) pointwise, off a base that is
+    the ENTRY slot contents. All registers, `Installed`, and off-frame memory are
+    preserved. The last-wins heart of `prologue_sim`. -/
+theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
+    (huser : userOff fd ≤ 2000)
+    (hnw : sp.toNat + userOff fd ≤ 2 ^ 64)
+    (hseg : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
+    (hbd : L.codeBase.toNat + L.blobLen ≤ sp.toNat ∨ sp.toNat + userOff fd ≤ L.codeBase.toNat) :
+    ∀ (params : List Nat) (argVals : List Word) (base q : Nat) (m : State),
+      m.rget SP = sp →
+      m.pc = L.codeBase + BitVec.ofNat 64 q →
+      Emitted L q ((params.zipIdx base).flatMap fun pi => storeSlotI pi.1 (A pi.2)) →
+      Installed L m →
+      (∀ p ∈ params, p ≤ maxRegF fd) →
+      params.length = argVals.length →
+      (∀ i, (hi : i < argVals.length) → m.rget (A (base + i)) = argVals[i]) →
+      ∃ k, (stepN k m).rget SP = sp
+         ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64
+             (q + 4 * ((params.zipIdx base).flatMap fun pi => storeSlotI pi.1 (A pi.2)).length)
+         ∧ (∀ t, (stepN k m).rget t = m.rget t)
+         ∧ Installed L (stepN k m)
+         ∧ (∀ a : Word, ¬ memRange a sp (userOff fd) → (stepN k m).mem a = m.mem a)
+         ∧ (∀ target : Nat, 1 ≤ target → target ≤ maxRegF fd →
+              (stepN k m).loadWord (sp + BitVec.ofNat 64 (slotOff target))
+                = parkFold (fun t => m.loadWord (sp + BitVec.ofNat 64 (slotOff t)))
+                    (params.zip argVals) target) := by
+  intro params
+  induction params with
+  | nil =>
+      intro argVals base q m hsp hpc _ hinst _ _ _
+      refine ⟨0, by simpa using hsp, ?_, fun t => by rw [stepN_zero], by simpa using hinst,
+              fun a _ => by rw [stepN_zero], fun target _ _ => ?_⟩
+      · simp only [stepN_zero, List.zipIdx_nil, List.flatMap_nil, List.length_nil, Nat.mul_zero,
+                   Nat.add_zero]; exact hpc
+      · rw [stepN_zero]; rfl
+  | cons r rest ih =>
+      intro argVals base q m hsp hpc hem hinst hreg hlen hval
+      obtain ⟨v, vrest, rfl⟩ : ∃ v vrest, argVals = v :: vrest := by
+        cases argVals with
+        | nil => simp at hlen
+        | cons v vrest => exact ⟨v, vrest, rfl⟩
+      simp only [List.zipIdx_cons, List.flatMap_cons] at hem
+      have hv0 : m.rget (A base) = v := by
+        have h := hval 0 (by simp)
+        rwa [Nat.add_zero, List.getElem_cons_zero] at h
+      by_cases hr0 : r = 0
+      · -- reg-0 param: `storeSlotI 0 _ = []`, no machine step
+        subst hr0
+        have hs0 : storeSlotI 0 (A base) = [] := by simp [storeSlotI]
+        rw [hs0, List.nil_append] at hem
+        have hval' : ∀ i, (hi : i < vrest.length) → m.rget (A (base + 1 + i)) = vrest[i] := by
+          intro i hi
+          have h := hval (i + 1) (by simp only [List.length_cons]; omega)
+          rw [show base + (i + 1) = base + 1 + i from by omega, List.getElem_cons_succ] at h
+          exact h
+        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK⟩ :=
+          ih vrest (base + 1) q m hsp hpc hem hinst
+            (fun p hp => hreg p (List.mem_cons_of_mem 0 hp)) (by simpa using hlen) hval'
+        refine ⟨k, hspK, ?_, hregK, hinstK, hmemK, ?_⟩
+        · rw [hpcK]; apply pc_congr
+          simp only [List.zipIdx_cons, List.flatMap_cons, hs0, List.nil_append]
+        · intro target ht1 htm
+          rw [hslotK target ht1 htm]
+          rw [show (0 :: rest).zip (v :: vrest) = (0, v) :: rest.zip vrest from rfl, parkFold_cons]
+          apply parkFold_base_congr target
+          have htne : target ≠ 0 := by omega
+          simp only [if_neg htne]
+      · -- real param store
+        have hemL : Emitted L q [Instr.sd SP (A base) (BitVec.ofNat 12 (slotOff r))] := by
+          have h := Emitted_append_left _ _ _ _ hem
+          rwa [storeSlotI, if_neg hr0] at h
+        obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne⟩ :=
+          run_slotStore L fd m sp r (A base) q (by omega) (hreg r (by simp)) hsp hpc hinst hemL
+            huser hnw hseg hblob hbd
+        have hemR : Emitted L (q + 4)
+            ((rest.zipIdx (base + 1)).flatMap fun pi => storeSlotI pi.1 (A pi.2)) := by
+          have h := Emitted_append_right _ _ _ _ hem
+          rw [storeSlotI, if_neg hr0, List.length_singleton, Nat.mul_one] at h; exact h
+        have hstep1 : stepN 1 m = step m := rfl
+        have hsp' : (step m).rget SP = sp := by rw [hreg1]; exact hsp
+        have hval' : ∀ i, (hi : i < vrest.length) → (step m).rget (A (base + 1 + i)) = vrest[i] := by
+          intro i hi
+          rw [hreg1 (A (base + 1 + i))]
+          have h := hval (i + 1) (by simp only [List.length_cons]; omega)
+          rw [show base + (i + 1) = base + 1 + i from by omega, List.getElem_cons_succ] at h
+          exact h
+        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK⟩ :=
+          ih vrest (base + 1) (q + 4) (step m) hsp' hpc1 hemR hinst1
+            (fun p hp => hreg p (List.mem_cons_of_mem r hp)) (by simpa using hlen) hval'
+        refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_⟩
+        · rw [stepN_add, hstep1]; exact hspK
+        · rw [stepN_add, hstep1, hpcK]; apply pc_congr
+          simp only [List.zipIdx_cons, List.flatMap_cons, storeSlotI, if_neg hr0,
+                     List.length_append, List.length_singleton]
+          omega
+        · intro t; rw [stepN_add, hstep1, hregK, hreg1]
+        · rw [stepN_add, hstep1]; exact hinstK
+        · intro a ha; rw [stepN_add, hstep1, hmemK a ha, hmem1 a ha]
+        · intro target ht1 htm
+          rw [stepN_add, hstep1, hslotK target ht1 htm,
+              show (r :: rest).zip (v :: vrest) = (r, v) :: rest.zip vrest from rfl, parkFold_cons]
+          apply parkFold_base_congr target
+          by_cases htr : target = r
+          · subst htr; rw [hslotr, hv0, if_pos rfl]
+          · rw [hslotne target htr ht1 htm, if_neg htr]
+
+/-- Run the prologue's zero-init segment (`sd SP 0 (slotOff r)` for each register
+    in the filtered list `regs`): every slot in `regs` ends holding `0` (the IL
+    fresh-register-file zeroing), every slot OUTSIDE `regs` is untouched, and all
+    registers / `Installed` / off-frame memory are preserved. -/
+theorem run_zeroSlots (L : Layout) (fd : FunDef) (sp : Word)
+    (huser : userOff fd ≤ 2000)
+    (hnw : sp.toNat + userOff fd ≤ 2 ^ 64)
+    (hseg : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
+    (hbd : L.codeBase.toNat + L.blobLen ≤ sp.toNat ∨ sp.toNat + userOff fd ≤ L.codeBase.toNat) :
+    ∀ (regs : List Nat) (q : Nat) (m : State),
+      m.rget SP = sp →
+      m.pc = L.codeBase + BitVec.ofNat 64 q →
+      Emitted L q (regs.map (fun r => Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r)))) →
+      Installed L m →
+      (∀ r ∈ regs, 1 ≤ r ∧ r ≤ maxRegF fd) →
+      ∃ k, (stepN k m).rget SP = sp
+         ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (q + 4 * regs.length)
+         ∧ (∀ t, (stepN k m).rget t = m.rget t)
+         ∧ Installed L (stepN k m)
+         ∧ (∀ a : Word, ¬ memRange a sp (userOff fd) → (stepN k m).mem a = m.mem a)
+         ∧ (∀ target : Nat, target ∈ regs →
+              (stepN k m).loadWord (sp + BitVec.ofNat 64 (slotOff target)) = 0)
+         ∧ (∀ target : Nat, 1 ≤ target → target ≤ maxRegF fd → target ∉ regs →
+              (stepN k m).loadWord (sp + BitVec.ofNat 64 (slotOff target))
+                = m.loadWord (sp + BitVec.ofNat 64 (slotOff target))) := by
+  intro regs
+  induction regs with
+  | nil =>
+      intro q m hsp hpc _ hinst _
+      refine ⟨0, by simpa using hsp, ?_, fun t => by rw [stepN_zero], by simpa using hinst,
+              fun a _ => by rw [stepN_zero], fun target ht => by simp at ht,
+              fun target _ _ _ => by rw [stepN_zero]⟩
+      simp only [stepN_zero, List.length_nil, Nat.mul_zero, Nat.add_zero]; exact hpc
+  | cons r rest ih =>
+      intro q m hsp hpc hem hinst hbounds
+      simp only [List.map_cons] at hem
+      obtain ⟨hr1, hrm⟩ := hbounds r (by simp)
+      have hemL : Emitted L q [Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r))] :=
+        Emitted_append_left _ _ _ _ hem
+      obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne⟩ :=
+        run_slotStore L fd m sp r 0 q hr1 hrm hsp hpc hinst hemL huser hnw hseg hblob hbd
+      have hslot_r0 : (step m).loadWord (sp + BitVec.ofNat 64 (slotOff r)) = 0 := by
+        rw [hslotr]; rfl
+      have hemR : Emitted L (q + 4)
+          (rest.map (fun r => Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r)))) := by
+        have h := Emitted_append_right L q [Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r))] _ hem
+        rw [List.length_singleton, Nat.mul_one] at h; exact h
+      have hstep1 : stepN 1 m = step m := rfl
+      have hsp' : (step m).rget SP = sp := by rw [hreg1]; exact hsp
+      obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hzeroK, hpresK⟩ :=
+        ih (q + 4) (step m) hsp' hpc1 hemR hinst1
+          (fun p hp => hbounds p (List.mem_cons_of_mem r hp))
+      refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      · rw [stepN_add, hstep1]; exact hspK
+      · rw [stepN_add, hstep1, hpcK]; apply pc_congr
+        simp only [List.length_cons]; omega
+      · intro t; rw [stepN_add, hstep1, hregK, hreg1]
+      · rw [stepN_add, hstep1]; exact hinstK
+      · intro a ha; rw [stepN_add, hstep1, hmemK a ha, hmem1 a ha]
+      · intro target ht
+        rw [stepN_add, hstep1]
+        rcases List.mem_cons.mp ht with rfl | ht'
+        · by_cases hmr : target ∈ rest
+          · exact hzeroK target hmr
+          · rw [hpresK target hr1 hrm hmr]; exact hslot_r0
+        · exact hzeroK target ht'
+      · intro target ht1 htm htni
+        simp only [List.mem_cons, not_or] at htni
+        rw [stepN_add, hstep1, hpresK target ht1 htm htni.2, hslotne target htni.1 ht1 htm]
+
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat} {dpos fnPos : Name → Nat}
