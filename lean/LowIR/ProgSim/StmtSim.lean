@@ -660,17 +660,31 @@ theorem contL_sim
   obtain ⟨rfl, -⟩ := hexec
   exact jump_sim L fd holes s m here tgt _ hinv hpc hem rfl hlo hhi
 
+/-- The straight-line / memory *leaf* statements — exactly the constructors whose
+    lowering `emit` resolves without a label environment (no jumps). These are the
+    cases `lower_sim` proves; the outcome-carrying `lower_sim_cf` (CtrlSim) handles
+    every control-flow constructor itself and delegates ONLY these leaves back here,
+    so restricting `lower_sim` to them keeps it total-and-`sorry`-free (a control-flow
+    `stmt` with `emit stmt = []` is not simulable by 0 machine steps — that is why
+    those cases never belonged to this theorem). -/
+def isLeaf : PStmt → Bool
+  | .skip | .annot _
+  | .addi .. | .add .. | .sub .. | .orr .. | .slli .. | .srli ..
+  | .lbu .. | .sb .. | .ld .. | .sd .. => true
+  | _ => false
+
 /-! ## `lower_sim` — the statement-level simulation (VERTICAL SLICE).
 
-    If the IL says `stmt` runs `s ↦ s'` with a `.normal` outcome, and the machine
-    sits at `codeBase + pos` in a `StInv`-related state with `emit stmt` installed
-    there, then it runs `k` steps to `codeBase + (pos + 4·|emit stmt|)` in a state
-    still `StInv`-related to `s'`. Covers the straight-line slice
-    (skip/annot/arith/**mem**/seq); the control-flow cases (whose outcome selects a
-    label target) and the `cref/clen` const-data cases are the `sorry`'d remainder
-    (Phases 4.3–4.4). `MemAccOff` (the memory-access side condition) is trivial for
-    the non-memory cases. The frame/blob-placement hypotheses
-    (`hframe`/`hnw`/`hseg`/`hblob`/`hbd`) are `SlotFacts`' side conditions. -/
+    If the IL says a *leaf* `stmt` (`isLeaf`) runs `s ↦ s'` with a `.normal` outcome,
+    and the machine sits at `codeBase + pos` in a `StInv`-related state with
+    `emit stmt` installed there, then it runs `k` steps to
+    `codeBase + (pos + 4·|emit stmt|)` in a state still `StInv`-related to `s'`.
+    Covers the straight-line slice (skip/annot/arith/**mem**); control flow (seq,
+    ife/while/block, brk/cont/ret, call, cref/clen) is the domain of the
+    outcome-carrying `lower_sim_cf` in CtrlSim, which delegates these leaves here.
+    `MemAccOff` (the memory-access side condition) is trivial for the non-memory
+    cases. The frame/blob-placement hypotheses (`hframe`/`hnw`/`hseg`/`hblob`/`hbd`)
+    are `SlotFacts`' side conditions. -/
 theorem lower_sim
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole}
@@ -686,13 +700,14 @@ theorem lower_sim
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
     (hbd   : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
                ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat)
-    (haccess : MemAccOff L holes P dbase pad stackLo fuel stmt s) :
+    (haccess : MemAccOff L holes P dbase pad stackLo fuel stmt s)
+    (hleaf : isLeaf stmt = true) :
     ∃ k, StInv L fd holes s' (stepN k m)
        ∧ (stepN k m).pc
            = L.codeBase + BitVec.ofNat 64 (pos + 4 * (emit stmt).length) := by
-  induction fuel generalizing stmt s s' m pos with
+  cases fuel with
   | zero => exact absurd hexec (by simp [LowIR.Prog.exec])
-  | succ fuel ih =>
+  | succ fuel =>
     cases stmt
     case skip =>
       rw [LowIR.Prog.exec_skip, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -782,36 +797,6 @@ theorem lower_sim
         (by have := slotOff_add8_le_userOff fd r2 hr2; omega)
         (by have := slotOff_add8_le_userOff fd rd hrd; omega)
         hnw hseg hblob hbd (fun m' hd hT0 hT1 => by rw [step_or m' T0 T0 T1 hd, hT0, hT1])
-    case seq a b =>
-      simp only [maxRegS] at hreg
-      obtain ⟨haccA, haccB⟩ := haccess
-      -- `a` must finish `.normal` (any other outcome would surface as the seq's
-      -- outcome, contradicting `= some (s', .normal)`); then chain the fuel `ih`.
-      cases hea : LowIR.Prog.exec P dbase pad stackLo fuel a s with
-      | none => rw [LowIR.Prog.exec_seq_none (h := hea)] at hexec; exact absurd hexec (by simp)
-      | some r =>
-        obtain ⟨s1, o⟩ := r
-        cases o with
-        | normal =>
-          rw [LowIR.Prog.exec_seq_normal (h := hea)] at hexec
-          have hemA : Emitted L pos (emit a) := Emitted_append_left L pos _ _ hem
-          have hemB : Emitted L (pos + 4 * (emit a).length) (emit b) :=
-            Emitted_append_right L pos _ _ hem
-          have hregA : maxRegS a ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
-          have hregB : maxRegS b ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
-          obtain ⟨k1, hinvA, hpcA⟩ :=
-            ih a s s1 m pos hea hinv hpc hemA hregA hnw hbd haccA
-          have hsp : s1.sp = s.sp := StInv_sp_eq L fd holes s s1 m (stepN k1 m) hinv hinvA
-          obtain ⟨k2, hinvB, hpcB⟩ :=
-            ih b s1 s' (stepN k1 m) (pos + 4 * (emit a).length) hexec hinvA hpcA hemB hregB
-              (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd) (haccB s1 hea)
-          refine ⟨k1 + k2, ?_, ?_⟩
-          · rw [stepN_add]; exact hinvB
-          · rw [stepN_add, hpcB]
-            exact pc_congr _ (by simp only [emit, List.length_append]; omega)
-        | brk k => rw [LowIR.Prog.exec_seq_brk (h := hea)] at hexec; exact absurd hexec (by simp)
-        | cont k => rw [LowIR.Prog.exec_seq_cont (h := hea)] at hexec; exact absurd hexec (by simp)
-        | ret => rw [LowIR.Prog.exec_seq_ret (h := hea)] at hexec; exact absurd hexec (by simp)
     case ld rd rs imm =>
       rw [LowIR.Prog.exec_ld, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, -⟩ := hexec
@@ -1000,7 +985,8 @@ theorem lower_sim
       · rw [hrun, pc_setPc, h2pc, pc_add4]
         exact pc_congr _ (by simp only [emit, List.length_append, loadSlotI_length,
                                         List.length_cons, List.length_nil])
-    all_goals sorry
+    -- the non-leaf constructors are excluded by `hleaf` (they are `lower_sim_cf`'s job)
+    all_goals simp [isLeaf] at hleaf
 
 /-! ## Toy end-to-end corollary: `sub3` — the differential-oracle sanity check.
 

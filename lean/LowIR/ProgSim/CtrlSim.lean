@@ -397,7 +397,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.addi rd rs imm) s _ m here
           (LowIR.Prog.exec_addi P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case add rd r1 r2 =>
       rw [LowIR.Prog.exec_add, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -405,7 +405,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.add rd r1 r2) s _ m here
           (LowIR.Prog.exec_add P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case sub rd r1 r2 =>
       rw [LowIR.Prog.exec_sub, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -413,7 +413,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.sub rd r1 r2) s _ m here
           (LowIR.Prog.exec_sub P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case orr rd r1 r2 =>
       rw [LowIR.Prog.exec_orr, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -421,7 +421,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.orr rd r1 r2) s _ m here
           (LowIR.Prog.exec_orr P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case slli rd rs sh =>
       rw [LowIR.Prog.exec_slli, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -429,7 +429,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.slli rd rs sh) s _ m here
           (LowIR.Prog.exec_slli P dbase pad stackLo fuel rd rs sh s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case srli rd rs sh =>
       rw [LowIR.Prog.exec_srli, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -437,7 +437,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.srli rd rs sh) s _ m here
           (LowIR.Prog.exec_srli P dbase pad stackLo fuel rd rs sh s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case lbu rd rs imm =>
       rw [LowIR.Prog.exec_lbu, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -445,7 +445,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.lbu rd rs imm) s _ m here
           (LowIR.Prog.exec_lbu P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case ld rd rs imm =>
       rw [LowIR.Prog.exec_ld, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -453,7 +453,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.ld rd rs imm) s _ m here
           (LowIR.Prog.exec_ld P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case sb rb rv imm =>
       rw [LowIR.Prog.exec_sb, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -461,7 +461,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.sb rb rv imm) s _ m here
           (LowIR.Prog.exec_sb P dbase pad stackLo fuel rb rv imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case sd rb rv imm =>
       rw [LowIR.Prog.exec_sd, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -469,7 +469,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck⟩ :=
         lower_sim (fuel + 1) (.sd rb rv imm) s _ m here
           (LowIR.Prog.exec_sd P dbase pad stackLo fuel rb rv imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess
+          hseg hblob hbd haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
     case ife c a b t e =>
       simp only [maxRegS] at hreg
