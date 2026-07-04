@@ -449,9 +449,15 @@ before W4, several details deviate from the pre-implementation sketch below:
   induction (`testBit_pow_two_sub_one`, only `testBit_zero`/`testBit_succ`/`omega`).
   `getLsbD0_of_even` bridges `toNat % 2 = 0 → getLsbD 0 = false`. `halign` (codeBase
   alignment feeding the evenness) still a W7 flat hypothesis.
-- **W5+W6 COMPLETE** (`a71e29c`, `d1ee7dd`; both axiom-clean `[propext, Quot.sound]`).
-  Next **W3+W7** (generalize induction over `fd`/`holes`/`epiPos` + the call-case
-  assembly) then **W8** (`#print axioms lower_sim_cf` + doc updates).
+- **W5, W6, W3, C6, C4, exec_call_inv, and call-assembly segs 1–2 all DONE and
+  committed** (`a71e29c` W5, `d1ee7dd` W6, `58583fd` exec_call_inv, `fb530e5` W3,
+  `223c885` C6, `f538cbd` C4, `caff546` segs 1–2). The lone `sorry` is now
+  mid-call-assembly (after seg 2). **Next: segs 3–6 — see §6.** The blocker is
+  seg-3/seg-5 memory agreement (the C2 payoff): `prologue_sim`'s `hmemF` needs
+  IL↔machine agreement on the user frame `[s.sp−frameSize, s.sp)`, which is inside
+  the free stack that StInv c4 excludes. **Study RESUME-PROGSIM §2's memory-agreement
+  threading before writing seg 3.** Everything else in segs 3–6 is plumbing with
+  sources itemised in §6.
 - **W5 GOTCHA (cost real time):** a ∀-quantified lemma's `(l.zipIdx base)`
   instantiated at `base:=0` is a DIFFERENT omega-atom than a literal `l.zipIdx`
   in the same goal — rfl/defeq-equal, but `omega` hashes them apart and splits
@@ -464,17 +470,109 @@ before W4, several details deviate from the pre-implementation sketch below:
 |---|---|---|---|
 | W1 | ✅ DONE (`bf83654`). C5 defs: `csize`/`emitCF` call arms + `fnPos`, `prologueI`/`epilogueI`/sizes, `matchesRealProg`, `#guard`s on caller/chain/recSum + a corner-case fn. NO proofs | ~200 | low — pure defs, decidably validated |
 | W2 | ✅ DONE (`d2d5e54` C2 + `07ab057` C3). C2+C3 surgery: `StInv` (stackLo FIELD, free-stack `OffPriv` domain, ordering + no-wrap conjuncts), `MemAccOff` strengthening, `FramesPres` as a separate ∧ conclusion; re-threaded everything incl. `sub3_body_sim`. `hbd` reshape deferred to W7 | ~500 delta | done — the ∧-at-top FramesPres (not woven into StInv) kept it tractable |
-| W3 | C1: add `fd holes epiPos` to `generalizing`; existing cases pass current values to the 3 extra IH args. **Do together with W7** (only the call case needs it) | ~50 delta | low |
+| W3 | ✅ COMPLETE (`fb530e5`). Added `fd holes epiPos` to `generalizing`; fd/holes/epiPos are inferred at every existing ih-call from hinv/hem, so the only ripple was `hframe` (reverted, appended to all 11 ih-calls) | ~50 delta | done |
 | W4 | ✅ COMPLETE. Atoms: `step_jalr`+`run_storeFrom` (W4a `e0161c3`), `run_marshalFrom` (W4b `d7e0e69`), `run_retStoresFrom`+`run_storeFrom` reg-preservation (W4c `177504e`), `jalr_lands`+`word_and_not_one`+`testBit_pow_two_sub_one`+`getLsbD0_of_even` (W4d `0045c3c`). `park_lastwins` → W5; `halign` → W7. `run_loadTo` unneeded (`run_load` already generic over target `t`) | ~450 | done. **Reg-typed ≠ is invisible to omega**; **`~~~`/`not` lemmas are Classical-tainted** — see STATUS |
 | W5 | ✅ COMPLETE (`a71e29c`). `prologue_sim` standalone: G0 (sp drop + ra save) → G1 param park (`run_parkParams`/`parkFold`) → G2 zero-init (`run_zeroSlots`) → G3 frameReg (`run_slotStore`). Callee-frame mem obligation carried as entry hyp `hmemF` (W7 discharges). Axiom-clean `[propext, Quot.sound]`. `zipIdx`-atom omega gotcha → `generalize` | ~300 | done — the three-way per-slot walk landed via the segment-runner atoms + `parkFold_mem_indep`/`parkFold_not_mem` |
 | W6 | ✅ COMPLETE (`d1ee7dd`). `epilogue_sim` standalone: G1 ret-marshalling (`run_marshalFrom`) → G2 `ld ra` (slot-0 restore, hyp `hraslot`) → G3 `addi sp` (P1 dealloc) → G4 `jalr` (`jalr_lands`, `hraeven`). NO stores ⇒ mem untouched. Axiom-clean `[propext, Quot.sound]` | ~150 | done — the fixed ld/addi/jalr decode_at pc-side closes by rw-rfl (4·1,4·2 reduce) |
-| W7 | C4 hyps (`hpad`/`hfn`/`halign`) + C6 arm + the call case assembly (§4) | ~300 | medium — pure plumbing if W2–W6 landed as stated |
+| W7 | **IN PROGRESS.** ✅ `exec_call_inv` (`58583fd`), ✅ C6 MemAccOff call arm (`223c885`), ✅ C4 hyps `hpad`/`halign`/`hfn`/`hhere4` (`f538cbd`), ✅ assembly **segs 1–2** marshal+jal (`caff546`). **Remaining: segs 3–6** (see §6 below) | ~300 | segs 3/5 memory-agreement (C2 payoff) is the hard part — see §6 ⚠ |
 | W8 | `#print axioms lower_sim_cf` → target `[propext, Quot.sound]` (no `sorryAx` left at statement level); update RESUME-PROGSIM status + [PROGRESS.md](PROGRESS.md); record `hpad`/`hfn`/`halign` as Phase-2 obligations next to `hdat`/`hdbase`/`hdpos` | ~30 | — |
 
 Total ≈ 2000 lines — consistent with RESUME-PROGSIM's Phase-5 estimate.
 Axiom discipline as always: split conjunction goals before `omega`
 (Classical.choice), one-layer unfolders only (`exec_call_*` exist in
 `ExecFacts.lean`), never `simp [exec]` with the IH in context.
+
+## 6. W7 assembly — remaining segments 3–6 (handoff, 2026-07-04)
+
+The call case in `lower_sim_cf` (CtrlSim.lean, `case call argc rvc f args rets`)
+currently ends at a `sorry` after segment 2. State names in scope there:
+`gd` (callee FunDef), `callee` (frameEnter entry St), `s1` (body result), `ocb`
+(`.normal`/`.ret`), `hlk`/`harity`/`hfe`/`hbody`/`hs'`; `hfnEm`/`hfnBnd`/`hfnBr`/
+`hfnTF`/`hfnFS8` (the `hfn f gd hlk` bundle); `hpadf : pad f = userOff gd`;
+`hbndArgc : here+4·argc < 2^20`; and the seg-2 outputs `hJalInv` (caller StInv at
+`m_jal := step (stepN kMar m)`), `hJalPc` (pc = codeBase+fnPos f), `hJalRA` (RA =
+codeBase+(here+4·argc)+4 = the return addr `ra'`), `hJalMem` (= m.mem),
+`hMarVal` (A i = s.rget args[i]).
+
+**Seg 3 — prologue** (`prologue_sim` at `fd:=gd`, `holes:=holes`, `m:=m_jal`,
+`sp0:=s.sp`, `ra:=ra'`, `callee:=callee`, `argVals:=args.toList.map s.rget`,
+`p:=fnPos f`). Extract `callee`'s fields from `hfe`: `rw [hpadf] at hfe;
+simp only [frameEnter] at hfe; split at hfe` — overflow branch is `none=some`
+(absurd); else `rw [Option.some.injEq] at hfe` gives `{regs,mem:=s.mem,
+sp:=(s.sp-ofNat frameSize)-ofNat(userOff gd)} = callee`. From it derive:
+`hcsp : callee.sp = s.sp - ofNat(totalFrame gd)` (`rw [←hfe]; simp only
+[totalFrame]; bv_omega`); `hcrg` (the `if frameReg … else parkFold …` — `rw
+[St.rget, if_neg, ←hfe]` then `rfl`, `parkFold` IS the `withParams` foldl);
+`hcmem : callee.mem = s.mem`; and `hbudget : stackLo.toNat+frameSize+userOff gd
+≤ s.sp.toNat` (from the `¬(s.sp.toNat < …)` split hyp) — gives `hsp0ge` and
+`stackLo ≤ callee.sp` for the hbd propagation. `hem` from `hfnEm` via two
+`Emitted_append_left`. `hargs` = `hMarVal` + jal preserves A-regs + `argVals[i]
+= s.rget args.toList[i]` (`List.getElem_map`). `hlen`: `gd.params.toList.length
+= gd.argc = argc = argVals.length` (Vector, `hgargc`). `hparb`/`hfrb` structural
+from `maxRegF gd` (mem_le_foldl_max / Nat.le_max chain). `htf` = `hfnTF`, `hfs8`
+= `hfnFS8`. `hsp0align`: caller StInv c6 gives `s.sp.toNat % 8 = 0`.
+
+⚠ **`hmemF` IS THE BLOCKER (the C2 "where it pays" step).** `prologue_sim`'s
+`hmemF : ∀ a, OffPriv L ((callee.sp,userOff gd)::holes) callee.sp a →
+callee.mem a = m_jal.mem a`. With `callee.mem = s.mem` and `m_jal.mem = m.mem`,
+this reduces to `s.mem a = m.mem a` on `OffPriv_callee a`. The caller StInv c4
+gives that only on `OffPriv_caller a`, and **OffPriv_callee ⇏ OffPriv_caller**:
+the user frame `[s.sp−frameSize, s.sp)` (= `[callee.sp+userOff, s.sp)`, the
+frameReg-relative locals, IL-visible so NOT a hole) satisfies OffPriv_callee
+(≥ callee.sp, not in the `(callee.sp,userOff gd)` hole) but is inside
+`[stackLo, s.sp)` so is EXCLUDED by OffPriv_caller's free-stack conjunct
+(`¬memRange a stackLo (s.sp−stackLo)`). So `hmemF` on the user frame needs
+`s.mem = m.mem` on a region the caller's invariant says nothing about.
+Resolution options to investigate (RESUME-PROGSIM §2 is the source of truth):
+(a) the free stack `[stackLo, sp)` agrees IL↔machine at entry because neither
+side has written it since `installData` (both start equal) — but StInv c4
+deliberately excludes it precisely because nested calls DO write it, so this
+needs an *additional* threaded invariant (free-stack agreement above the
+current deepest write) or a strengthening of what `lower_sim_cf` carries;
+(b) reconsider whether prologue_sim's pushed hole should cover more; (c) a new
+flat hypothesis. **Do not guess — study the C2 memory-agreement threading
+first.** The same subtlety recurs in seg 5 (RESUME-CALL §4 step 5, "this is
+where C2 pays").
+
+**Seg 4 — body IH** (`ih` at `fd:=gd`, `holes:=(callee.sp,userOff gd)::holes`,
+`epiPos:=epiPos':=fnPos f+4·prologueSize gd+4·csize gd.body`, `stmt:=gd.body`,
+`s:=callee`, `s':=s1`, `oc:=ocb`, `m:=m_pro`, `here:=bodyPos:=fnPos f+
+4·prologueSize gd`, `brkPos:=contPos:=[]`). `hexec`=`hbody`. `hinv` from seg 3.
+`hem`: `hfnEm` middle via `Emitted_append_left ∘ Emitted_append_right`. `hbd`
+(reshaped): disjunct-1 `codeBase+blob ≤ stackLo ∧ stackLo ≤ callee.sp` (from
+caller hbd disjunct-1 + `hbudget`); disjunct-2 self-propagates. `haccess`: unfold
+the caller's `haccess` (C6 arm) at `hlk`/`hfe` → the callee body's MemAccOff.
+`hlbl`=`⟨nil,nil,epiPos'<2^20⟩`, `hbnd`=`epiPos'<2^20`, `hbr`=`hfnBr`,
+`hframe`=`userOff gd ≤ totalFrame gd ≤ 2000`, `hhere4`: `bodyPos%4=0` (needs
+`prologueSize`, `fnPos f % 4`… — may need `fnPos f % 4 = 0`, consider adding to
+`hfn`/`halign`). Landing: `landPos [] [] epiPos' (bodyPos+4·csize gd.body) ocb`
+= `epiPos'` for BOTH `.normal` (fall-through = epiPos') and `.ret` (= epiPos') —
+one `cases ocb`, same continuation.
+
+**Seg 5 — epilogue** (`epilogue_sim` at `fd:=gd`, `holes:=(callee.sp,userOff
+gd)::holes`, `s1:=s1`, `ra:=ra'`, `q:=epiPos'`, `m:=m_body`). `hinv` = seg-4
+StInv. `hem`: `hfnEm` tail via `Emitted_append_right`. `hraslot`: the saved ra is
+in slot 0 — prologue_sim's `loadWord callee.sp = ra'` PRESERVED through the body
+by seg-4 `FramesPres` (slot 0 ⊂ `[sp,sp+8)`); needs `s1.sp = callee.sp` (IL sp is
+call-invariant within a body — a StInv-sp lemma). `hraeven`: `ra'.toNat%2=0` from
+`halign` (codeBase%4=0) + `here%4=0` (hhere4) + `4·argc+4` even. `hretb`/`hretslot`
+structural. `htf`: `totalFrame gd < 2^11` from `hfnTF ≤ 2000`. Output: pc=ra',
+sp=`s1.sp+totalFrame gd`=caller `s.sp` (P1), A j = s1.rget gd.rets[j] = retVals[j],
+mem = m_body.mem. Same OffPriv-caller reconciliation as seg 3 for the final StInv.
+
+**Seg 6 — ret-stores** (`run_retStoresFrom` at `fd:=fd` (CALLER), `holes:=holes`,
+`rets:=rets.toList`, `vs:=retVals`, `base:=0`, `q:=here+4·argc+4`, `s:={s with
+mem:=s1.mem}`, `m:=m_epi`). `StInv` for `{s with mem:=s1.mem}`: sp ✓ (caller sp
+restored), slots ✓ (FramesPres = pre-call machine bytes = pre-call IL regs),
+Installed ✓, memory-agreement = the seg-5 reconciliation. `hem`: `hem` tail
+(`retStoresI`) via `Emitted_append_right`. A-reg values from seg 5. Result IL
+state = `(rets.zip retVals).foldl rset {s with mem:=s1.mem}` = `s'` (`hs'`, subst).
+Final pc = `here+4·(argc+1+retStoresLen)` = `here+4·csize call` = `landPos … .normal`.
+FramesPres for the CALLER holes: segs 1–2 no writes, 3–5 write only in the callee
+frame (disjoint from caller holes by StInv c7 ordering), 6 writes the caller's own
+ret slots.
+
+Total k = `kMar + 1 + kPro + kBod + kEpi + kRet`.
 
 ## 6. Known adjacent gap (flag, do NOT scope-creep into Phase 5)
 
