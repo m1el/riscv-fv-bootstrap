@@ -348,6 +348,74 @@ theorem getD_lt (l : List Nat) (k b : Nat) (hb : 0 < b) (h : ∀ p ∈ l, p < b)
     | zero => simpa using h x (by simp)
     | succ k => simpa using ih k (fun p hp => h p (by simp [hp]))
 
+/-! ## Call-marshalling simulators (`run_marshalFrom` / `run_retStoresFrom`).
+
+    The call site loads argc args into `a0..` then (after the callee returns)
+    parks the rvc returns from `a0..`; the prologue parks params from `a0..`. Each
+    is a list fold of single-slot loads/stores whose A-register indices come from
+    `zipIdx`. Both lemmas induct on the reg list with the index base generalized —
+    the A-registers are all `≥ 10`, so writing them preserves `StInv` (which
+    constrains only x2 and the memory slots), and distinct indices keep earlier
+    loads/stores live. -/
+
+/-- Run `marshalI`'s arg loads (indices `base, base+1, …`): each `A (base+j)` ends
+    holding `s.rget args[j]`, `StInv` and memory preserved, registers outside
+    `A base … A (base+len−1)` untouched. -/
+theorem run_marshalFrom (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) :
+    ∀ (args : List Nat) (base q : Nat) (m : State),
+      StInv L fd holes s m →
+      m.pc = L.codeBase + BitVec.ofNat 64 q →
+      Emitted L q ((args.zipIdx base).flatMap fun ri => loadSlotI ri.1 (A ri.2)) →
+      (∀ a ∈ args, a ≤ maxRegF fd) →
+      (∀ a ∈ args, slotOff a < 2 ^ 11) →
+      ∃ k, StInv L fd holes s (stepN k m)
+         ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (q + 4 * args.length)
+         ∧ (stepN k m).mem = m.mem
+         ∧ (∀ j, (hj : j < args.length) → (stepN k m).rget (A (base + j)) = s.rget args[j])
+         ∧ (∀ t, (∀ j, (hj : j < args.length) → t ≠ A (base + j)) → (stepN k m).rget t = m.rget t)
+  | [], base, q, m, hinv, hpc, _, _, _ =>
+      ⟨0, hinv, by simpa using hpc, rfl, fun j hj => by simp at hj, fun t _ => rfl⟩
+  | a :: rest, base, q, m, hinv, hpc, hem, hreg, hfr => by
+      have hAb : A base = 10 + base := rfl
+      have h1run : stepN 1 m = step m := rfl
+      simp only [List.zipIdx_cons, List.flatMap_cons] at hem
+      have hemL : Emitted L q (loadSlotI a (A base)) := Emitted_append_left _ _ _ _ hem
+      obtain ⟨hinv1, h1pc, h1mem, h1v, h1oth⟩ :=
+        run_load L fd holes s m a (A base) q hinv (hreg a (by simp))
+          (hfr a (by simp)) (by rw [hAb]; omega) (by rw [hAb]; omega) hpc hemL
+      have hemR : Emitted L (q + 4)
+          ((rest.zipIdx (base + 1)).flatMap fun ri => loadSlotI ri.1 (A ri.2)) := by
+        have h := Emitted_append_right _ _ _ _ hem
+        rwa [loadSlotI_length, Nat.mul_one] at h
+      obtain ⟨k, hinvK, hpcK, hmemK, hvK, hothK⟩ :=
+        run_marshalFrom L fd holes s rest (base + 1) (q + 4) (step m) hinv1 h1pc hemR
+          (fun x hx => hreg x (List.mem_cons_of_mem a hx))
+          (fun x hx => hfr x (List.mem_cons_of_mem a hx))
+      refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_⟩
+      · rw [stepN_add, h1run]; exact hinvK
+      · rw [stepN_add, h1run, hpcK]; apply pc_congr; simp only [List.length_cons]; omega
+      · rw [stepN_add, h1run, hmemK, h1mem]
+      · intro j hj
+        rw [stepN_add, h1run]
+        have hneA : ∀ j' : Nat, A base ≠ A (base + 1 + j') := by
+          intro j' h
+          have hn : (10 + base : Nat) = 10 + (base + 1 + j') := h
+          omega
+        cases j with
+        | zero =>
+            simp only [Nat.add_zero, List.getElem_cons_zero]
+            rw [hothK (A base) (fun j' _ => hneA j'), h1v]
+        | succ j' =>
+            have hj'' : j' < rest.length := by simp only [List.length_cons] at hj; omega
+            rw [show base + (j' + 1) = (base + 1) + j' from by omega, hvK j' hj'']
+            simp only [List.getElem_cons_succ]
+      · intro t hne
+        rw [stepN_add, h1run,
+            hothK t (fun j' hj' => by
+              have h := hne (j' + 1) (by simp only [List.length_cons]; omega)
+              rwa [show base + (j' + 1) = base + 1 + j' from by omega] at h),
+            h1oth t (by have h := hne 0 (by simp); rwa [Nat.add_zero] at h)]
+
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat} {dpos fnPos : Name → Nat}
