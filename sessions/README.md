@@ -10,8 +10,8 @@ Per-session transcripts, summaries, and token costs live under `claude/`, `codex
 |---|--:|--:|--:|
 | Claude Code | 24 | 7,148,798 | **$918.30** |
 | Codex | 5 | 39,258 | **$4.16** |
-| Pi | 1 | 26,625 | **$0.00** |
-| **All** | **30** | **7,214,681** | **$922.46** |
+| Pi | 1 | 41,697 | **$0.00** |
+| **All** | **30** | **7,229,753** | **$922.46** |
 
 ## Aggregate time
 
@@ -19,7 +19,7 @@ Per-session transcripts, summaries, and token costs live under `claude/`, `codex
 |---|--:|--:|--:|--:|--:|
 | Claude Code | 492h49m | 29h30m | 12h17m | 41h48m | 451h45m |
 | Codex | 29m36s | 17m05s | 1m13s | 18m18s | 11m17s |
-| Pi | 18m27s | 9m00s | 8.6s | 9m09s | 9m18s |
+| Pi | 26m26s | 14m58s | 12.0s | 15m10s | 11m16s |
 
 > Each section's time is attributed by what it is: `👤 User`→waiting-for-user, `🤖 Assistant`→model generation, `🛠️ Tool result`→tool execution; the three tile the session so they sum to wall-clock. Per-call exec times are matched (`tool_use`↔`tool_result`) and shown inline on each call line. Codex and Pi event timestamps are batch-flushed, so their splits are approximate.
 
@@ -75,5 +75,5 @@ Per-session transcripts, summaries, and token costs live under `claude/`, `codex
 
 | # | Date | Model | Human/Asst | Tools | Active | Wall | Cost | First request | File |
 |--|---|---|--:|--:|--:|--:|--:|---|---|
-| 1 | 2026-07-04 00:37 | glm-5.2 | 7/66 | 61 | 9m09s | 18m27s | $0.00 | update @sessions/gen_sessions.py to also export pi | [`pi/2026-07-04_00-37_019f2a8ebb1d.md`](pi/2026-07-04_00-37_019f2a8ebb1d.md) |
+| 1 | 2026-07-04 00:37 | glm-5.2 | 10/115 | 107 | 15m10s | 26m26s | $0.00 | update @sessions/gen_sessions.py to also export pi | [`pi/2026-07-04_00-37_019f2a8ebb1d.md`](pi/2026-07-04_00-37_019f2a8ebb1d.md) |
 

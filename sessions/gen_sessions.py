@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
-"""Collect Claude Code + Codex sessions for /var/data/bootstrap into ./sessions."""
-import json, os, glob, re, getpass, subprocess, urllib.request
+"""Collect Claude Code + Codex + Pi coding-agent sessions for a project
+directory into <project>/sessions.
+
+Usage: gen_sessions.py [project_dir]   (default: current working directory)
+"""
+import json, os, glob, re, getpass, subprocess, sys, urllib.request
 from datetime import datetime
 
-PROJECT = "/var/data/bootstrap"
-CLAUDE_DIR = os.path.expanduser("~/.claude/projects/-var-data-bootstrap")
+# Per-user session stores (independent of project); filtered by cwd at runtime.
 CODEX_GLOB = os.path.expanduser("~/.codex/sessions/**/*.jsonl")
 PI_GLOB = os.path.expanduser("~/.pi/agent/sessions/*/*.jsonl")
-OUT = os.path.join(PROJECT, "sessions")
 TOOL_TRUNC = 4000   # max chars per tool-result/output block in the transcript
+
+# Project directory and derived paths are resolved in main() from argv[1]
+# (default: cwd). The globals below are populated there before the parse/write
+# functions use them.
+PROJECT = ""
+CLAUDE_DIR = ""
+OUT = ""
+PRICE_CACHE = ""
+REDACTIONS = []
+PRICING = {}
+
+def project_slug(project):
+    """Claude Code stores sessions under ~/.claude/projects/<slug>, where <slug>
+    is the project's absolute path with '/' replaced by '-' (e.g.
+    /var/data/bootstrap -> -var-data-bootstrap)."""
+    return os.path.abspath(project).replace("/", "-")
 
 # Redaction: applied to every byte written under sessions/ (transcripts + README).
 # Targets are DISCOVERED at runtime (git identity + the OS user/home) so that no
@@ -72,8 +90,6 @@ def build_redactions():
     reds.append((re.compile(r"sk-or-v1-[A-Za-z0-9]+"), "<redacted-key>"))
     reds.append((re.compile(r"sk-or-[A-Za-z0-9_-]{24,}"), "<redacted-key>"))
     return reds
-
-REDACTIONS = build_redactions()
 
 def redact(s):
     if not isinstance(s, str):
@@ -537,8 +553,7 @@ def parse_codex(path):
 # ----------------------------------------------------------------- write
 # ----------------------------------------------------------------- pricing
 OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
-PRICE_CACHE = os.path.join(OUT, "openrouter_models.json")
-PRICING = {}   # {"exact": {id: rates}, "base": {canon: (id, rates)}, "src": str}
+
 
 def _canon(s):
     return re.sub(r"[^a-z0-9]", "", s.lower())
@@ -692,8 +707,15 @@ def write_session(sess, subdir):
     return fn
 
 def main():
-    global PRICING
+    global PROJECT, CLAUDE_DIR, OUT, PRICE_CACHE, REDACTIONS, PRICING
+    PROJECT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.getcwd())
+    CLAUDE_DIR = os.path.expanduser(f"~/.claude/projects/{project_slug(PROJECT)}")
+    OUT = os.path.join(PROJECT, "sessions")
+    PRICE_CACHE = os.path.join(OUT, "openrouter_models.json")
+    REDACTIONS = build_redactions()
     PRICING = load_pricing()
+    print("project:", PROJECT)
+    print("claude dir:", CLAUDE_DIR)
     print("pricing source:", PRICING.get("src"))
     sessions = []
     for p in sorted(glob.glob(os.path.join(CLAUDE_DIR, "*.jsonl"))):
@@ -745,7 +767,7 @@ def main():
     priced_models = sorted({f"{s['models'][0]} → `{s['priced_id']}`"
                             for s in rows if s.get("priced_id")})
     R = []
-    R.append("# Agent sessions for `/var/data/bootstrap`\n\n")
+    R.append(f"# Agent sessions for `{PROJECT}`\n\n")
     R.append(f"Collected **{len(cl)} Claude Code** session(s), **{len(cx)} Codex** session(s), "
              f"and **{len(pi)} Pi** session(s) whose working directory is this project.\n\n")
     R.append("Per-session transcripts, summaries, and token costs live under `claude/`, `codex/`, "
