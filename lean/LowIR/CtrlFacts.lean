@@ -1,28 +1,57 @@
 /-
-  strtoull (base-10 core) correctness — and the proof-ergonomics finding for the new
-  control flow.
+  LowIR.Ctrl proof foundation — the generic exec/outcome equations for the
+  clocked big-step semantics of `LowIR.Ctrl`, plus fuel monotonicity. Every
+  Ctrl-level program proof (strlen, strtoull, hex0) reuses these; this is the
+  LowIR analog of `LowSSA.ExecFacts`.
 
-  The headline: the reasoning primitives for `break`/`block`/`ret` are *trivial*. Each
-  is a one-line `by simp [exec]` equation (below): a `block` catching `brk 0` becomes
-  `normal`, a `while` passing `brk` through, a `seq` short-circuiting on `brk`. So the
-  outcome machinery costs almost nothing to reason about — it just adds a few uniform
-  equations alongside the `normal` ones we already used for strlen.
+  Each `exec_*` equation is a one-liner `by simp [exec]` — the value is having
+  them named and in one place. Two flavors:
 
-  The functional proof (`strtoull10_correct`) is then a `digit_loop` invariant +
-  induction on the number of leading digits — the same shape as `strlen`'s loop lemma,
-  with two additions: the accumulator step `acc*10 = (acc<<3)+(acc<<1)` (a BitVec
-  identity), and the terminating iteration returning `brk 0` (caught by the `block`).
-  Stated with the invariant here; the induction is deferred (`sorry`), backed by the
-  executable certification `strtoull10_matches_spec`.
+    • the "normal" equations (`exec_addi`/`sub`/`lbu`, `exec_seq_normal`,
+      `exec_while_step`/`done`) — straight-line ops and loop progress; and
+    • the outcome-threading equations (`brk`/`cont`/`ret` through
+      `seq`/`block`/`while`/`call`) — the break/continue/return machinery. The
+      ergonomics result: reasoning about the outcome layer costs almost nothing,
+      it just adds a few uniform equations alongside the `normal` ones.
+
+  `exec_mono`/`exec_mono_le` (more fuel never changes a `some` result) let every
+  lemma return an existential fuel and be combined without exact-fuel arithmetic.
 -/
-import LowIR.Strlen.Ctrl
-import LowIR.Strtoull.Wrapping
+import LowIR.Ctrl
 
 namespace LowIR.Ctrl
 
 open Rv64i (Word Byte)
 
-/-! ### The new-outcome exec equations — each a one-liner. This is the ergonomics result. -/
+/-! ### Normal-outcome exec equations — straight-line ops and loop progress. -/
+
+theorem exec_addi (f rd rs : Nat) (imm : BitVec 12) (s : St) :
+    exec (f+1) (.addi rd rs imm) s = some (s.rset rd (s.rget rs + imm.signExtend 64), .normal) := by
+  simp [exec]
+
+theorem exec_sub (f rd r1 r2 : Nat) (s : St) :
+    exec (f+1) (.sub rd r1 r2) s = some (s.rset rd (s.rget r1 - s.rget r2), .normal) := by simp [exec]
+
+theorem exec_lbu (f rd rs : Nat) (imm : BitVec 12) (s : St) :
+    exec (f+1) (.lbu rd rs imm) s
+      = some (s.rset rd ((s.loadByte (s.rget rs + imm.signExtend 64)).setWidth 64), .normal) := by
+  simp [exec]
+
+/-- Sequence where the first part finishes `normal`. -/
+theorem exec_seq_normal (f : Nat) (a b : Stmt) (s s' : St)
+    (h : exec f a s = some (s', .normal)) :
+    exec (f+1) (.seq a b) s = exec f b s' := by simp [exec, h]
+
+theorem exec_while_step (f : Nat) (c : Cond) (a b : Reg) (body : Stmt) (s s' : St)
+    (hc : evalCond c (s.rget a) (s.rget b) = true) (hb : exec f body s = some (s', .normal)) :
+    exec (f+1) (.while c a b body) s = exec f (.while c a b body) s' := by
+  simp [exec, hc, hb]
+
+theorem exec_while_done (f : Nat) (c : Cond) (a b : Reg) (body : Stmt) (s : St)
+    (hc : evalCond c (s.rget a) (s.rget b) = false) :
+    exec (f+1) (.while c a b body) s = some (s, .normal) := by simp [exec, hc]
+
+/-! ### Outcome-threading exec equations (break / continue / return) — each a one-liner. -/
 
 theorem exec_slli (f rd rs sh : Nat) (s : St) :
     exec (f+1) (.slli rd rs sh) s = some (s.rset rd (s.rget rs <<< sh), .normal) := by simp [exec]
@@ -259,24 +288,5 @@ theorem exec_mono_le {f f' : Nat} (hle : f ≤ f') {stmt : Stmt} {s : St} {r : S
   induction k with
   | zero => exact he
   | succ k ih => rw [show f + (k+1) = (f+k)+1 from rfl]; exact exec_mono (f+k) stmt s r ih
-
-/-! ### Correctness statement + invariant (induction deferred).
-
-    `digit_loop` invariant (the deferred work): for the body
-      `seq (lbu c) (seq (ife c<'0' → brk) (seq (ife '9'<c → brk) (acc-update; cursor++)))`,
-    indexed by `d` = number of leading digit bytes from `cur`:
-      • registers x20='0', x21='9', x16=1 fixed; x5 = cur, x12 = acc;
-      • `∀ j < d`, `mem (cur + j)` is a digit byte; `mem (cur + d)` is a non-digit;
-      • the loop runs `d` normal iterations (each `acc := acc*10 + digit`, `cur++`),
-        then iteration `d` loads the non-digit, takes an `ife … (brkB 0)` branch, and
-        the body returns `brk 0` (via `exec_seq_brk`), which the `while` passes up
-        (`exec_while_brk`) and the surrounding `block` catches (`exec_block_catch`).
-      • result: `x12 = accFold acc (the d digit bytes)` and `x5 = cur + d`.
-    The arithmetic per step reduces by `acc_times_ten` + a `digit = ofNat (b.toNat-48)`
-    fact (`bv_omega` from `48 ≤ b.toNat ≤ 57`). Identical induction shape to `strlen_loop`.
-
-    `strtoull10_correct` then runs the const/init prelude (straight-line, like strlen's)
-    into the loop-entry state and reads off `accFold 0 (inp.takeWhile isDig) = strtoullSpec inp`. -/
--- (the real `strtoull10_correct` is proved in `CtrlStrtoull10Proof.lean`)
 
 end LowIR.Ctrl

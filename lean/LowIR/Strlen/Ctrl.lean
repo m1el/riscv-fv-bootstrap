@@ -1,15 +1,18 @@
 /-
   strlen re-proved on the NEW control-flow IL (`LowIR.Ctrl`), to compare proof
-  ergonomics against the original (`LowIR/StrlenProof.lean`).
+  ergonomics against the original (`LowIR/Strlen/CoreProof.lean`).
 
   Finding (recorded at the bottom): strlen uses no break/continue/ret, so the outcome
   machinery is pure overhead here — the proof is the *same shape* as before, just
   carrying a `.normal` everywhere. The control-flow IL pays off for hex0/strtoull
   (early returns), not for a single straight loop like strlen.
 
-  Reuses the register/arith/condition lemmas from `LowIR.StrlenProof`.
+  The Ctrl exec equations (`exec_addi`/`sub`/`lbu`, `exec_seq_normal`,
+  `exec_while_step`/`done`) live in `LowIR.CtrlFacts`; the register/arith/condition
+  lemmas come from `LowIR.Strlen.CoreProof`.
 -/
 import LowIR.Ctrl
+import LowIR.CtrlFacts
 import LowIR.Strlen.CoreProof
 
 set_option linter.unusedSimpArgs false
@@ -17,34 +20,6 @@ set_option linter.unusedSimpArgs false
 namespace LowIR.Ctrl
 
 open Rv64i (Word Byte)
-
-/-! ### exec equations for the new (outcome-threaded) semantics. -/
-
-theorem exec_addi (f rd rs : Nat) (imm : BitVec 12) (s : St) :
-    exec (f+1) (.addi rd rs imm) s = some (s.rset rd (s.rget rs + imm.signExtend 64), .normal) := by
-  simp [exec]
-
-theorem exec_sub (f rd r1 r2 : Nat) (s : St) :
-    exec (f+1) (.sub rd r1 r2) s = some (s.rset rd (s.rget r1 - s.rget r2), .normal) := by simp [exec]
-
-theorem exec_lbu (f rd rs : Nat) (imm : BitVec 12) (s : St) :
-    exec (f+1) (.lbu rd rs imm) s
-      = some (s.rset rd ((s.loadByte (s.rget rs + imm.signExtend 64)).setWidth 64), .normal) := by
-  simp [exec]
-
-/-- Sequence where the first part finishes `normal`. -/
-theorem exec_seq_normal (f : Nat) (a b : Stmt) (s s' : St)
-    (h : exec f a s = some (s', .normal)) :
-    exec (f+1) (.seq a b) s = exec f b s' := by simp [exec, h]
-
-theorem exec_while_step (f : Nat) (c : Cond) (a b : Reg) (body : Stmt) (s s' : St)
-    (hc : evalCond c (s.rget a) (s.rget b) = true) (hb : exec f body s = some (s', .normal)) :
-    exec (f+1) (.while c a b body) s = exec f (.while c a b body) s' := by
-  simp [exec, hc, hb]
-
-theorem exec_while_done (f : Nat) (c : Cond) (a b : Reg) (body : Stmt) (s : St)
-    (hc : evalCond c (s.rget a) (s.rget b) = false) :
-    exec (f+1) (.while c a b body) s = some (s, .normal) := by simp [exec, hc]
 
 /-! ### strlen on the new IL — same program, outcome-carrying proof. -/
 
