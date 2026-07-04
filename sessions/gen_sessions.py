@@ -6,6 +6,7 @@ from datetime import datetime
 PROJECT = "/var/data/bootstrap"
 CLAUDE_DIR = os.path.expanduser("~/.claude/projects/-var-data-bootstrap")
 CODEX_GLOB = os.path.expanduser("~/.codex/sessions/**/*.jsonl")
+PI_GLOB = os.path.expanduser("~/.pi/agent/sessions/*/*.jsonl")
 OUT = os.path.join(PROJECT, "sessions")
 TOOL_TRUNC = 4000   # max chars per tool-result/output block in the transcript
 
@@ -95,8 +96,25 @@ def jlines(path):
 def trunc(s, n=TOOL_TRUNC):
     s = s if isinstance(s, str) else json.dumps(s, ensure_ascii=False)
     if len(s) > n:
-        return s[:n] + f"\n… [truncated {len(s)-n} chars]"
+        return s[:n] + f"\n\n… [truncated {len(s)-n} chars]"
     return s
+
+def codeblock(s, lang="", n=TOOL_TRUNC):
+    """Wrap content in a fenced code block using more backticks than any run
+    appearing inside it, so nested fences (e.g. tool output that itself contains
+    ``` blocks) don't break out."""
+    s = trunc(s, n)
+    longest = max((len(m) for m in re.findall(r"`+", s)), default=0)
+    ticks = "`" * max(3, longest + 1)
+    return f"{ticks}{lang}\n{s}\n{ticks}"
+
+def details_block(emoji_label, text, n=1500):
+    """Collapsible thought/reasoning block: <details><summary>(emoji) …</summary>.
+    The summary shows the full char length; truncation (if any) is noted at the
+    end of the body by `trunc`, matching how tool blocks render it."""
+    text = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
+    return (f"<details><summary>{emoji_label} · {len(text):,} chars</summary>\n\n"
+            f"{trunc(text, n)}\n\n</details>")
 
 def fmt_ts(ts):
     if not ts:
@@ -234,12 +252,14 @@ def parse_claude(path):
                     if txt.strip():
                         rendered.append(txt)
                 elif bt == "thinking":
-                    rendered.append("> 💭 (thinking)\n> " + trunc(b.get("thinking",""),1500).replace("\n","\n> "))
+                    t = b.get("thinking","")
+                    rendered.append(details_block("💭 Thinking", t) if t.strip()
+                                   else "> 💭 (thinking)\n> ")
                 elif bt == "tool_use":
                     n_tool += 1
                     dur = tool_dur.get(b.get("id"))
                     dtag = f"  ·  {fmt_dur(dur)}" if dur is not None else ""
-                    rendered.append(f"**🔧 tool → {b.get('name')}**{dtag}\n```json\n{trunc(b.get('input',{}),1500)}\n```")
+                    rendered.append(f"**🔧 tool → {b.get('name')}**{dtag}\n" + codeblock(b.get('input',{}), "json", 1500))
             if "\n".join(texts).strip():
                 last_assistant_text = "\n".join(texts).strip()
             if cur is None or cur["rid"] != rid:
@@ -261,8 +281,7 @@ def parse_claude(path):
                     c = b.get("content")
                     if isinstance(c, list):
                         c = "\n".join(x.get("text","") if isinstance(x,dict) else str(x) for x in c)
-                    tag = " (error)" if b.get("is_error") else ""
-                    results.append(f"```\n{trunc(c)}\n```{tag}")
+                    results.append(("⚠️ error\n\n" if b.get("is_error") else "") + codeblock(c))
             if human:
                 user_prompts.extend(human)
                 sections.append(dict(kind="user", ts=tf, end=tf, ts_str=ts, body="\n\n".join(human)))
@@ -281,6 +300,131 @@ def parse_claude(path):
                 n_user=sum(1 for s in sections if s["kind"] == "user"),
                 n_tool=n_tool, tok=tok, sections=sections, tool_stats=tool_stats,
                 coarse_timing=False,
+                first_ts=recs[0][1] if recs else None,
+                last_ts=recs[-1][1] if recs else None,
+                title=first_prompt(user_prompts), first_prompt=first_prompt(user_prompts),
+                last_text=last_assistant_text)
+
+# ----------------------------------------------------------------- Pi
+def parse_pi(path):
+    """Parse a pi coding-agent session jsonl (event stream: session / model_change /
+    thinking_level_change / message). message.role ∈ {user, assistant, toolResult};
+    content blocks ∈ {text, thinking, toolCall}. Assistant messages carry per-call
+    usage (input/output/cacheRead/cacheWrite/reasoning/totalTokens) and a
+    provider-reported USD cost, which is used directly (pi talks to non-OpenRouter
+    providers like zai/glm, so OpenRouter rate-matching would mostly miss)."""
+    sid = cwd = None
+    models = set()
+    user_prompts, last_assistant_text = [], ""
+    recs = []   # (tf, ts, msg) in order
+    for d in jlines(path):
+        t = d.get("type"); ts = d.get("timestamp")
+        if t == "session":
+            sid = d.get("id"); cwd = d.get("cwd")
+        elif t == "model_change":
+            if d.get("modelId"): models.add(d["modelId"])
+        elif t == "message":
+            m = d.get("message", {}) or {}
+            role = m.get("role")
+            if role not in ("user", "assistant", "toolResult"):
+                continue
+            if role == "assistant" and m.get("model"):
+                models.add(m["model"])
+            recs.append((t2f(ts), ts, m))
+    # match toolCall id -> toolResult for per-call exec times
+    call_open, tool_dur, tool_stats = {}, {}, {}
+    for tf, ts, m in recs:
+        role = m.get("role")
+        if role == "assistant":
+            for b in m.get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "toolCall":
+                    call_open[b.get("id")] = (tf, b.get("name"))
+        elif role == "toolResult":
+            st = call_open.get(m.get("toolCallId"))
+            if st and st[0] is not None and tf is not None:
+                dur = max(0.0, tf - st[0])
+                tool_dur[m.get("toolCallId")] = dur
+                tool_stats.setdefault(st[1] or "?", []).append(dur)
+    # build timed sections (group consecutive assistant-side events)
+    sections, cur, n_tool = [], None, 0
+    tok = dict(input=0, output=0, cache_create=0, cache_read=0, reasoning=0, total=0)
+    provider_cost = None
+
+    def flush():
+        nonlocal cur
+        if cur and cur["body"]:
+            sections.append(dict(kind="assistant", ts=cur["ts"], end=cur["end"],
+                                 ts_str=cur["ts_str"], body="\n\n".join(cur["body"])))
+        cur = None
+
+    for tf, ts, m in recs:
+        role = m.get("role")
+        content = m.get("content") or []
+        if role == "assistant":
+            u = m.get("usage") or {}
+            tok["input"] += u.get("input", 0) or 0
+            tok["output"] += u.get("output", 0) or 0
+            tok["cache_create"] += u.get("cacheWrite", 0) or 0
+            tok["cache_read"] += u.get("cacheRead", 0) or 0
+            tok["reasoning"] += u.get("reasoning", 0) or 0
+            tok["total"] += u.get("totalTokens", 0) or 0
+            c = (u.get("cost") or {}).get("total")
+            if c is not None:
+                provider_cost = (provider_cost or 0.0) + c
+            rendered, texts = [], []
+            for b in content:
+                if not isinstance(b, dict): continue
+                bt = b.get("type")
+                if bt == "text":
+                    txt = b.get("text") or ""; texts.append(txt)
+                    if txt.strip(): rendered.append(txt)
+                elif bt == "thinking":
+                    t = b.get("thinking","")
+                    rendered.append(details_block("💭 Thinking", t) if t.strip()
+                                   else "> 💭 (thinking)\n> ")
+                elif bt == "toolCall":
+                    n_tool += 1
+                    dur = tool_dur.get(b.get("id"))
+                    dtag = f"  ·  {fmt_dur(dur)}" if dur is not None else ""
+                    rendered.append(f"**🔧 tool → {b.get('name')}**{dtag}\n" + codeblock(b.get('arguments',{}), "json", 1500))
+            if "\n".join(texts).strip():
+                last_assistant_text = "\n".join(texts).strip()
+            if cur is None:
+                cur = dict(ts=tf, end=tf, ts_str=ts, body=[])
+            if tf is not None: cur["end"] = tf
+            cur["body"].extend(r for r in rendered if r.strip())
+        elif role == "toolResult":
+            flush()
+            parts = []
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    parts.append(b.get("text", ""))
+                elif isinstance(b, str):
+                    parts.append(b)
+            body = "\n".join(parts)
+            tn = m.get("toolName") or "Tool result"
+            err = "⚠️ error\n\n" if m.get("isError") else ""
+            sections.append(dict(kind="toolresult", ts=tf, end=tf, ts_str=ts,
+                                 hdr=tn, body=err + codeblock(body)))
+        else:   # user
+            flush()
+            human = []
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text" and (b.get("text") or "").strip():
+                    human.append(b["text"])
+                elif isinstance(b, str) and b.strip():
+                    human.append(b)
+            if human:
+                user_prompts.extend(human)
+                sections.append(dict(kind="user", ts=tf, end=tf, ts_str=ts, body="\n\n".join(human)))
+    flush()
+    return dict(agent="pi", sid=sid or os.path.basename(path), path=path,
+                models=sorted(models), cwd=cwd,
+                n_assist=sum(1 for s in sections if s["kind"] == "assistant"),
+                n_user=sum(1 for s in sections if s["kind"] == "user"),
+                n_tool=n_tool, tok=tok, sections=sections, tool_stats=tool_stats,
+                coarse_timing=True,   # pi events are batch-flushed; timings approximate
+                provider_cost=provider_cost,
                 first_ts=recs[0][1] if recs else None,
                 last_ts=recs[-1][1] if recs else None,
                 title=first_prompt(user_prompts), first_prompt=first_prompt(user_prompts),
@@ -357,16 +501,16 @@ def parse_codex(path):
             if kind == "amsg":
                 cur["body"].append(ev[1]); last_assistant_text = ev[1].strip()
             elif kind == "reason":
-                cur["body"].append("> 💭 (reasoning)\n> " + trunc(ev[1],1500).replace("\n","\n> "))
+                cur["body"].append(details_block("💭 Reasoning", ev[1]))
             else:
                 n_tool += 1
                 dur = tool_dur.get(ev[3])
                 dtag = f"  ·  {fmt_dur(dur)}" if dur is not None else ""
-                cur["body"].append(f"**🔧 call → {ev[1]}**{dtag}\n```\n{trunc(ev[2],1500)}\n```")
+                cur["body"].append(f"**🔧 call → {ev[1]}**{dtag}\n" + codeblock(ev[2], "", 1500))
         elif kind == "out":
             flush()
             sections.append(dict(kind="toolresult", ts=tf, end=tf, ts_str=ts,
-                                 hdr="Tool output", body=f"```\n{trunc(ev[1])}\n```"))
+                                 hdr="Tool output", body=codeblock(ev[1])))
         elif kind == "user":
             flush()
             user_prompts.append(ev[1])
@@ -440,7 +584,10 @@ def match_pricing(model):
     return None, None
 
 def session_cost(sess):
-    """USD cost from matched OpenRouter rates, or None if no pricing matched."""
+    """USD cost: pi uses the provider-reported per-call cost; Claude/Codex use
+    matched OpenRouter rates (None if no pricing matched)."""
+    if sess["agent"] == "pi":
+        return sess.get("provider_cost")
     rates = sess.get("priced")
     if not rates:
         return None
@@ -471,7 +618,7 @@ def file_stamp(sess):
 def timing_block(sess):
     tm = sess.get("timing") or {}
     wall, model, tool, wait = tm.get("wall",0), tm.get("model",0), tm.get("tool",0), tm.get("waiting",0)
-    note = "  _(codex events are batch-flushed → timings approximate)_" if sess.get("coarse_timing") else ""
+    note = "  _(events are batch-flushed → timings approximate)_" if sess.get("coarse_timing") else ""
     out = [f"- wall-clock: **{fmt_dur(wall)}**  ·  active (model+tool): **{fmt_dur(model+tool)}**  ·  "
            f"waiting for user: {fmt_dur(wait)}{note}",
            f"- model generation: {fmt_dur(model)}  ·  tool execution: {fmt_dur(tool)}"]
@@ -493,7 +640,16 @@ def write_session(sess, subdir):
     cost = sess.get("cost")
     pid = sess.get("priced_id")
     r = sess.get("priced")
-    if r:
+    if sess["agent"] == "pi":
+        # pi reports cost per-call from the provider directly (often non-OpenRouter
+        # providers like zai/glm), so OpenRouter rate-matching doesn't apply.
+        if cost is not None:
+            rate_note = f"provider-reported cost for `{', '.join(sess['models']) or '?'}`"
+            cost_s = f"**${cost:,.2f}**"
+        else:
+            rate_note = f"no provider cost reported for `{', '.join(sess['models']) or '?'}`"
+            cost_s = "n/a"
+    elif r:
         rate_note = (f"priced as `{pid}` — ${ (r['prompt'] or 0)*1e6:g}/$"
                      f"{ (r['completion'] or 0)*1e6:g} in/out per Mtok"
                      + (f", ${r['cache_read']*1e6:g} cache-read" if r['cache_read'] is not None else "")
@@ -505,6 +661,11 @@ def write_session(sess, subdir):
     if sess["agent"] == "claude":
         tokline = (f"- output: **{t['output']:,}**  |  fresh input: {t['input']:,}  |  "
                    f"cache write: {t['cache_create']:,}  |  cache read: {t['cache_read']:,}\n"
+                   f"- **cost: {cost_s}** ({rate_note})")
+    elif sess["agent"] == "pi":
+        tokline = (f"- output: **{t['output']:,}** (reasoning {t['reasoning']:,})  |  "
+                   f"input: {t['input']:,}  (cache read {t['cache_read']:,}, write {t['cache_create']:,})  |  "
+                   f"total: {t['total']:,}\n"
                    f"- **cost: {cost_s}** ({rate_note})")
     else:
         tokline = (f"- output: **{t['output']:,}** (reasoning {t['reasoning']:,})  |  "
@@ -545,55 +706,70 @@ def main():
             continue
         if f'"cwd":"{PROJECT}"' in head:
             sessions.append(parse_codex(p))
+    for p in glob.glob(PI_GLOB, recursive=True):
+        # cheap cwd filter: the first line is the `session` event with cwd
+        try:
+            head = open(p, encoding="utf-8").read(4000)
+        except Exception:
+            continue
+        if f'"cwd":"{PROJECT}"' in head:
+            sessions.append(parse_pi(p))
     sessions.sort(key=lambda s: s["first_ts"] or "")
-    # price each session against OpenRouter rates; render timed transcript
+    # price each session against OpenRouter rates; render timed transcript.
+    # (pi sessions use provider-reported cost, so OpenRouter matching is skipped.)
     for s in sessions:
-        pid, rates = match_pricing(s["models"][0] if s["models"] else None)
-        s["priced_id"], s["priced"] = pid, rates
+        if s["agent"] == "pi":
+            s["priced_id"], s["priced"] = None, None
+        else:
+            pid, rates = match_pricing(s["models"][0] if s["models"] else None)
+            s["priced_id"], s["priced"] = pid, rates
         s["cost"] = session_cost(s)
         s["transcript"], s["timing"] = render_sections(s.get("sections") or [])
     # write per-session files
     rows = []
     for s in sessions:
-        fn = write_session(s, s["agent"])   # subdir = "claude" | "codex"
+        fn = write_session(s, s["agent"])   # subdir = "claude" | "codex" | "pi"
         s["file"] = os.path.relpath(fn, OUT)
         rows.append(s)
     # aggregate
     cl = [s for s in rows if s["agent"]=="claude"]
     cx = [s for s in rows if s["agent"]=="codex"]
+    pi = [s for s in rows if s["agent"]=="pi"]
     def agg(group):
         return (sum(s["tok"]["output"] for s in group),
                 sum((s["cost"] or 0) for s in group),
                 all(s["cost"] is not None for s in group if s["n_assist"]))
     cl_out, cl_cost, cl_full = agg(cl)
     cx_out, cx_cost, cx_full = agg(cx)
+    pi_out, pi_cost, pi_full = agg(pi)
     priced_models = sorted({f"{s['models'][0]} → `{s['priced_id']}`"
                             for s in rows if s.get("priced_id")})
     R = []
     R.append("# Agent sessions for `/var/data/bootstrap`\n\n")
-    R.append(f"Collected **{len(cl)} Claude Code** session(s) and **{len(cx)} Codex** session(s) "
-             f"whose working directory is this project.\n\n")
-    R.append("Per-session transcripts, summaries, and token costs live under `claude/` and `codex/`. "
-             "Each file has a header (model, turns, token cost), a summary (first request + final "
+    R.append(f"Collected **{len(cl)} Claude Code** session(s), **{len(cx)} Codex** session(s), "
+             f"and **{len(pi)} Pi** session(s) whose working directory is this project.\n\n")
+    R.append("Per-session transcripts, summaries, and token costs live under `claude/`, `codex/`, "
+             "and `pi/`. Each file has a header (model, turns, token cost), a summary (first request + final "
              "response), and the full transcript (long tool outputs truncated). Personal name, email, "
              "and OS username are redacted.\n\n")
     R.append("## Aggregate cost\n\n")
     R.append("| Agent | Sessions | Output tokens | Cost (USD) |\n|---|--:|--:|--:|\n")
     R.append(f"| Claude Code | {len(cl)} | {cl_out:,} | **${cl_cost:,.2f}** |\n")
     R.append(f"| Codex | {len(cx)} | {cx_out:,} | **${cx_cost:,.2f}** |\n")
-    R.append(f"| **All** | **{len(cl)+len(cx)}** | **{cl_out+cx_out:,}** | **${cl_cost+cx_cost:,.2f}** |\n\n")
+    R.append(f"| Pi | {len(pi)} | {pi_out:,} | **${pi_cost:,.2f}** |\n")
+    R.append(f"| **All** | **{len(cl)+len(cx)+len(pi)}** | **{cl_out+cx_out+pi_out:,}** | **${cl_cost+cx_cost+pi_cost:,.2f}** |\n\n")
     def tsum(group, k):
         return sum((s.get("timing") or {}).get(k, 0) for s in group)
     R.append("## Aggregate time\n\n")
     R.append("| Agent | Wall-clock | Model gen | Tool exec | Active | Waiting for user |\n|---|--:|--:|--:|--:|--:|\n")
-    for label, g in (("Claude Code", cl), ("Codex", cx)):
+    for label, g in (("Claude Code", cl), ("Codex", cx), ("Pi", pi)):
         R.append(f"| {label} | {fmt_dur(tsum(g,'wall'))} | {fmt_dur(tsum(g,'model'))} | "
                  f"{fmt_dur(tsum(g,'tool'))} | {fmt_dur(tsum(g,'model')+tsum(g,'tool'))} | "
                  f"{fmt_dur(tsum(g,'waiting'))} |\n")
     R.append("\n> Each section's time is attributed by what it is: `👤 User`→waiting-for-user, "
              "`🤖 Assistant`→model generation, `🛠️ Tool result`→tool execution; the three tile the "
              "session so they sum to wall-clock. Per-call exec times are matched (`tool_use`↔`tool_result`) "
-             "and shown inline on each call line. Codex event timestamps are batch-flushed, so its splits "
+             "and shown inline on each call line. Codex and Pi event timestamps are batch-flushed, so their splits "
              "are approximate.\n\n")
     R.append(f"> **Pricing source:** {PRICING.get('src') or 'unavailable'}. Cost is computed per token "
              "from each model's OpenRouter rates (prompt / completion / cache-read / cache-write), so "
@@ -608,9 +784,10 @@ def main():
              "e.g. `deepseek-v4-pro` lists cache-read at $0.0036/Mtok, but its real charge here (~$0.36) "
              "implies an effective ~$0.30/Mtok (≈⅓ of the 'cached' tokens actually hit). OpenAI caching "
              "reconciled exactly. Codex costs below are therefore a **lower bound**; Claude (whose cache "
-             "reads are reported as billed) is exact.\n")
+             "reads are reported as billed) is exact. Pi cost is the provider-reported per-call total "
+             "(Pi drives non-OpenRouter providers directly, so OpenRouter rate-matching does not apply).\n")
     R.append("\n")
-    for label, group in (("Claude Code", cl), ("Codex", cx)):
+    for label, group in (("Claude Code", cl), ("Codex", cx), ("Pi", pi)):
         R.append(f"## {label} sessions\n\n")
         R.append("| # | Date | Model | Human/Asst | Tools | Active | Wall | Cost | First request | File |\n")
         R.append("|--|---|---|--:|--:|--:|--:|--:|---|---|\n")
@@ -628,7 +805,8 @@ def main():
     print(f"Wrote {len(rows)} sessions to {OUT}")
     print(f"Claude: {len(cl)} sessions · output {cl_out:,} · ${cl_cost:,.2f}")
     print(f"Codex : {len(cx)} sessions · output {cx_out:,} · ${cx_cost:,.2f}")
-    print(f"TOTAL : ${cl_cost+cx_cost:,.2f}")
+    print(f"Pi    : {len(pi)} sessions · output {pi_out:,} · ${pi_cost:,.2f}")
+    print(f"TOTAL : ${cl_cost+cx_cost+pi_cost:,.2f}")
 
 if __name__ == "__main__":
     main()
