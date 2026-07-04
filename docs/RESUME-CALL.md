@@ -449,9 +449,14 @@ before W4, several details deviate from the pre-implementation sketch below:
   induction (`testBit_pow_two_sub_one`, only `testBit_zero`/`testBit_succ`/`omega`).
   `getLsbD0_of_even` bridges `toNat % 2 = 0 → getLsbD 0 = false`. `halign` (codeBase
   alignment feeding the evenness) still a W7 flat hypothesis.
-- **W4 COMPLETE.** Next **W5** (`prologue_sim`, the fiddliest — incl. `park_lastwins`),
-  then **W6** (`epilogue_sim`, now unblocked — `jalr_lands` ready), then **W3+W7**
-  (generalize induction over `fd`/`holes`/`epiPos` + the call assembly).
+- **W5 COMPLETE** (`a71e29c`, axiom-clean `[propext, Quot.sound]`). Next **W6**
+  (`epilogue_sim`, unblocked — `jalr_lands` ready), then **W3+W7** (generalize
+  induction over `fd`/`holes`/`epiPos` + the call assembly).
+- **W5 GOTCHA (cost real time):** a ∀-quantified lemma's `(l.zipIdx base)`
+  instantiated at `base:=0` is a DIFFERENT omega-atom than a literal `l.zipIdx`
+  in the same goal — rfl/defeq-equal, but `omega` hashes them apart and splits
+  the equation (`i - n ≥ 1`). Fix: `generalize` both length atoms to fresh vars
+  before `omega` (see the `prologue_sim` frameReg=0 pc reconciliation).
 
 ## 5. Work plan (commit-ordered; each step green + committed before the next)
 
@@ -461,7 +466,7 @@ before W4, several details deviate from the pre-implementation sketch below:
 | W2 | ✅ DONE (`d2d5e54` C2 + `07ab057` C3). C2+C3 surgery: `StInv` (stackLo FIELD, free-stack `OffPriv` domain, ordering + no-wrap conjuncts), `MemAccOff` strengthening, `FramesPres` as a separate ∧ conclusion; re-threaded everything incl. `sub3_body_sim`. `hbd` reshape deferred to W7 | ~500 delta | done — the ∧-at-top FramesPres (not woven into StInv) kept it tractable |
 | W3 | C1: add `fd holes epiPos` to `generalizing`; existing cases pass current values to the 3 extra IH args. **Do together with W7** (only the call case needs it) | ~50 delta | low |
 | W4 | ✅ COMPLETE. Atoms: `step_jalr`+`run_storeFrom` (W4a `e0161c3`), `run_marshalFrom` (W4b `d7e0e69`), `run_retStoresFrom`+`run_storeFrom` reg-preservation (W4c `177504e`), `jalr_lands`+`word_and_not_one`+`testBit_pow_two_sub_one`+`getLsbD0_of_even` (W4d `0045c3c`). `park_lastwins` → W5; `halign` → W7. `run_loadTo` unneeded (`run_load` already generic over target `t`) | ~450 | done. **Reg-typed ≠ is invisible to omega**; **`~~~`/`not` lemmas are Classical-tainted** — see STATUS |
-| W5 | `prologue_sim` standalone + oracle instantiation on `diff_caller` state | ~300 | **medium** — the per-slot three-way case walk (param/frameReg/zeroed) with last-wins is the fiddliest lemma of the phase |
+| W5 | ✅ COMPLETE (`a71e29c`). `prologue_sim` standalone: G0 (sp drop + ra save) → G1 param park (`run_parkParams`/`parkFold`) → G2 zero-init (`run_zeroSlots`) → G3 frameReg (`run_slotStore`). Callee-frame mem obligation carried as entry hyp `hmemF` (W7 discharges). Axiom-clean `[propext, Quot.sound]`. `zipIdx`-atom omega gotcha → `generalize` | ~300 | done — the three-way per-slot walk landed via the segment-runner atoms + `parkFold_mem_indep`/`parkFold_not_mem` |
 | W6 | `epilogue_sim` standalone | ~150 | low |
 | W7 | C4 hyps (`hpad`/`hfn`/`halign`) + C6 arm + the call case assembly (§4) | ~300 | medium — pure plumbing if W2–W6 landed as stated |
 | W8 | `#print axioms lower_sim_cf` → target `[propext, Quot.sound]` (no `sorryAx` left at statement level); update RESUME-PROGSIM status + [PROGRESS.md](PROGRESS.md); record `hpad`/`hfn`/`halign` as Phase-2 obligations next to `hdat`/`hdbase`/`hdpos` | ~30 | — |
