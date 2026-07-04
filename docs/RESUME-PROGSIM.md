@@ -5,8 +5,13 @@ Plan written 2026-07-02, immediately after the executable cut landed. Read with
 [PROGRESS.md](PROGRESS.md) (what exists), [archive/RESUME-LOWIR.md](archive/RESUME-LOWIR.md)
 (the hex0-era proof toolbox and gotchas — much of it ports).
 
-**Status (updated 2026-07-03).** Phase 0 is essentially done and the relation
-skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
+**Status (updated 2026-07-04).** Phase 0 done, relation validated, and the
+statement-level simulation `lower_sim_cf` now covers EVERY control-flow
+construct except const-data/call: skip/annot/seq/block/ife/**while**, all six
+arith + four mem ops, and the three leaf jumps ret/brkB/contL. The only
+statement-level `sorry` left is `CtrlSim.lean:777`'s `all_goals sorry` over
+**cref/clen/call**. `lower_sim` was pruned to leaf-only and is axiom-clean
+(`[propext, Quot.sound]`). Concretely (older entries retained below):
 - **Phase 0.1 (P1 oracle) — DONE.** `pad : Name → Nat` in `frameEnter`/`exec`/
   `run` (default `fun _ => 0`, everything re-greens); `CompileTests.lean` has
   the `pad = userOff` frame-memory differential tests validating P1. Committed.
@@ -140,12 +145,22 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   Fuel induction over `emitCF` with the label environment. **Cases DONE:** skip,
   annot, block (IH on body with `lEnd::brkPos`, outcome case-walk), the six arith
   + four mem ops (delegate to `emit`'s `lower_sim`), seq (outcome-threaded), the
-  three leaf jumps ret/brkB/contL (`jump_sim`), and **`ife`** — two `run_load`s to
-  the branch, `cond_taken`/`cond_not_taken` split on `evalCond`, then/else IHs,
-  else-normal extra jal, landings reconciled. Needs a `BranchOk` side condition
-  (every ife's `8+4·csize e < 2^12`, the compiler's 13-bit branch-span guard) and
-  a `MemAccOff` ife case (both arms access-safe). **Remaining `sorry`:** while
-  (fuel-IH back-edge + `contPos` scope), cref, clen, call.
+  three leaf jumps ret/brkB/contL (`jump_sim`), **`ife`** (two `run_load`s to the
+  branch, `cond_taken`/`cond_not_taken` split on `evalCond`, then/else IHs,
+  else-normal extra jal, landings reconciled; `BranchOk` 13-bit branch-span guard +
+  `MemAccOff` ife arm), and — **NEW 2026-07-04 (`0615725`)** — **`while`**: 2
+  slot-loads + `condInstr c T0 T1 8` branch = 3 steps, then guard-false→`cond_not_taken`
+  fall-through + exit `jal`→lEnd (`.normal`, exec_while_false), guard-true→`cond_taken`
+  to lBody + body IH at `fuel`, then the six-way outcome walk — `.normal`→back-edge
+  `jump_sim` to lTop + **fuel IH on the SAME while** (Prog's back-edge re-executes the
+  identical `.while c a b body` at reduced fuel, so the recursive `emitCF` instance is
+  the same at position `here` — exec_while_normal); `.cont 0`→body already at lTop, fuel
+  IH directly (exec_while_cont0); `.cont (k+1)`→contPos[k], `.brk k`→brkPos[k], `.ret`→
+  epiPos propagate. `StInv_sp_eq` threads `hnw`/`hbd` across iterations. Also **extended
+  `MemAccOff` with a `while` arm** (body-at-fuel ∧ every normal/cont0 iteration
+  access-safe; fuel-structural like `seq` — the old `True` stub couldn't feed the body
+  IH). **Remaining `sorry`** (`CtrlSim.lean:777`, `all_goals sorry`): **cref, clen,
+  call** only.
 - **Phase 4.1 sub3 corollary — DONE, go/no-go CLOSED (sorry-free).**
   `sub3_body_exec` (IL spec `(a+b)−c` into x10, forward via `exec_*`) +
   `sub3_body_sim`: from a `StInv`-related state with `emit sub3.body` installed,
@@ -156,13 +171,16 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   differential oracle `diff_sub3` ([30,12,2] ↦ 40), checked by a `native_decide`
   example. The relation is validated end-to-end against the oracle.
 - **NEXT (priorities re-assessed 2026-07-04 — [PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md)):**
-  1. **Prune `lower_sim`'s dead tail** (`StmtSim.lean:1003` + its `seq` case):
-     `lower_sim_cf` supersedes both and already proves block/ife/seq/ret/brk/
-     cont; keep only the straight-line/mem leaf cases it delegates to. After
-     the prune, `CtrlSim.lean:603` is the single statement-level `sorry`.
-  2. `lower_sim_cf` **while** (fuel-IH back-edge — design confirmed in the
-     Phase-4.3 status entry above), then **cref/clen** (`synthConst`; needs the
-     `emitCF` extension first — both are currently stubbed in `emit`/`csize`).
+  1. ~~Prune `lower_sim`'s dead tail~~ **DONE (`f0cdeff`).** `lower_sim` is now
+     restricted to leaf statements via an `isLeaf : PStmt → Bool` premise (the 10
+     `lower_sim_cf` delegations pass `rfl`); dropped the `seq` case (`induction fuel`
+     → `cases fuel`) and turned the control-flow `all_goals sorry` into a
+     `hleaf`-contradiction. `#print axioms lower_sim` = `[propext, Quot.sound]` — its
+     completed `lower_sim_cf` callers no longer inherit `sorryAx`.
+  2. ~~`lower_sim_cf` **while**~~ **DONE (`0615725`).** Next: **cref/clen**
+     (`synthConst`; needs the `emitCF`/`csize` extension first — both are currently
+     stubbed to `emit s = []` / `(emit s).length`; the `synthConst_correct` 3-step
+     `ofInt v` lemma + the `cref` 5-step jal-pc-read are Phase-2 material).
   3. Phase 5 (**call**), then Phases 1/2 (encode/decode; AsmFacts —
      `Emitted L pos (emit stmt)` from the real pipeline, today only `#guard`-
      validated), then 6 (**prog_sim**).
@@ -597,11 +615,13 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
   `step_{jal,beq,blt,bge,bgeu}`, `signExtend_ofInt_{21,13}`, `jump_lands`,
   `jump_sim`, and `ret_sim`/`brkB_sim`/`contL_sim`, all `[propext, Quot.sound]`.
 - [x] `lower_sim_cf` (outcome-carrying, `CtrlSim.lean`): skip/annot/block/seq/
-  arith/mem/ret/brkB/contL/**ife** proven; needs `BranchOk` + ife `MemAccOff`.
-- [ ] Prune `lower_sim`'s superseded tail (`StmtSim.lean:1003` + its `seq`
-  case) — see the re-assessed NEXT list above ([PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md)).
-- [ ] Finish `lower_sim_cf`: while, then cref/clen (unstub `emitCF`/`csize`),
-  then call (Phase 5).
+  arith/mem/ret/brkB/contL/**ife**/**while** proven (`BranchOk` + `MemAccOff`
+  ife/while arms in place).
+- [x] Prune `lower_sim`'s superseded tail — `f0cdeff` (leaf-only via `isLeaf`,
+  axiom-clean `[propext, Quot.sound]`).
+- [x] `lower_sim_cf` **while** — `0615725` (fuel-IH back-edge; `MemAccOff` while arm).
+- [ ] Finish `lower_sim_cf`: **cref/clen** (unstub `emitCF`/`csize` +
+  `synthConst_correct`), then **call** (Phase 5).
 - [ ] Then Phases 1/2 (encode/decode, assembler) in parallel-friendly chunks,
   then 6 (`prog_sim`).
 - [ ] Post-campaign: Prog frame theorem, then `hex0F_correct` at the Prog
