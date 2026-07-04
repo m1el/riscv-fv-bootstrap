@@ -375,13 +375,50 @@ No `wf` hypothesis is needed anywhere: `exec`'s dynamic checks (lookup,
 arity, `frameEnter`) carry everything, and the frameReg-overrides-params
 order is IDENTICAL on both sides regardless of well-formedness.
 
+## STATUS (updated 2026-07-04) — W1 + W2 DONE, green + committed
+
+W1, W2a (C2), W2b (C3) landed and green (`lake build LowIRProgSim` clean; the
+ONLY `sorry` is the `call` case of `lower_sim_cf`). Commits: `bf83654` (W1),
+`d2d5e54` (W2a), `07ab057` (W2b). What the next session inherits — read this
+before W4, several details deviate from the pre-implementation sketch below:
+
+- **`fnPos` is a real `emitCF` param** (after `dpos`), threaded through
+  `emitCF_length`, `matchesReal`, and all of `lower_sim_cf`. `csize`'s call arm
+  is `args.toList.length + 1 + (retStoresI rets.toList).length` (NOT the
+  filter form) — keeps `emitCF_length` a one-liner. `marshalI`/`retStoresI`
+  (CtrlSim) + `marshalI_length`. `prologueI`/`epilogueI`/`prologueSize`
+  (= `.length`)/`epilogueSize` (= `rvc+3`), `matchesRealProg` #guards green.
+- **C2 chose a `Layout.stackLo` FIELD, not a threaded parameter** — so all 50
+  `StInv L fd holes s m` sites stayed textually unchanged. `OffPriv L holes sp a
+  := ¬MachPriv ∧ ¬memRange a L.stackLo (sp−L.stackLo)` (Defs). `StInv` is now an
+  **8-conjunct** structure: c4 memory conjunct weakened to `∀ a, OffPriv L holes
+  s.sp a → s.mem a = m.mem a`; c7 `∀ h ∈ holes, s.sp.toNat ≤ h.1.toNat`; c8
+  `∀ h ∈ holes, h.1.toNat + h.2 ≤ 2^64`. `layoutOf` gained a `stackLo` arg.
+  `MemAccOff`'s 4 mem arms use `OffPriv L holes s.sp`. Positional accessors to
+  c1–c5 are UNCHANGED (c6 had no positional users); destructures went 6→8.
+- **`hbd` was NOT reshaped** (deferred to W7 — its stackLo form is only needed to
+  propagate to the callee IH). C4's `hpad`/`hfn`/`halign` NOT added yet.
+- **C3 `FramesPres` is a separate 3rd conclusion conjunct** (`∃ k, StInv ∧ pc ∧
+  FramesPres holes s.sp fd m (stepN k m)`), NOT woven into StInv — the plan's
+  fallback, and it was the right call. `FramesPres`/`_of_mem_eq`/`_trans` in
+  Defs; `FramesPres_user_store`/`_storeByte` in MemFacts. Atoms that now emit it:
+  `run_store` (4th component), `single_op_sim`/`two_op_sim` (4th), `jump_sim`
+  (3rd, + `ret_sim`/`brkB_sim`/`contL_sim` carry it). Every `lower_sim`/`_cf`
+  case produces it — so W4+ inherits a stable conclusion.
+- **Ready for W4**: the atoms and `prologue_sim`/`epilogue_sim`/call-assembly are
+  the remaining work. `step_jalr`/`jalr_lands` (W4) still to write; `A`/`RA`/`SP`
+  are opened in CtrlSim; `run_load`/`run_store`/`run_synth` are the generalization
+  templates. Do W3 (generalize induction) immediately before W7 (only the call
+  case changes `fd`/`holes`/`epiPos`); W4/W5/W6 are standalone and need no
+  induction change.
+
 ## 5. Work plan (commit-ordered; each step green + committed before the next)
 
 | # | Step | Size | Risk |
 |---|---|---|---|
-| W1 | C5 defs: `csize`/`emitCF` call arms + `fnPos`, `prologueI`/`epilogueI`/sizes, `matchesRealProg`, `#guard`s on caller/chain/recSum + a corner-case fn. NO proofs | ~200 | low — pure defs, decidably validated |
-| W2 | C2+C3 surgery in ONE retrofit pass: `StInv` (stackLo param, free-stack agreement domain, ordering + no-wrap conjuncts), `MemAccOff` strengthening, `hbd` reshape, `FramesPres` in the conclusion; re-thread `SlotFacts`/`MemFacts`/`StmtSim`/`CtrlSim`; re-green EVERYTHING incl. `sub3_body_sim` | ~500 delta | **medium-high**: widest touch; entirely mechanical but the while case's six-way walk re-threads two conjuncts × six arms. This is the step to time-box; if `FramesPres` threading fights, check whether stating it as a separate simultaneous conclusion (∧ at the top) beats weaving it into `StInv` |
-| W3 | C1: add `fd holes epiPos` to `generalizing`; existing cases pass current values to the 3 extra IH args | ~50 delta | low |
+| W1 | ✅ DONE (`bf83654`). C5 defs: `csize`/`emitCF` call arms + `fnPos`, `prologueI`/`epilogueI`/sizes, `matchesRealProg`, `#guard`s on caller/chain/recSum + a corner-case fn. NO proofs | ~200 | low — pure defs, decidably validated |
+| W2 | ✅ DONE (`d2d5e54` C2 + `07ab057` C3). C2+C3 surgery: `StInv` (stackLo FIELD, free-stack `OffPriv` domain, ordering + no-wrap conjuncts), `MemAccOff` strengthening, `FramesPres` as a separate ∧ conclusion; re-threaded everything incl. `sub3_body_sim`. `hbd` reshape deferred to W7 | ~500 delta | done — the ∧-at-top FramesPres (not woven into StInv) kept it tractable |
+| W3 | C1: add `fd holes epiPos` to `generalizing`; existing cases pass current values to the 3 extra IH args. **Do together with W7** (only the call case needs it) | ~50 delta | low |
 | W4 | Atoms: `step_jalr`, `jalr_lands` (+`halign` hyp), `run_loadTo`, `run_storeFrom`, `run_marshal`, `run_retstores`, `park_lastwins` | ~450 | low-medium; copy the `9ec08e5` generalization pattern |
 | W5 | `prologue_sim` standalone + oracle instantiation on `diff_caller` state | ~300 | **medium** — the per-slot three-way case walk (param/frameReg/zeroed) with last-wins is the fiddliest lemma of the phase |
 | W6 | `epilogue_sim` standalone | ~150 | low |
