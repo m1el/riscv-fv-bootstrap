@@ -450,6 +450,13 @@ def synthI (t : Nat) (v : Int) : List Instr :=
 
 @[simp] theorem synthI_length (t : Nat) (v : Int) : (synthI t v).length = 3 := rfl
 
+/-- The concrete `Instr` list `resolveOne`'s `cref d` produces: a `jal t0, +4`
+    pc-read, the 3-instr synth of the delta `δ` into `t1`, then `add t0, t0, t1`. -/
+def crefI (t0 t1 : Nat) (δ : Int) : List Instr :=
+  [Instr.jal t0 (BitVec.ofInt 21 4)] ++ synthI t1 δ ++ [Instr.add t0 t0 t1]
+
+@[simp] theorem crefI_length (t0 t1 : Nat) (δ : Int) : (crefI t0 t1 δ).length = 5 := rfl
+
 /-- The value identity: `(ofInt hi) <<< 12 + ofInt lo = ofInt (hi*4096 + lo)`. -/
 theorem synth_val (hi lo : Int) :
     ((BitVec.ofInt 64 hi) <<< (12:Nat)) + BitVec.ofInt 64 lo
@@ -529,6 +536,77 @@ theorem run_synth (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : S
     rw [show stepN 3 m = step (step (step m)) from rfl, hs2, rget_setPc,
         rget_rset_ne _ _ _ _ hr, hs1, rget_setPc, rget_rset_ne _ _ _ _ hr,
         hs0, rget_setPc, rget_rset_ne _ _ _ _ hr]
+
+/-- Run the 5-instruction `cref` sequence (`jal T0,+4` pc-read; 3-instr synth of
+    the delta into T1; `add T0,T0,T1`): loads `codeBase + dp` (the data object's
+    absolute address) into T0, IL state `s` unchanged. `dp`/`here < 2^20` (the
+    blob fits) give the synth range. `[propext, Quot.sound]`. -/
+theorem run_cref (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State)
+    (dp here : Nat) (hinv : StInv L fd holes s m)
+    (hpc : m.pc = L.codeBase + BitVec.ofNat 64 here)
+    (hem : Emitted L here (crefI T0 T1 ((dp:Int) - ((here:Int) + 4))))
+    (hhere : here < 2^20) (hdp : dp < 2^20) :
+    StInv L fd holes s (stepN 5 m)
+    ∧ (stepN 5 m).rget T0 = L.codeBase + BitVec.ofNat 64 dp
+    ∧ (stepN 5 m).pc = L.codeBase + BitVec.ofNat 64 (here + 20)
+    ∧ (stepN 5 m).mem = m.mem := by
+  have hinst : Installed L m := hinv.2.2.1
+  have hδ : -2048 ≤ synthHi ((dp:Int) - ((here:Int) + 4))
+          ∧ synthHi ((dp:Int) - ((here:Int) + 4)) ≤ 2047 := by
+    refine ⟨?_, ?_⟩ <;> (unfold synthHi synthLo; omega)
+  have hLS : Emitted L here ([Instr.jal T0 (BitVec.ofInt 21 4)] ++ synthI T1 ((dp:Int) - ((here:Int)+4)))
+      := Emitted_append_left L here _ [Instr.add T0 T0 T1] hem
+  have hemJ : Emitted L here [Instr.jal T0 (BitVec.ofInt 21 4)] :=
+    Emitted_append_left L here _ (synthI T1 ((dp:Int) - ((here:Int)+4))) hLS
+  have hemS : Emitted L (here + 4) (synthI T1 ((dp:Int) - ((here:Int)+4))) := by
+    have h := Emitted_append_right L here [Instr.jal T0 (BitVec.ofInt 21 4)]
+      (synthI T1 ((dp:Int) - ((here:Int)+4))) hLS
+    simpa using h
+  have hemA : Emitted L (here + 16) [Instr.add T0 T0 T1] := by
+    have h := Emitted_append_right L here
+      ([Instr.jal T0 (BitVec.ofInt 21 4)] ++ synthI T1 ((dp:Int) - ((here:Int)+4)))
+      [Instr.add T0 T0 T1] hem
+    simpa using h
+  have hdJ : decode (fetch32 m) = Instr.jal T0 (BitVec.ofInt 21 4) := by
+    have h := decode_at L m m here [Instr.jal T0 (BitVec.ofInt 21 4)] hemJ hinst 0 (by simp)
+      (by simpa using hpc) rfl
+    simpa using h
+  have hsJ : step m = (m.rset T0 (m.pc + 4)).setPc (m.pc + (BitVec.ofInt 21 4).signExtend 64) :=
+    step_jal m T0 _ hdJ
+  have hpc1 : (step m).pc = L.codeBase + BitVec.ofNat 64 (here + 4) := by
+    rw [hsJ, pc_setPc, hpc, signExtend_ofInt_21 4 (by decide) (by decide),
+        show (4:Int) = ((here+4:Nat):Int) - ((here:Nat):Int) from by omega, jump_lands]
+  have hmem1 : (step m).mem = m.mem := by rw [hsJ, mem_setPc, mem_rset]
+  have hT0_1 : (step m).rget T0 = L.codeBase + BitVec.ofNat 64 (here + 4) := by
+    rw [hsJ, rget_setPc, rget_rset_self _ _ _ (by decide), hpc, pc_add4]
+  have hI1 : StInv L fd holes s (step m) := by
+    rw [hsJ]; exact StInv_scratch L fd holes s m T0 _ _ (by decide) hinv
+  obtain ⟨hinvS, hT1S, hpcS, hmemS, hpres⟩ :=
+    run_synth L fd holes s (step m) T1 (by decide) (by decide)
+      ((dp:Int) - ((here:Int)+4)) (here + 4) hI1 hpc1 hemS hδ
+  have hpc4 : (stepN 3 (step m)).pc = L.codeBase + BitVec.ofNat 64 (here + 16) := by rw [hpcS]
+  have hmem4 : (stepN 3 (step m)).mem = m.mem := by rw [hmemS, hmem1]
+  have hT0_4 : (stepN 3 (step m)).rget T0 = L.codeBase + BitVec.ofNat 64 (here + 4) := by
+    rw [hpres T0 (by decide), hT0_1]
+  have hdA : decode (fetch32 (stepN 3 (step m))) = Instr.add T0 T0 T1 := by
+    have h := decode_at L m (stepN 3 (step m)) (here + 16) [Instr.add T0 T0 T1] hemA hinst 0 (by simp)
+      (by rw [hpc4]) hmem4
+    simpa using h
+  have hsA : step (stepN 3 (step m))
+      = ((stepN 3 (step m)).rset T0 ((stepN 3 (step m)).rget T0 + (stepN 3 (step m)).rget T1)).setPc
+          ((stepN 3 (step m)).pc + 4) := step_add _ T0 T0 T1 hdA
+  have haddval : (stepN 3 (step m)).rget T0 + (stepN 3 (step m)).rget T1
+      = L.codeBase + BitVec.ofNat 64 dp := by
+    rw [hT0_4, hT1S,
+        show ((dp:Int) - ((here:Int)+4)) = ((dp:Nat):Int) - ((here+4:Nat):Int) from by omega,
+        jump_lands]
+  have h5 : stepN 5 m = step (stepN 3 (step m)) := rfl
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · rw [h5, hsA]
+    exact StInv_scratch L fd holes s (stepN 3 (step m)) T0 _ _ (by decide) hinvS
+  · rw [h5, hsA, rget_setPc, rget_rset_self _ _ _ (by decide), haddval]
+  · rw [h5, hsA, pc_setPc, hpc4, pc_add4]
+  · rw [h5, hsA, mem_setPc, mem_rset, hmem4]
 
 /-- Two `StInv`s over the same `holes` pin the same frame pointer: `s'.sp = s.sp`.
     (`holes.head? = some (·.sp, userOff fd)` in each; `holes` is fixed.) This is how

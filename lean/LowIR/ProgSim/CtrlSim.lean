@@ -44,6 +44,7 @@ def csize : PStmt → Nat
   | .ife _ _ _ t e  => 4 + csize e + csize t
   | .while _ _ _ b  => 5 + csize b
   | .clen rd _      => 3 + (if rd = 0 then 0 else 1)   -- synthConst (3) + storeSlot
+  | .cref rd _      => 5 + (if rd = 0 then 0 else 1)   -- pc-read + synth + add + store
   | s               => (emit s).length
 
 /-- The label-aware lowering. `brkPos`/`contPos` are the enclosing block-end /
@@ -80,6 +81,10 @@ def emitCF (dat : Data) (dpos : Name → Nat) (brkPos contPos : List Nat) (epiPo
   | _here, .clen rd d =>
       -- position-independent: synth the data length into T0, park into rd's slot.
       synthI T0 (((List.lookup d dat).map (·.length)).getD 0 : Int) ++ storeSlotI rd T0
+  | here, .cref rd d =>
+      -- pc-read (`jal T0,+4`) + synth the delta to `d`'s absolute position into T1
+      -- + `add T0,T0,T1` ⇒ T0 = data address; park into rd's slot.
+      crefI T0 T1 ((dpos d : Int) - ((here : Int) + 4)) ++ storeSlotI rd T0
   | _, s => emit s
 
 /-- `emitCF`'s length is exactly `csize` — position/label-independent, as claimed.
@@ -106,6 +111,8 @@ theorem emitCF_length (dat : Data) (dpos : Name → Nat) (bp cp : List Nat) (ep 
       omega
   | clen rd d =>
       simp only [emitCF, csize, List.length_append, synthI_length, storeSlotI_length]
+  | cref rd d =>
+      simp only [emitCF, csize, List.length_append, crefI_length, storeSlotI_length]
   | _ => rfl
 
 /-- Sanity: on the straight-line fragment, `emitCF` is exactly `emit` (the
@@ -128,29 +135,38 @@ open LowIR.Compile (lower layoutItems resolveOne)
     Epilogue label `0` (targeted by `ret`) is planted just past the body — its
     position is `4·csize body` — and `fresh` is seeded from `1` so internal labels
     can't collide with it. So `emitCF` must be compared with `epiPos = 4·csize`. -/
-def realResolve (dat : Data) (body : PStmt) : Option (List Instr) :=
+def realResolve (dat : Data) (dats : List (Name × Nat)) (body : PStmt) : Option (List Instr) :=
   let syms : List LowIR.Compile.SymInstr := (lower dat [] [] 0 body).run' 1
   let (flat, lbls, _) := layoutItems (syms ++ [LowIR.Compile.SymInstr.label 0]) 0
-  (flat.mapM (fun p => resolveOne lbls [] [] p)).map List.flatten
+  (flat.mapM (fun p => resolveOne lbls [] dats p)).map List.flatten
 
-/-- `emitCF` matched against the real pipeline, epilogue at the body's end. `dpos`
-    is `fun _ => 0`: the bodies below have no `cref` (whose emit reads `dpos`). -/
-def matchesReal (dat : Data) (body : PStmt) : Bool :=
-  realResolve dat body == some (emitCF dat (fun _ => 0) [] [] (4 * csize body) 0 body)
+/-- `emitCF` matched against the real pipeline, epilogue at the body's end.
+    `dpos d = (dats.lookup d).getD 0` mirrors `resolveOne`'s data-offset read. -/
+def matchesReal (dat : Data) (dats : List (Name × Nat)) (body : PStmt) : Bool :=
+  realResolve dat dats body
+    == some (emitCF dat (fun d => (dats.lookup d).getD 0) [] [] (4 * csize body) 0 body)
 
 -- `strlen` (`while`), `strtoull` (`block`+`while`+`ife`+`brkB`), `hex0` (nested
 -- `ife`s + `while` + `ret`): the validated IR↔assembly mapping, checked concretely.
-#guard matchesReal [] LowIR.Prog.Lib.strlenF.body
-#guard matchesReal [] LowIR.Prog.Lib.strtoullF.body
-#guard matchesReal [] LowIR.Prog.Lib.hex0F.body
-#guard matchesReal [] LowIR.Prog.Lib.hex1F.body
+#guard matchesReal [] [] LowIR.Prog.Lib.strlenF.body
+#guard matchesReal [] [] LowIR.Prog.Lib.strtoullF.body
+#guard matchesReal [] [] LowIR.Prog.Lib.hex0F.body
+#guard matchesReal [] [] LowIR.Prog.Lib.hex1F.body
 
 -- `clen`: the synthConst (data-length materialise) + slot-store, validated against
 -- the real compiler for several lengths and both `rd = 0` (discard) and `rd ≠ 0`.
-#guard matchesReal [("tbl", [1, 2, 3])] (.clen 5 "tbl")
-#guard matchesReal [("tbl", List.replicate 300 0)] (.clen 11 "tbl")
-#guard matchesReal [("tbl", [1, 2, 3])] (.clen 0 "tbl")
-#guard matchesReal [("tbl", [7])] (.seq (.clen 5 "tbl") (.addi 6 5 (BitVec.ofNat 12 1)))
+#guard matchesReal [("tbl", [1, 2, 3])] [] (.clen 5 "tbl")
+#guard matchesReal [("tbl", List.replicate 300 0)] [] (.clen 11 "tbl")
+#guard matchesReal [("tbl", [1, 2, 3])] [] (.clen 0 "tbl")
+#guard matchesReal [("tbl", [7])] [] (.seq (.clen 5 "tbl") (.addi 6 5 (BitVec.ofNat 12 1)))
+
+-- `cref`: pc-read + delta-synth + add + slot-store, validated against `resolveOne`
+-- at several data offsets (the `dats` table) and both `rd = 0` and `rd ≠ 0`.
+#guard matchesReal [("tbl", [1, 2, 3])] [("tbl", 100)] (.cref 5 "tbl")
+#guard matchesReal [("tbl", [1, 2, 3])] [("tbl", 65540)] (.cref 20 "tbl")
+#guard matchesReal [("tbl", [1, 2, 3])] [("tbl", 100)] (.cref 0 "tbl")
+#guard matchesReal [("a", [1]), ("b", [2])] [("a", 40), ("b", 48)]
+  (.seq (.cref 5 "a") (.cref 6 "b"))
 
 /-! ## The outcome-carrying `lower_sim`.
 
@@ -254,7 +270,9 @@ theorem lower_sim_cf
     (hseg  : 4 * L.instrs.length ≤ L.segStart)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
     (hdat  : ∀ d, -2048 ≤ synthHi (((List.lookup d P.data).map (·.length)).getD 0)
-                ∧ synthHi (((List.lookup d P.data).map (·.length)).getD 0) ≤ 2047) :
+                ∧ synthHi (((List.lookup d P.data).map (·.length)).getD 0) ≤ 2047)
+    (hdbase : ∀ d a, dbase d = some a → a = L.codeBase + BitVec.ofNat 64 (dpos d))
+    (hdpos : ∀ d, dpos d < 2 ^ 20) :
     ∃ k, StInv L fd holes s' (stepN k m)
        ∧ (stepN k m).pc = L.codeBase
            + BitVec.ofNat 64 (landPos brkPos contPos epiPos (here + 4 * csize stmt) oc) := by
@@ -829,7 +847,42 @@ theorem lower_sim_cf
             apply pc_congr
             simp only [landPos, csize, storeSlotI_length]
             by_cases hrd0 : rd = 0 <;> simp only [hrd0, if_true, if_false] <;> omega
-    case cref rd d => sorry
+    case cref rd d =>
+      -- pc-read + delta-synth + add (`run_cref`) loads the data address into T0,
+      -- then park it into rd's slot (`run_store`). `hdbase` links the IL `dbase`
+      -- to the machine layout; `hdpos`/`here < 2²⁰` give the delta synth range.
+      have hrd : rd ≤ maxRegF fd := hreg
+      have hfrd : slotOff rd < 2 ^ 11 := by
+        have := slotOff_add8_le_userOff fd rd hrd; omega
+      have hhere : here < 2 ^ 20 := by
+        have : here + 4 * csize (.cref rd d) < 2 ^ 20 := hbnd; omega
+      cases hdb : dbase d with
+      | none =>
+          rw [LowIR.Prog.exec_cref_none P dbase pad stackLo fuel rd d s hdb] at hexec
+          exact absurd hexec (by simp)
+      | some a =>
+          rw [LowIR.Prog.exec_cref P dbase pad stackLo fuel rd d s hdb, Option.some.injEq,
+              Prod.mk.injEq] at hexec
+          obtain ⟨rfl, rfl⟩ := hexec
+          have ha : a = L.codeBase + BitVec.ofNat 64 (dpos d) := hdbase d a hdb
+          simp only [emitCF] at hem
+          have hemC : Emitted L here (crefI T0 T1 ((dpos d : Int) - ((here : Int) + 4))) :=
+            Emitted_append_left L here _ (storeSlotI rd T0) hem
+          have hemST : Emitted L (here + 20) (storeSlotI rd T0) := by
+            have h := Emitted_append_right L here
+              (crefI T0 T1 ((dpos d : Int) - ((here : Int) + 4))) (storeSlotI rd T0) hem
+            rwa [crefI_length] at h
+          obtain ⟨hinvC, hT0C, hpcC, -⟩ :=
+            run_cref L fd holes s m (dpos d) here hinv hpc hemC hhere (hdpos d)
+          obtain ⟨ks, hinvF, hpcF⟩ :=
+            run_store L fd holes s (stepN 5 m) rd (L.codeBase + BitVec.ofNat 64 (dpos d))
+              (here + 20) hinvC hT0C hpcC hemST hrd hfrd hnw hseg hblob hbd
+          refine ⟨5 + ks, ?_, ?_⟩
+          · rw [stepN_add 5 ks m]; rw [← ha] at hinvF; exact hinvF
+          · rw [stepN_add 5 ks m, hpcF]
+            apply pc_congr
+            simp only [landPos, csize, storeSlotI_length]
+            by_cases hrd0 : rd = 0 <;> simp only [hrd0, if_true, if_false] <;> omega
     case call argc rvc f args rets => sorry
 
 end LowIR.ProgSim
