@@ -155,12 +155,26 @@ skeleton is drafted; the vertical slice is the next go/no-go. Concretely:
   control-flow `sorry`), chained with `stepN_add`. The IL result reproduces the
   differential oracle `diff_sub3` ([30,12,2] ↦ 40), checked by a `native_decide`
   example. The relation is validated end-to-end against the oracle.
-- **NEXT:** Phase 4.3 control flow (ife/while/block/ret/brk/cont — the outcome
-  selects a label; needs the `Emitted` label-offset algebra + a `.brk/.cont/.ret`
-  outcome-carrying `lower_sim` generalization), cref/clen (`synthConst`), Phase 2
-  (AsmFacts: `Emitted L pos (emit stmt)` from the real pipeline), 5 (call),
-  6 (prog_sim). A sorry-free frameLocal corollary (mem end-to-end vs the oracle)
-  can be done now by driving sd/ld through the simulators directly (as sub3 did).
+- **NEXT (priorities re-assessed 2026-07-04 — [PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md)):**
+  1. **Prune `lower_sim`'s dead tail** (`StmtSim.lean:1003` + its `seq` case):
+     `lower_sim_cf` supersedes both and already proves block/ife/seq/ret/brk/
+     cont; keep only the straight-line/mem leaf cases it delegates to. After
+     the prune, `CtrlSim.lean:603` is the single statement-level `sorry`.
+  2. `lower_sim_cf` **while** (fuel-IH back-edge — design confirmed in the
+     Phase-4.3 status entry above), then **cref/clen** (`synthConst`; needs the
+     `emitCF` extension first — both are currently stubbed in `emit`/`csize`).
+  3. Phase 5 (**call**), then Phases 1/2 (encode/decode; AsmFacts —
+     `Emitted L pos (emit stmt)` from the real pipeline, today only `#guard`-
+     validated), then 6 (**prog_sim**).
+  4. **Before starting `ProgProof`** (post-campaign): prove the Prog syntactic
+     frame theorem (`exec_frame` analog, `defs`-based — exec only writes
+     textually-assigned registers) in `ProgSim/ExecFacts.lean`; the SSA
+     campaign measured this as the win that empties loop invariants of
+     register bookkeeping. Then port `CtrlProof.main_loop` → `hex0F_correct`
+     ONCE at the Prog altitude and compose with `prog_sim` — do not maintain
+     parallel per-rung hex0 proofs (PROOF-COMPLEXITY F2).
+  A sorry-free frameLocal corollary (mem end-to-end vs the oracle) can be done
+  anytime by driving sd/ld through the simulators directly (as sub3 did).
 
 ## 0. Mission and payoff
 
@@ -582,8 +596,14 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
 - [x] **Phase 4.3 control-flow foundation + leaf ops — DONE (ret/brkB/contL).**
   `step_{jal,beq,blt,bge,bgeu}`, `signExtend_ofInt_{21,13}`, `jump_lands`,
   `jump_sim`, and `ret_sim`/`brkB_sim`/`contL_sim`, all `[propext, Quot.sound]`.
-- [ ] Finish `lower_sim`: the COMPOUND control-flow ops (ife/while/block) via the
-  outcome-carrying generalization + label-position map (design in the Phase-4.3
-  status entry above), then cref/clen, then call.
+- [x] `lower_sim_cf` (outcome-carrying, `CtrlSim.lean`): skip/annot/block/seq/
+  arith/mem/ret/brkB/contL/**ife** proven; needs `BranchOk` + ife `MemAccOff`.
+- [ ] Prune `lower_sim`'s superseded tail (`StmtSim.lean:1003` + its `seq`
+  case) — see the re-assessed NEXT list above ([PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md)).
+- [ ] Finish `lower_sim_cf`: while, then cref/clen (unstub `emitCF`/`csize`),
+  then call (Phase 5).
 - [ ] Then Phases 1/2 (encode/decode, assembler) in parallel-friendly chunks,
-  the rest of 4, 5, 6 in order.
+  then 6 (`prog_sim`).
+- [ ] Post-campaign: Prog frame theorem, then `hex0F_correct` at the Prog
+  altitude (the ONE maintained hex0 proof), then the SSA→Prog lowering sim —
+  the ladder in [PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md) §3.

@@ -41,6 +41,7 @@ context — are in [archive/](archive/README.md).)
 
 ## Analyses
 
+- [PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md) — measured complexity/redundancy assessment of the Lean proof corpus (2026-07-04) and the resulting priority ladder: close `compile_sim` → one proof per program at the Prog altitude (frame theorem first) → SSA→Prog lowering → borrow checker.
 - [LEAN-VS-COQ.md](LEAN-VS-COQ.md) — implementation-difficulty comparison of the Lean vs Coq proofs, measured from the recorded [agent sessions](../sessions/README.md).
 
 ## Archive

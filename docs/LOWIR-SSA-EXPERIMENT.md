@@ -174,3 +174,8 @@ returned value list, no boundary register convention. What the port showed:
    The proof half of the graduation test now has a written plan:
    [RESUME-SSA-HEX0.md](RESUME-SSA-HEX0.md) — prove `hex0S` ≡ `Hex0.coreSpec`
    and measure the proof section-by-section against `CtrlHex0Proof.lean`.
+   **Update 2026-07-04**: (a) is done (the campaign landed, frame theorem +
+   §8 `iterWhile` included), and graduation — (b) the SSA→Prog lowering +
+   simulation, then (c) — is now scheduled as the rung after `compile_sim`
+   closes and the Prog-altitude program proofs land: the priority ladder in
+   [PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md) §3.
