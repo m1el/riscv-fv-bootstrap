@@ -1284,12 +1284,28 @@ theorem lower_sim_cf
     (hbnd  : here + 4 * csize stmt < 2 ^ 20)
     (hbr   : BranchOk stmt)
     (hframe : userOff fd ≤ 2000)
+    (hhere4 : here % 4 = 0)
     (hseg  : 4 * L.instrs.length ≤ L.segStart)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
     (hdat  : ∀ d, -2048 ≤ synthHi (((List.lookup d P.data).map (·.length)).getD 0)
                 ∧ synthHi (((List.lookup d P.data).map (·.length)).getD 0) ≤ 2047)
     (hdbase : ∀ d a, dbase d = some a → a = L.codeBase + BitVec.ofNat 64 (dpos d))
-    (hdpos : ∀ d, dpos d < 2 ^ 20) :
+    (hdpos : ∀ d, dpos d < 2 ^ 20)
+    -- C4 (the call case's flat compile-time obligations; Phase-2 discharges them
+    -- alongside hdat/hdbase/hdpos):
+    (hpad  : ∀ g gd, List.lookup g P.env = some gd → pad g = userOff gd)
+    (halign : L.codeBase.toNat % 4 = 0)
+    (hfn   : ∀ g gd, List.lookup g P.env = some gd →
+        Emitted L (fnPos g)
+            (prologueI gd
+              ++ emitCF P.data dpos fnPos [] []
+                   (fnPos g + 4 * prologueSize gd + 4 * csize gd.body)
+                   (fnPos g + 4 * prologueSize gd) gd.body
+              ++ epilogueI gd)
+          ∧ fnPos g + 4 * prologueSize gd + 4 * csize gd.body + 4 * epilogueSize gd < 2 ^ 20
+          ∧ BranchOk gd.body
+          ∧ totalFrame gd ≤ 2000
+          ∧ gd.frameSize % 8 = 0) :
     ∃ k, StInv L fd holes s' (stepN k m)
        ∧ (stepN k m).pc = L.codeBase
            + BitVec.ofNat 64 (landPos brkPos contPos epiPos (here + 4 * csize stmt) oc)
@@ -1343,7 +1359,7 @@ theorem lower_sim_cf
           obtain ⟨s'', ocb⟩ := pr
           obtain ⟨k, hst, hpck, hfr⟩ :=
             ih body s s'' ocb m here ((here + 4 * csize body) :: brkPos) contPos
-              hb hinv hpc hem' hreg' hnw hbd hacc' hlbl' hbnd' hbr' hframe
+              hb hinv hpc hem' hreg' hnw hbd hacc' hlbl' hbnd' hbr' hframe (by omega)
           cases ocb with
           | normal =>
               rw [LowIR.Prog.exec_block_normal P dbase pad stackLo fuel body s s'' hb,
@@ -1424,12 +1440,12 @@ theorem lower_sim_cf
               simp only [csize] at hbnd; omega
             obtain ⟨k1, hinvA, hpcA, hfrA⟩ :=
               ih a s s1 .normal m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
-                hlbl hbndA hbrA hframe
+                hlbl hbndA hbrA hframe (by omega)
             have hsp : s1.sp = s.sp := StInv_sp_eq L fd holes s s1 m (stepN k1 m) hinv hinvA
             obtain ⟨k2, hinvB, hpcB, hfrB⟩ :=
               ih b s1 s' oc (stepN k1 m) (here + 4 * csize a) brkPos contPos hexec hinvA
                 (by rw [hpcA]; simp only [landPos]) hemB hregB (by rw [hsp]; exact hnw)
-                (by rw [hsp]; exact hbd) (haccB s1 hea) hlbl hbndB hbrB hframe
+                (by rw [hsp]; exact hbd) (haccB s1 hea) hlbl hbndB hbrB hframe (by omega)
             refine ⟨k1 + k2, by rw [stepN_add]; exact hinvB, ?_, ?_⟩
             · have hft : (here + 4 * csize a) + 4 * csize b
                   = here + 4 * csize (LowIR.Prog.Stmt.seq a b) := by simp only [csize]; omega
@@ -1442,21 +1458,21 @@ theorem lower_sim_cf
             obtain ⟨rfl, rfl⟩ := hexec
             obtain ⟨k1, hinvA, hpcA, hfrA⟩ :=
               ih a s s1 (.brk k) m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
-                hlbl hbndA hbrA hframe
+                hlbl hbndA hbrA hframe (by omega)
             exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos], hfrA⟩
         | cont k =>
             rw [LowIR.Prog.exec_seq_cont (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
             obtain ⟨rfl, rfl⟩ := hexec
             obtain ⟨k1, hinvA, hpcA, hfrA⟩ :=
               ih a s s1 (.cont k) m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
-                hlbl hbndA hbrA hframe
+                hlbl hbndA hbrA hframe (by omega)
             exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos], hfrA⟩
         | ret =>
             rw [LowIR.Prog.exec_seq_ret (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
             obtain ⟨rfl, rfl⟩ := hexec
             obtain ⟨k1, hinvA, hpcA, hfrA⟩ :=
               ih a s s1 .ret m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
-                hlbl hbndA hbrA hframe
+                hlbl hbndA hbrA hframe (by omega)
             exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos], hfrA⟩
     case addi rd rs imm =>
       rw [LowIR.Prog.exec_addi, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1611,7 +1627,7 @@ theorem lower_sim_cf
           have hmem3 : (step (step (step m))).mem = m.mem := by rw [hs3, mem_setPc]; exact h2mm
           obtain ⟨kt, hinvT, hpcT, hfrT⟩ :=
             ih t s s' oc (step (step (step m))) (here + 16 + 4 * csize e) brkPos contPos hexec hinv3
-              hpc3 hemT hregT hnw hbd haccT hlbl (by simp only [csize] at hbnd; omega) hbrT hframe
+              hpc3 hemT hregT hnw hbd haccT hlbl (by simp only [csize] at hbnd; omega) hbrT hframe (by omega)
           refine ⟨3 + kt, by rw [hsN kt]; exact hinvT, ?_, ?_⟩
           · rw [hsN kt, hpcT,
                 show here + 16 + 4 * csize e + 4 * csize t
@@ -1638,7 +1654,7 @@ theorem lower_sim_cf
             rwa [show here + 4 * 3 = here + 12 from by omega] at h
           obtain ⟨ke, hinvE, hpcE, hfrE⟩ :=
             ih e s s' oc (step (step (step m))) (here + 12) brkPos contPos hexec hinv3 hpc3 hemE
-              hregE hnw hbd haccE hlbl (by simp only [csize] at hbnd; omega) hbrE hframe
+              hregE hnw hbd haccE hlbl (by simp only [csize] at hbnd; omega) hbrE hframe (by omega)
           have hframesE : FramesPres holes s.sp fd m (stepN ke (step (step (step m)))) :=
             FramesPres_trans holes s.sp fd m (step (step (step m))) (stepN ke (step (step (step m))))
               (FramesPres_of_mem_eq _ _ _ _ _ hmem3) hfrE
@@ -1806,7 +1822,7 @@ theorem lower_sim_cf
               obtain ⟨sb, ocb⟩ := pr
               obtain ⟨kb, hinvB, hpcB, hfrB⟩ :=
                 ih body s sb ocb (step (step (step m))) (here + 16) brkPos (here :: contPos)
-                  hbody hinv3 hpc3 hemBody hregBody hnw hbd haccBody hlbl' hbndBody hbrBody hframe
+                  hbody hinv3 hpc3 hemBody hregBody hnw hbd haccBody hlbl' hbndBody hbrBody hframe (by omega)
               have hsp : sb.sp = s.sp :=
                 StInv_sp_eq L fd holes s sb m (stepN kb (step (step (step m)))) hinv hinvB
               -- prefix (3 steps) + body preserve the frame → up to `stepN kb (step^3 m)`.
@@ -1829,7 +1845,7 @@ theorem lower_sim_cf
                     ih (.while c a b body) sb s' oc (step (stepN kb (step (step (step m)))))
                       here brkPos contPos hexec hstBack hpcBack hem hreg
                       (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd)
-                      (haccRec sb (Or.inl hbody)) hlbl hbnd hbr hframe
+                      (haccRec sb (Or.inl hbody)) hlbl hbnd hbr hframe (by omega)
                   rw [hsp] at hfrW
                   refine ⟨3 + kb + 1 + kw, ?_, ?_, ?_⟩
                   · rw [stepN_add (3 + kb + 1) kw, stepN_add (3 + kb) 1, hsN kb]; exact hinvW
@@ -1859,7 +1875,7 @@ theorem lower_sim_cf
                         ih (.while c a b body) sb s' oc (stepN kb (step (step (step m))))
                           here brkPos contPos hexec hinvB hpcB' hem hreg
                           (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd)
-                          (haccRec sb (Or.inr hbody)) hlbl hbnd hbr hframe
+                          (haccRec sb (Or.inr hbody)) hlbl hbnd hbr hframe (by omega)
                       rw [hsp] at hfrW
                       refine ⟨3 + kb + kw, ?_, ?_, ?_⟩
                       · rw [stepN_add (3 + kb) kw, hsN kb]; exact hinvW
