@@ -815,8 +815,9 @@ theorem lower_sim_cf
             rwa [synthI_length] at h
           have hrange : -2048 ≤ synthHi (bs.length : Int) ∧ synthHi (bs.length : Int) ≤ 2047 := by
             have h := hdat d; rwa [hlk, Option.map_some, Option.getD_some] at h
-          obtain ⟨hinvS, hT0S, hpcS, -⟩ :=
-            run_synth L fd holes s m (bs.length : Int) here hinv hpc hemS hrange
+          obtain ⟨hinvS, hT0S, hpcS, -, -⟩ :=
+            run_synth L fd holes s m T0 (by decide) (by decide) (bs.length : Int) here
+              hinv hpc hemS hrange
           obtain ⟨ks, hinvF, hpcF⟩ :=
             run_store L fd holes s (stepN 3 m) rd (BitVec.ofInt 64 (bs.length : Int)) (here + 12)
               hinvS hT0S hpcS hemST hrd hfrd hnw hseg hblob hbd
