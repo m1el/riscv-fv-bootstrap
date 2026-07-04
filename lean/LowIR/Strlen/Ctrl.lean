@@ -10,7 +10,7 @@
   Reuses the register/arith/condition lemmas from `LowIR.StrlenProof`.
 -/
 import LowIR.Ctrl
-import LowIR.Strlen.Proof
+import LowIR.Strlen.CoreProof
 
 set_option linter.unusedSimpArgs false
 

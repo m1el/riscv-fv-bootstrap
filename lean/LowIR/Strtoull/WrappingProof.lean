@@ -6,9 +6,9 @@
   condition lemmas (`Strtoull2.geu_true/geu_false`) and the exec/register foundation.
 -/
 import LowIR.Strlen.Ctrl
-import LowIR.Strtoull.V1
-import LowIR.Strtoull.V1Proof
-import LowIR.Strtoull.V2Proof
+import LowIR.Strtoull.Wrapping
+import LowIR.CtrlFacts
+import LowIR.Strtoull.ConformantProof
 
 set_option linter.unusedSimpArgs false
 

@@ -6,8 +6,8 @@
   The digit loop + correctness build on these (see the lower sections / PROGRESS.md).
 -/
 import LowIR.Strlen.Ctrl
-import LowIR.Strtoull.V2
-import LowIR.Strtoull.V1Proof
+import LowIR.Strtoull.Conformant
+import LowIR.CtrlFacts
 
 set_option linter.unusedSimpArgs false
 

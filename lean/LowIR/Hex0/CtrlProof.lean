@@ -8,8 +8,8 @@
 -/
 import LowIR.Hex0.Ctrl
 import LowIR.Strlen.Ctrl
-import LowIR.Strtoull.V1Proof
-import LowIR.Strtoull.V2Proof
+import LowIR.CtrlFacts
+import LowIR.Strtoull.ConformantProof
 import Spec.Hex0.Spec
 
 set_option linter.unusedSimpArgs false

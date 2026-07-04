@@ -29,7 +29,7 @@
 -/
 import LowIR.Prog
 import LowIR.Hex0.Ctrl        -- Hex0.coreSpec (via Hex0.Spec) + the hex0 battery
-import LowIR.Strtoull.V2   -- strtoullConfSpec + the strtoull battery
+import LowIR.Strtoull.Conformant   -- strtoullConfSpec + the strtoull battery
 import Spec.Hex1.Spec             -- Hex1.coreSpec1
 
 namespace LowIR.Prog.Lib

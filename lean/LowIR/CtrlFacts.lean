@@ -16,7 +16,7 @@
   executable certification `strtoull10_matches_spec`.
 -/
 import LowIR.Strlen.Ctrl
-import LowIR.Strtoull.V1
+import LowIR.Strtoull.Wrapping
 
 namespace LowIR.Ctrl
 

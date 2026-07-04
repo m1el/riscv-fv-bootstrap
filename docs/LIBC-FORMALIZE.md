@@ -231,7 +231,7 @@ trusted RV64I model:
   bytes to the fall-through PC in an agreeing state. Proof is `sorry` for now (sanctioned)
   — once proved (by structural induction, *once*), it amortises the `Refine.lean` cost
   for every program.
-- **T2 — `strlen` proved correct, sorry-free** (`lean/LowIR/Strlen/Proof.lean`):
+- **T2 — `strlen` proved correct, sorry-free** (`lean/LowIR/Strlen/CoreProof.lean`):
   `strlen_correct` shows `strlen` computes the first-NUL offset for **all** strings, by a
   `while`-invariant + induction on the distance to the NUL — no PC, no decode, no offsets
   (core Lean only: `simp`/`omega`/`bv_omega`/`decide`). This is the concrete demonstration

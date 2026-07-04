@@ -15,6 +15,7 @@ indexed by the README.md of its own directory.
 
 ## Proof methodology & plans
 
+- [LEAN-LAYOUT.md](LEAN-LAYOUT.md) — map of the `lean/` corpus: the Spec/RawAsm/LowIR/LowSSA language tower, each module's role, the build targets, and the naming conventions (the per-program def/proof scheme, shared `*Facts` foundations).
 - [PROOF.md](PROOF.md) — how the hex0 verification is structured (refinement methodology; served as the Coq-port blueprint).
 - [TCB.md](TCB.md) — the Trusted Computing Base: what you must trust for the bare-metal bytes to implement the spec.
 - [PROGRESS.md](PROGRESS.md) — LowIR & libc-formalize execution log (reverse-chronological).
