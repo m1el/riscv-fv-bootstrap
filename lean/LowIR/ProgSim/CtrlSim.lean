@@ -22,12 +22,38 @@ import LowIR.Lib
 namespace LowIR.ProgSim
 
 open Rv64i (Instr State step Word decode fetch32)
-open LowIR.Compile (T0 T1 userOff slotOff maxRegF maxRegS)
+open LowIR.Compile (T0 T1 SP RA A userOff totalFrame slotOff maxRegF maxRegS)
 open LowIR.Ctrl (Outcome)
 open LowIR.Prog (St Program Name FunDef Data dbaseOf)
 open LowIR (Cond evalCond condInstr jal0)
 
 local notation "PStmt" => LowIR.Prog.Stmt
+
+/-! ## Call-marshalling emit helpers (arg loads / ret stores).
+
+    A `call` lowers to: one `loadSlotI arg[i] (A i)` per argument (always 1
+    instruction each, incl. reg 0 → `addi (A i) x0 0`), then `jal RA` to the
+    callee, then one `storeSlotI ret[i] (A i)` per RETURN (0 instructions for
+    ret reg 0). These mirror the compiler's `lower` call arm exactly (`A i` =
+    `x10+i`), validated by `matchesRealProg` below. -/
+def marshalI (args : List Nat) : List Instr :=
+  args.zipIdx.flatMap fun ri => loadSlotI ri.1 (A ri.2)
+
+def retStoresI (rets : List Nat) : List Instr :=
+  rets.zipIdx.flatMap fun ri => storeSlotI ri.1 (A ri.2)
+
+/-- Each `loadSlotI` is one instruction, so `marshalI`'s length is the argument
+    count (independent of the `A`-register indices). -/
+theorem length_flatMap_loadSlotI (l : List (Nat × Nat)) :
+    (l.flatMap fun ri => loadSlotI ri.1 (A ri.2)).length = l.length := by
+  induction l with
+  | nil => rfl
+  | cons x t ih =>
+      rw [List.flatMap_cons, List.length_append, loadSlotI_length, ih, List.length_cons,
+          Nat.add_comm t.length 1]
+
+theorem marshalI_length (args : List Nat) : (marshalI args).length = args.length := by
+  rw [marshalI, length_flatMap_loadSlotI, List.length_zipIdx]
 
 /-- Instruction count of a statement's lowering — position/label-independent
     (every jump/branch is one 4-byte instruction, every label 0 bytes). The
@@ -45,38 +71,40 @@ def csize : PStmt → Nat
   | .while _ _ _ b  => 5 + csize b
   | .clen rd _      => 3 + (if rd = 0 then 0 else 1)   -- synthConst (3) + storeSlot
   | .cref rd _      => 5 + (if rd = 0 then 0 else 1)   -- pc-read + synth + add + store
+  | .call _ _ _ args rets =>                           -- argc loads + jal + ret stores
+      args.toList.length + 1 + (retStoresI rets.toList).length
   | s               => (emit s).length
 
 /-- The label-aware lowering. `brkPos`/`contPos` are the enclosing block-end /
     loop-top label byte positions (indexed like `brkB`/`contL`'s de-Bruijn
     indices); `epiPos` the epilogue; `here` the byte offset of this code.
     Straight-line cases reuse `emit` (`here` irrelevant). -/
-def emitCF (dat : Data) (dpos : Name → Nat) (brkPos contPos : List Nat) (epiPos : Nat) :
+def emitCF (dat : Data) (dpos fnPos : Name → Nat) (brkPos contPos : List Nat) (epiPos : Nat) :
     Nat → PStmt → List Instr
   | here, .seq a b =>
-      emitCF dat dpos brkPos contPos epiPos here a ++
-        emitCF dat dpos brkPos contPos epiPos (here + 4 * csize a) b
+      emitCF dat dpos fnPos brkPos contPos epiPos here a ++
+        emitCF dat dpos fnPos brkPos contPos epiPos (here + 4 * csize a) b
   | here, .ret     => [LowIR.jal0 ((epiPos : Int) - (here : Int))]
   | here, .brkB k  => [LowIR.jal0 ((brkPos.getD k 0 : Int) - (here : Int))]
   | here, .contL k => [LowIR.jal0 ((contPos.getD k 0 : Int) - (here : Int))]
   | here, .block body =>
       -- the break target `lEnd` sits just past the body (0-byte label).
-      emitCF dat dpos ((here + 4 * csize body) :: brkPos) contPos epiPos here body
+      emitCF dat dpos fnPos ((here + 4 * csize body) :: brkPos) contPos epiPos here body
   | here, .ife c a b t e =>
       -- br→lT (then) skips over the else block; jmp→lEnd skips over then.
       -- offsets are size-relative: lT is 8 + 4|e| past the branch, lEnd 4 + 4|t|
       -- past the jmp. else code `e` runs on fall-through (at here+12), then `t`.
       loadSlotI a T0 ++ loadSlotI b T1
         ++ [LowIR.condInstr c T0 T1 (8 + 4 * csize e)]
-        ++ emitCF dat dpos brkPos contPos epiPos (here + 12) e
+        ++ emitCF dat dpos fnPos brkPos contPos epiPos (here + 12) e
         ++ [LowIR.jal0 (4 + 4 * csize t)]
-        ++ emitCF dat dpos brkPos contPos epiPos (here + 16 + 4 * csize e) t
+        ++ emitCF dat dpos fnPos brkPos contPos epiPos (here + 16 + 4 * csize e) t
   | here, .while c a b body =>
       -- lTop = here (0-byte label); br→lBody (+8) enters, jmp→lEnd exits, the
       -- body runs a continue-scope (lTop::contPos), then the back-edge to lTop.
       loadSlotI a T0 ++ loadSlotI b T1
         ++ [LowIR.condInstr c T0 T1 8, LowIR.jal0 (8 + 4 * csize body)]
-        ++ emitCF dat dpos brkPos (here :: contPos) epiPos (here + 16) body
+        ++ emitCF dat dpos fnPos brkPos (here :: contPos) epiPos (here + 16) body
         ++ [LowIR.jal0 (-(16 + 4 * csize body : Int))]
   | _here, .clen rd d =>
       -- position-independent: synth the data length into T0, park into rd's slot.
@@ -85,14 +113,20 @@ def emitCF (dat : Data) (dpos : Name → Nat) (brkPos contPos : List Nat) (epiPo
       -- pc-read (`jal T0,+4`) + synth the delta to `d`'s absolute position into T1
       -- + `add T0,T0,T1` ⇒ T0 = data address; park into rd's slot.
       crefI T0 T1 ((dpos d : Int) - ((here : Int) + 4)) ++ storeSlotI rd T0
+  | here, .call argc _rvc f args rets =>
+      -- marshal args into `a0..` (argc loads), `jal RA` to the callee (sits at
+      -- `here + 4·argc`), then park each return from `a0..` (ret-store per nonzero ret).
+      marshalI args.toList
+        ++ [Instr.jal RA (BitVec.ofInt 21 ((fnPos f : Int) - ((here : Int) + 4 * argc)))]
+        ++ retStoresI rets.toList
   | _, s => emit s
 
 /-- `emitCF`'s length is exactly `csize` — position/label-independent, as claimed.
     Needed by the outcome-carrying `lower_sim` to place `seq`'s second half and to
     read the fall-through position. -/
-theorem emitCF_length (dat : Data) (dpos : Name → Nat) (bp cp : List Nat) (ep here : Nat)
+theorem emitCF_length (dat : Data) (dpos fnPos : Name → Nat) (bp cp : List Nat) (ep here : Nat)
     (stmt : PStmt) :
-    (emitCF dat dpos bp cp ep here stmt).length = csize stmt := by
+    (emitCF dat dpos fnPos bp cp ep here stmt).length = csize stmt := by
   induction stmt generalizing bp cp ep here with
   | seq a b iha ihb =>
       simp only [emitCF, csize, List.length_append, iha, ihb]
@@ -113,13 +147,16 @@ theorem emitCF_length (dat : Data) (dpos : Name → Nat) (bp cp : List Nat) (ep 
       simp only [emitCF, csize, List.length_append, synthI_length, storeSlotI_length]
   | cref rd d =>
       simp only [emitCF, csize, List.length_append, crefI_length, storeSlotI_length]
+  | call argc rvc f args rets =>
+      simp only [emitCF, csize, List.length_append, List.length_cons,
+                 List.length_nil, marshalI_length]
   | _ => rfl
 
 /-- Sanity: on the straight-line fragment, `emitCF` is exactly `emit` (the
     control-flow arms never fire), so all the existing `#guard`s against
     `Compile.lower` carry over unchanged. -/
-example (dat : Data) (dpos : Name → Nat) (bp cp : List Nat) (ep here : Nat) :
-    emitCF dat dpos bp cp ep here (.addi 12 5 (BitVec.ofNat 12 3))
+example (dat : Data) (dpos fnPos : Name → Nat) (bp cp : List Nat) (ep here : Nat) :
+    emitCF dat dpos fnPos bp cp ep here (.addi 12 5 (BitVec.ofNat 12 3))
       = emit (.addi 12 5 (BitVec.ofNat 12 3)) :=
   rfl
 
@@ -144,7 +181,7 @@ def realResolve (dat : Data) (dats : List (Name × Nat)) (body : PStmt) : Option
     `dpos d = (dats.lookup d).getD 0` mirrors `resolveOne`'s data-offset read. -/
 def matchesReal (dat : Data) (dats : List (Name × Nat)) (body : PStmt) : Bool :=
   realResolve dat dats body
-    == some (emitCF dat (fun d => (dats.lookup d).getD 0) [] [] (4 * csize body) 0 body)
+    == some (emitCF dat (fun d => (dats.lookup d).getD 0) (fun _ => 0) [] [] (4 * csize body) 0 body)
 
 -- `strlen` (`while`), `strtoull` (`block`+`while`+`ife`+`brkB`), `hex0` (nested
 -- `ife`s + `while` + `ret`): the validated IR↔assembly mapping, checked concretely.
@@ -167,6 +204,68 @@ def matchesReal (dat : Data) (dats : List (Name × Nat)) (body : PStmt) : Bool :
 #guard matchesReal [("tbl", [1, 2, 3])] [("tbl", 100)] (.cref 0 "tbl")
 #guard matchesReal [("a", [1]), ("b", [2])] [("a", 40), ("b", 48)]
   (.seq (.cref 5 "a") (.cref 6 "b"))
+
+/-! ### Whole-program validation: prologue + body + epilogue vs the real compiler.
+
+    The single-body `matchesReal` above can't exercise `.call` (isolated bodies have
+    no callee table). `matchesRealProg` runs the FROZEN `compileProgT` and checks,
+    per function, that its resolved slice equals `prologueI ++ emitCF … ++ epilogueI`
+    at the layout's `fnTab` position — the decidable cross-check of the whole emit
+    surface (marshalling, the `jal RA` call site, prologue/epilogue) BEFORE any
+    proof leans on it. -/
+open LowIR.Compile (compileProgT)
+
+/-- The RESOLVED (label-free) prologue — a direct transcription of
+    `Compile.prologue` with `.ins` unwrapped and `storeSlot` → `storeSlotI`
+    (`Compile.SP`/`RA`/`A`/`T0` are physical registers, position-independent). -/
+def prologueI (fd : FunDef) : List Instr :=
+  let params := fd.params.toList
+  [Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))), Instr.sd SP RA 0]
+  ++ params.zipIdx.flatMap (fun pi => storeSlotI pi.1 (A pi.2))
+  ++ ((List.range (maxRegF fd + 1)).filter
+        (fun r => r != 0 && !params.contains r && r != fd.frameReg)).map
+       (fun r => Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r)))
+  ++ (if fd.frameReg = 0 then [] else
+        [Instr.addi T0 SP (BitVec.ofNat 12 (userOff fd))] ++ storeSlotI fd.frameReg T0)
+
+/-- The RESOLVED epilogue: rets → `a0..`, restore ra + sp, `jalr x0 ra 0`. -/
+def epilogueI (fd : FunDef) : List Instr :=
+  fd.rets.toList.zipIdx.flatMap (fun ri => loadSlotI ri.1 (A ri.2))
+  ++ [Instr.ld RA SP 0, Instr.addi SP SP (BitVec.ofNat 12 (totalFrame fd)), Instr.jalr 0 RA 0]
+
+def prologueSize (fd : FunDef) : Nat := (prologueI fd).length
+def epilogueSize (fd : FunDef) : Nat := fd.rvc + 3
+
+/-- Per-function cross-check against the resolved compiler output. -/
+def matchesRealProg (P : Program) (entry : Name) : Bool :=
+  match compileProgT P entry with
+  | none => false
+  | some (instrs, fns, dats) =>
+      let dpos  : Name → Nat := fun d => (dats.lookup d).getD 0
+      let fnPos : Name → Nat := fun f => (fns.lookup f).getD 0
+      P.env.all fun nf =>
+        let fd := nf.2
+        let p := fnPos nf.1
+        let bodyPos := p + 4 * (prologueI fd).length
+        let epiPos := bodyPos + 4 * csize fd.body
+        let expected :=
+          prologueI fd ++ emitCF P.data dpos fnPos [] [] epiPos bodyPos fd.body ++ epilogueI fd
+        (instrs.drop (p / 4)).take expected.length == expected
+
+-- `caller`→`frameLocal` (arg/ret marshalling + one call), `chainEnv` (3-deep
+-- nesting), `recSum` (recursion): the call emit surface, validated end-to-end.
+#guard matchesRealProg ⟨[("caller", LowIR.Prog.caller),
+                         ("frameLocal", LowIR.Prog.frameLocal)], []⟩ "caller"
+#guard matchesRealProg ⟨LowIR.Prog.chainEnv, []⟩ "f3"
+#guard matchesRealProg ⟨LowIR.Prog.recSum, []⟩ "rec"
+-- corner: a call whose returns include x0 (discarded ret store) and a duplicate
+-- argument register (last-wins marshalling) — both exercised against the compiler.
+#guard matchesRealProg
+  ⟨[("cornerC", { argc := 2, rvc := 2, params := #v[10, 11], rets := #v[10, 11],
+                  frameSize := 0, frameReg := 5,
+                  body := .call 2 2 "cornerK" #v[10, 10] #v[0, 12] }),
+    ("cornerK", { argc := 2, rvc := 2, params := #v[10, 11], rets := #v[10, 11],
+                  frameSize := 0, frameReg := 5, body := .skip })], []⟩ "cornerC"
 
 /-! ## The outcome-carrying `lower_sim`.
 
@@ -251,13 +350,13 @@ theorem getD_lt (l : List Nat) (k b : Nat) (hb : 0 < b) (h : ∀ p ∈ l, p < b)
 
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
-    {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat} {dpos : Name → Nat}
+    {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat} {dpos fnPos : Name → Nat}
     (fuel : Nat) (stmt : PStmt) (s s' : St) (oc : Outcome) (m : State)
     (here : Nat) (brkPos contPos : List Nat)
     (hexec : LowIR.Prog.exec P dbase pad stackLo fuel stmt s = some (s', oc))
     (hinv  : StInv L fd holes s m)
     (hpc   : m.pc = L.codeBase + BitVec.ofNat 64 here)
-    (hem   : Emitted L here (emitCF P.data dpos brkPos contPos epiPos here stmt))
+    (hem   : Emitted L here (emitCF P.data dpos fnPos brkPos contPos epiPos here stmt))
     (hreg  : maxRegS stmt ≤ maxRegF fd)
     (hnw   : s.sp.toNat + userOff fd ≤ 2 ^ 64)
     (hbd   : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
@@ -302,7 +401,7 @@ theorem lower_sim_cf
         · exact hb p h
       -- `csize`/`emitCF`/`MemAccOff`/`maxRegS` on `.block body` are defeq to the
       -- `body` forms; rebind so the elaborator unfolds them.
-      have hem' : Emitted L here (emitCF P.data dpos ((here + 4 * csize body) :: brkPos) contPos epiPos here body)
+      have hem' : Emitted L here (emitCF P.data dpos fnPos ((here + 4 * csize body) :: brkPos) contPos epiPos here body)
         := hem
       have hreg' : maxRegS body ≤ maxRegF fd := hreg
       have hacc' : MemAccOff L holes P dbase pad stackLo fuel body s := by
@@ -376,12 +475,12 @@ theorem lower_sim_cf
       simp only [maxRegS] at hreg
       obtain ⟨haccA, haccB⟩ := haccess
       obtain ⟨hbrA, hbrB⟩ := hbr
-      have hemA : Emitted L here (emitCF P.data dpos brkPos contPos epiPos here a) :=
+      have hemA : Emitted L here (emitCF P.data dpos fnPos brkPos contPos epiPos here a) :=
         Emitted_append_left L here _ _ hem
       have hemB : Emitted L (here + 4 * csize a)
-          (emitCF P.data dpos brkPos contPos epiPos (here + 4 * csize a) b) := by
-        have h := Emitted_append_right L here (emitCF P.data dpos brkPos contPos epiPos here a)
-                    (emitCF P.data dpos brkPos contPos epiPos (here + 4 * csize a) b) hem
+          (emitCF P.data dpos fnPos brkPos contPos epiPos (here + 4 * csize a) b) := by
+        have h := Emitted_append_right L here (emitCF P.data dpos fnPos brkPos contPos epiPos here a)
+                    (emitCF P.data dpos fnPos brkPos contPos epiPos (here + 4 * csize a) b) hem
         rwa [emitCF_length] at h
       have hregA : maxRegS a ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hreg
       have hregB : maxRegS b ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hreg
@@ -523,9 +622,9 @@ theorem lower_sim_cf
       have hinst : Installed L m := hinv.2.2.1
       have hemU : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1
           ++ [condInstr c T0 T1 (8 + 4 * csize e)]
-          ++ emitCF P.data dpos brkPos contPos epiPos (here + 12) e
+          ++ emitCF P.data dpos fnPos brkPos contPos epiPos (here + 12) e
           ++ [jal0 (4 + 4 * csize t)]
-          ++ emitCF P.data dpos brkPos contPos epiPos (here + 16 + 4 * csize e) t) := hem
+          ++ emitCF P.data dpos fnPos brkPos contPos epiPos (here + 16 + 4 * csize e) t) := hem
       have hP2 : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1) :=
         Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _
           (Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hemU)))
@@ -570,10 +669,10 @@ theorem lower_sim_cf
                   = (↑(here + 16 + 4 * csize e) : Int) - ↑(here + 4 + 4) from by push_cast; omega]
             exact jump_lands L.codeBase (here + 4 + 4) (here + 16 + 4 * csize e)
           have hemT : Emitted L (here + 16 + 4 * csize e)
-              (emitCF P.data dpos brkPos contPos epiPos (here + 16 + 4 * csize e) t) := by
+              (emitCF P.data dpos fnPos brkPos contPos epiPos (here + 16 + 4 * csize e) t) := by
             have h := Emitted_append_right _ _ _ _ hemU
             rw [show (loadSlotI a T0 ++ loadSlotI b T1 ++ [condInstr c T0 T1 (8 + 4 * csize e)]
-                  ++ emitCF P.data dpos brkPos contPos epiPos (here + 12) e ++ [jal0 (4 + 4 * csize t)]).length
+                  ++ emitCF P.data dpos fnPos brkPos contPos epiPos (here + 12) e ++ [jal0 (4 + 4 * csize t)]).length
                   = 4 + csize e from by
                   simp only [List.length_append, loadSlotI_length, List.length_cons,
                              List.length_nil, emitCF_length]; omega] at h
@@ -593,7 +692,7 @@ theorem lower_sim_cf
             rw [hs3]; exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hinv2
           have hpc3 : (step (step (step m))).pc = L.codeBase + BitVec.ofNat 64 (here + 12) := by
             rw [hs3, pc_setPc, h2pc, pc_add4]
-          have hemE : Emitted L (here + 12) (emitCF P.data dpos brkPos contPos epiPos (here + 12) e) := by
+          have hemE : Emitted L (here + 12) (emitCF P.data dpos fnPos brkPos contPos epiPos (here + 12) e) := by
             have h := Emitted_append_right _ _ _ _ (Emitted_append_left _ _ _ _
               (Emitted_append_left _ _ _ _ hemU))
             rw [show (loadSlotI a T0 ++ loadSlotI b T1
@@ -609,7 +708,7 @@ theorem lower_sim_cf
               have hemJ : Emitted L (here + 12 + 4 * csize e) [jal0 (4 + 4 * csize t)] := by
                 have h := Emitted_append_right _ _ _ _ (Emitted_append_left _ _ _ _ hemU)
                 rw [show (loadSlotI a T0 ++ loadSlotI b T1 ++ [condInstr c T0 T1 (8 + 4 * csize e)]
-                      ++ emitCF P.data dpos brkPos contPos epiPos (here + 12) e).length = 3 + csize e from by
+                      ++ emitCF P.data dpos fnPos brkPos contPos epiPos (here + 12) e).length = 3 + csize e from by
                       simp only [List.length_append, loadSlotI_length, List.length_cons,
                                  List.length_nil, emitCF_length]] at h
                 rwa [show here + 4 * (3 + csize e) = here + 12 + 4 * csize e from by omega] at h
@@ -653,10 +752,10 @@ theorem lower_sim_cf
       have hbnd20 : here + 20 + 4 * csize body < 2 ^ 20 := by
         have h := hbnd; simp only [csize] at h; omega
       have hhere : here < 2 ^ 20 := by omega
-      -- the whole emitCF P.data dpos stream, unfolded.
+      -- the whole emitCF P.data dpos fnPos stream, unfolded.
       have hemU : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1
           ++ [condInstr c T0 T1 8, jal0 (8 + 4 * csize body)]
-          ++ emitCF P.data dpos brkPos (here :: contPos) epiPos (here + 16) body
+          ++ emitCF P.data dpos fnPos brkPos (here :: contPos) epiPos (here + 16) body
           ++ [jal0 (-(16 + 4 * csize body : Int))]) := hem
       -- two slot loads (a→T0, b→T1)
       have hP2 : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1) :=
@@ -685,7 +784,7 @@ theorem lower_sim_cf
         simpa using h
       -- body-stream Emitted (at here+16) and the back-edge (at here+16+4·csize body).
       have hemBody : Emitted L (here + 16)
-          (emitCF P.data dpos brkPos (here :: contPos) epiPos (here + 16) body) := by
+          (emitCF P.data dpos fnPos brkPos (here :: contPos) epiPos (here + 16) body) := by
         have h := Emitted_append_right _ _ _ _ (Emitted_append_left _ _ _ _ hemU)
         rw [show (loadSlotI a T0 ++ loadSlotI b T1
               ++ [condInstr c T0 T1 8, jal0 (8 + 4 * csize body)]).length = 4 from by
@@ -697,7 +796,7 @@ theorem lower_sim_cf
         have h := Emitted_append_right _ _ _ _ hemU
         rw [show ((loadSlotI a T0 ++ loadSlotI b T1
               ++ [condInstr c T0 T1 8, jal0 (8 + 4 * csize body)])
-              ++ emitCF P.data dpos brkPos (here :: contPos) epiPos (here + 16) body).length
+              ++ emitCF P.data dpos fnPos brkPos (here :: contPos) epiPos (here + 16) body).length
               = 4 + csize body from by
             simp only [List.length_append, loadSlotI_length, List.length_cons,
                        List.length_nil, emitCF_length]] at h
