@@ -254,8 +254,9 @@ theorem jump_lands (cb : Word) (here tgt : Nat) :
 theorem StInv_congr (L : Layout) (fd : FunDef) (holes : List Hole) (s : St)
     (m m' : State) (h2 : m'.rget 2 = m.rget 2) (hmem : m'.mem = m.mem)
     (H : StInv L fd holes s m) : StInv L fd holes s m' := by
-  obtain ⟨c1, c2, c3, c4, c5, c6⟩ := H
-  refine ⟨by rw [h2]; exact c1, fun r hr hr' => ?_, ?_, fun a ha => by rw [hmem]; exact c4 a ha, c5, c6⟩
+  obtain ⟨c1, c2, c3, c4, c5, c6, c7, c8⟩ := H
+  refine ⟨by rw [h2]; exact c1, fun r hr hr' => ?_, ?_,
+          fun a ha => by rw [hmem]; exact c4 a ha, c5, c6, c7, c8⟩
   · rw [c2 r hr hr']; simp only [State.loadWord, hmem]
   · obtain ⟨hcode, hdata⟩ := c3
     refine ⟨fun j hj => ?_, fun i hi => by rw [hmem]; exact hdata i hi⟩
@@ -331,7 +332,7 @@ theorem load_step (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : S
               = (if r = 0 then Instr.addi t 0 0
                  else Instr.ld t SP (BitVec.ofNat 12 (slotOff r)))) :
     step m = (m.rset t (s.rget r)).setPc (m.pc + 4) := by
-  obtain ⟨c1, c2, -, -, -, -⟩ := hinv
+  obtain ⟨c1, c2, -, -, -, -, -, -⟩ := hinv
   by_cases hr0 : r = 0
   · subst hr0
     rw [if_pos rfl] at hdec
@@ -753,12 +754,12 @@ def MemAccOff (L : Layout) (holes : List Hole)
     (P : Program) (dbase : Name → Option Word) (pad : Name → Nat) (stackLo : Word) :
     Nat → PStmt → St → Prop
   | _, .ld _ rs imm, s =>
-      ∀ i, i < 8 → ¬ MachPriv L holes (s.rget rs + imm.signExtend 64 + BitVec.ofNat 64 i)
-  | _, .lbu _ rs imm, s => ¬ MachPriv L holes (s.rget rs + imm.signExtend 64)
+      ∀ i, i < 8 → OffPriv L holes s.sp (s.rget rs + imm.signExtend 64 + BitVec.ofNat 64 i)
+  | _, .lbu _ rs imm, s => OffPriv L holes s.sp (s.rget rs + imm.signExtend 64)
   | _, .sd rb _ imm, s =>
       (s.rget rb + imm.signExtend 64).toNat + 8 ≤ 2 ^ 64 ∧
-        ∀ i, i < 8 → ¬ MachPriv L holes (s.rget rb + imm.signExtend 64 + BitVec.ofNat 64 i)
-  | _, .sb rb _ imm, s => ¬ MachPriv L holes (s.rget rb + imm.signExtend 64)
+        ∀ i, i < 8 → OffPriv L holes s.sp (s.rget rb + imm.signExtend 64 + BitVec.ofNat 64 i)
+  | _, .sb rb _ imm, s => OffPriv L holes s.sp (s.rget rb + imm.signExtend 64)
   | fuel + 1, .seq a b, s =>
       MemAccOff L holes P dbase pad stackLo fuel a s ∧
         (∀ s1, LowIR.Prog.exec P dbase pad stackLo fuel a s = some (s1, .normal) →
@@ -1081,11 +1082,11 @@ theorem lower_sim
       have hhole : (s.rget rb + imm.signExtend 64).toNat + 8 ≤ s.sp.toNat
                      ∨ s.sp.toNat + userOff fd ≤ (s.rget rb + imm.signExtend 64).toNat :=
         range_disjoint_of_bytes _ s.sp (userOff fd) huo hwaddr
-          (fun i hi hc => hoff i hi (Or.inr ⟨(s.sp, userOff fd), hhole_mem, hc⟩))
+          (fun i hi hc => (hoff i hi).1 (Or.inr ⟨(s.sp, userOff fd), hhole_mem, hc⟩))
       have hbdA : L.codeBase.toNat + L.blobLen ≤ (s.rget rb + imm.signExtend 64).toNat
                     ∨ (s.rget rb + imm.signExtend 64).toNat + 8 ≤ L.codeBase.toNat :=
         (range_disjoint_of_bytes _ L.codeBase L.blobLen hbl0 hwaddr
-          (fun i hi hc => hoff i hi (Or.inl hc))).symm
+          (fun i hi hc => (hoff i hi).1 (Or.inl hc))).symm
       have hStore := StInv_storeWord_user L fd holes s (step (step m))
         (s.rget rb + imm.signExtend 64) (s.rget rv) hinv2 hwaddr hhole hbdA hseg hblob hnw
       refine ⟨3, ?_, ?_⟩
@@ -1150,9 +1151,9 @@ theorem lower_sim
         simp only [Layout.blobLen]; omega
       -- single-byte off-hole / off-blob (no range conversion needed)
       have hnrH : ¬ memRange (s.rget rb + imm.signExtend 64) s.sp (userOff fd) :=
-        fun hc => haccess (Or.inr ⟨(s.sp, userOff fd), hhole_mem, hc⟩)
+        fun hc => haccess.1 (Or.inr ⟨(s.sp, userOff fd), hhole_mem, hc⟩)
       have hnrB : ¬ memRange (s.rget rb + imm.signExtend 64) L.codeBase L.blobLen :=
-        fun hc => haccess (Or.inl hc)
+        fun hc => haccess.1 (Or.inl hc)
       have hhole : (s.rget rb + imm.signExtend 64).toNat + 1 ≤ s.sp.toNat
                      ∨ s.sp.toNat + userOff fd ≤ (s.rget rb + imm.signExtend 64).toNat := by
         rcases Nat.lt_or_ge (s.rget rb + imm.signExtend 64).toNat s.sp.toNat with h | h

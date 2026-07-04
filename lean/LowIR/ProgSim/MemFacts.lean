@@ -54,7 +54,7 @@ theorem loadWord_mem_congr (m1 m2 : State) (a : Word) (h : m1.mem = m2.mem) :
     machine load equals the IL load (`StInv` gives byte agreement there). -/
 theorem loadWord_agree_off (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State)
     (addr : Word) (hinv : StInv L fd holes s m)
-    (hoff : ∀ i, i < 8 → ¬ MachPriv L holes (addr + BitVec.ofNat 64 i)) :
+    (hoff : ∀ i, i < 8 → OffPriv L holes s.sp (addr + BitVec.ofNat 64 i)) :
     m.loadWord addr = s.loadWord addr := by
   have h4 := hinv.2.2.2.1
   have e0 : addr + BitVec.ofNat 64 0 = addr := by simp
@@ -149,9 +149,9 @@ theorem StInv_storeWord_user (L : Layout) (fd : FunDef) (holes : List Hole)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
     (hnw : s.sp.toNat + userOff fd ≤ 2 ^ 64) :
     StInv L fd holes (s.storeWord addr v) (m.storeWord addr v) := by
-  obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hinv
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := hinv
   have hsp' : (s.storeWord addr v).sp = s.sp := St_storeWord_sp s addr v
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hsp', State_storeWord_rget m addr v 2]; exact h1
   · intro r hr1 hrm
     rw [hsp', St_storeWord_rget s addr v r]
@@ -165,9 +165,11 @@ theorem StInv_storeWord_user (L : Layout) (fd : FunDef) (holes : List Hole)
             · exact Or.inr (by omega))]
     exact h2 r hr1 hrm
   · exact Installed_storeWord_off_blob L m addr v h3 hseg hblob hwa hbd
-  · intro a hna; exact storeWord_mem_agree s m addr v a (h4 a hna)
+  · intro a hna; rw [hsp'] at hna; exact storeWord_mem_agree s m addr v a (h4 a hna)
   · rw [hsp']; exact h5
   · rw [hsp']; exact h6
+  · rw [hsp']; exact h7
+  · exact h8
 
 /-! ## §4 — a user `storeByte` preserves `StInv`. Same shape; one byte, so the
     slot/blob disjointness only needs `addr` (not `addr..addr+7`) off the ranges. -/
@@ -235,9 +237,9 @@ theorem StInv_storeByte_user (L : Layout) (fd : FunDef) (holes : List Hole)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
     (hnw : s.sp.toNat + userOff fd ≤ 2 ^ 64) :
     StInv L fd holes (s.storeByte addr b) (m.storeByte addr b) := by
-  obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hinv
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := hinv
   have hsp' : (s.storeByte addr b).sp = s.sp := St_storeByte_sp s addr b
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hsp', State_storeByte_rget m addr b 2]; exact h1
   · intro r hr1 hrm
     rw [hsp', St_storeByte_rget s addr b r]
@@ -251,8 +253,10 @@ theorem StInv_storeByte_user (L : Layout) (fd : FunDef) (holes : List Hole)
             · exact Or.inr (by omega))]
     exact h2 r hr1 hrm
   · exact Installed_storeByte_off_blob L m addr b h3 hseg hblob hbd
-  · intro a hna; exact storeByte_mem_agree s m addr b a (h4 a hna)
+  · intro a hna; rw [hsp'] at hna; exact storeByte_mem_agree s m addr b a (h4 a hna)
   · rw [hsp']; exact h5
   · rw [hsp']; exact h6
+  · rw [hsp']; exact h7
+  · exact h8
 
 end LowIR.ProgSim

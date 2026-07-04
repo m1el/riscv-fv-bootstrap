@@ -180,7 +180,7 @@ theorem StInv_store_slot (L : Layout) (fd : FunDef) (holes : List Hole)
     (hbd : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
              ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat) :
     StInv L fd holes (s.rset r v) (m.storeWord (s.sp + BitVec.ofNat 64 (slotOff r)) v) := by
-  obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hinv
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := hinv
   have hr0 : r ≠ 0 := by omega
   have hslot_r : slotOff r + 8 ≤ userOff fd := slotOff_add8_le_userOff fd r hrm
   have ha_toNat : (s.sp + BitVec.ofNat 64 (slotOff r)).toNat = s.sp.toNat + slotOff r :=
@@ -202,7 +202,7 @@ theorem StInv_store_slot (L : Layout) (fd : FunDef) (holes : List Hole)
     | cons h0 t =>
         simp only [List.head?_cons, Option.some.injEq] at h5
         rw [← h5]; exact List.mem_cons_self
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- sp ≡ x2
     rw [hsp', hreg2]; exact h1
   · -- slot invariant
@@ -224,14 +224,15 @@ theorem StInv_store_slot (L : Layout) (fd : FunDef) (holes : List Hole)
     rcases hbd with hbd | hbd
     · exact Or.inl (by omega)
     · exact Or.inr (by omega)
-  · -- off-MachPriv memory agreement
+  · -- off-priv memory agreement
     intro a hna
+    rw [hsp'] at hna
     rw [hmem', h4 a hna]
     symm
     apply Rv64i.storeWord_mem_outside m _ v a hwa
     rw [ha_toNat]
     have hnr : ¬ memRange a s.sp (userOff fd) := fun hc =>
-      hna (Or.inr ⟨(s.sp, userOff fd), hhole_mem, hc⟩)
+      hna.1 (Or.inr ⟨(s.sp, userOff fd), hhole_mem, hc⟩)
     -- split the disjunction constructively (bare `omega` on `¬(_ ∧ _)` pulls in
     -- `Classical.choice` — the gotcha memory), keeping axioms at `propext/Quot.sound`
     rcases Nat.lt_or_ge a.toNat s.sp.toNat with hlt | hge
@@ -242,5 +243,9 @@ theorem StInv_store_slot (L : Layout) (fd : FunDef) (holes : List Hole)
     rw [hsp']; exact h5
   · -- sp alignment unchanged
     rw [hsp']; exact h6
+  · -- C2 ordering (holes at-or-above sp) unchanged
+    rw [hsp']; exact h7
+  · -- C2 no-wrap unchanged
+    exact h8
 
 end LowIR.ProgSim

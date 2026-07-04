@@ -51,17 +51,20 @@ structure Layout where
   fnTab    : List (Name × Nat)
   segStart : Nat
   data     : Data
+  stackLo  : Word          -- the stack floor (a fixed per-run constant, like
+                           -- `codeBase`); the free stack `[stackLo, sp)` below the
+                           -- current frame is machine-private (C2 — see `StInv`).
 deriving Repr
 
 /-- Build the `Layout` for `entry` at `codeBase` straight from the FROZEN
     compiler. `none` iff the program is uncompilable (same condition as
     `compileProgT`). `segStart` is recomputed here from the resolved stream
     and is DEFINITIONALLY the compiler's `pad8 codeEnd` (proved in Phase 2). -/
-def layoutOf (P : Program) (entry : Name) (codeBase : Word) : Option Layout :=
+def layoutOf (P : Program) (entry : Name) (codeBase stackLo : Word) : Option Layout :=
   match compileProgT P entry with
   | some (is, fns, _) =>
       some { codeBase, instrs := is, fnTab := fns,
-             segStart := pad8 (4 * is.length), data := P.data }
+             segStart := pad8 (4 * is.length), data := P.data, stackLo }
   | none => none
 
 /-- The machine halt pc: the self-loop landing pad the compiler puts at
@@ -364,6 +367,16 @@ def machPrivB (L : Layout) (holes : List Hole) (a : Word) : Bool :=
 def MachStack (stackLo sp0 : Word) (a : Word) : Prop :=
   memRange a stackLo (sp0.toNat - stackLo.toNat)
 
+/-- **C2 — `OffPriv L holes sp a`**: `a` is neither machine-private (blob + live
+    holes) NOR in the free stack `[stackLo, sp)` below the current frame. This is
+    the domain on which IL and machine memory agree (`StInv`), and the region an
+    IL memory op must stay inside (`MemAccOff`). The free-stack carve-out is what
+    makes the caller's invariant RESTORABLE after a call returns: the machine
+    dirties the callee's `[ra][slots]` there, and the IL never wrote it — but it
+    is below `sp`, so it is outside `OffPriv` and agreement is not demanded. -/
+def OffPriv (L : Layout) (holes : List Hole) (sp a : Word) : Prop :=
+  ¬ MachPriv L holes a ∧ ¬ memRange a L.stackLo (sp.toNat - L.stackLo.toNat)
+
 /-- **`StInv L fd holes s m`** — the per-statement simulation invariant
     (RESUME-PROGSIM §3.1). At every IL statement boundary during `fd`'s body:
     `sp ≡ x2`; each live IL register sits in its 8-byte machine slot at
@@ -375,9 +388,11 @@ def StInv (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State) : 
   ∧ (∀ r, 1 ≤ r → r ≤ maxRegF fd →
         s.rget r = m.loadWord (s.sp + BitVec.ofNat 64 (slotOff r)))
   ∧ Installed L m
-  ∧ (∀ a, ¬ MachPriv L holes a → s.mem a = m.mem a)
+  ∧ (∀ a, OffPriv L holes s.sp a → s.mem a = m.mem a)
   ∧ holes.head? = some (s.sp, userOff fd)
   ∧ s.sp.toNat % 8 = 0
+  ∧ (∀ h ∈ holes, s.sp.toNat ≤ h.1.toNat)          -- C2: live holes sit at-or-above sp (LIFO)
+  ∧ (∀ h ∈ holes, h.1.toNat + h.2 ≤ 2 ^ 64)        -- C2: each hole is wrap-free
 
 /-- The top-level separation bundle for `prog_sim`: the entry stack `[stackLo,
     sp0)` is well-formed and disjoint from the code+data blob, and `sp0` is
@@ -413,7 +428,7 @@ theorem prog_sim
     {P : Program} {entry : Name} {fd : FunDef} {args : List Word}
     {stackLo sp0 : Word} {fuel : Nat} {s' : St} {L : Layout} {m0 : State}
     (hlk    : List.lookup entry P.env = some fd)
-    (hL     : layoutOf P entry L.codeBase = some L)
+    (hL     : layoutOf P entry L.codeBase L.stackLo = some L)
     (hpre   : SimPre L stackLo sp0)
     (hpc    : m0.pc = L.codeBase)
     (hsp    : m0.rget 2 = sp0)
@@ -443,12 +458,12 @@ private def mkM (blob : List Byte) : State :=
 
 -- CODE half of `Installed`: the compiled chain decodes back, byte-for-byte.
 #guard (do let blob ← progBytes chainEnv "f3"
-           let L ← layoutOf chainEnv "f3" CB
+           let L ← layoutOf chainEnv "f3" CB 0x4000
            pure (codeInstalledB L (mkM blob))).getD false = true
 
 -- CODE + DATA halves: `sumData` has a const-data object in the blob.
 #guard (do let blob ← progBytes sumData "sumd"
-           let L ← layoutOf sumData "sumd" CB
+           let L ← layoutOf sumData "sumd" CB 0
            pure (codeInstalledB L (mkM blob) && dataInstalledB L (mkM blob))).getD false = true
 
 -- `execT` erases to `exec`: same observable return on the fixtures.
@@ -480,7 +495,7 @@ private def mkM (blob : List Byte) : State :=
 open LowIR.Prog (chainEnv chainFn)
 open LowIR.Compile (userOff totalFrame)
 
-private def Lchain : Layout := (layoutOf chainEnv "f3" CB).getD ⟨0, [], [], 0, []⟩
+private def Lchain : Layout := (layoutOf chainEnv "f3" CB 0x4000).getD ⟨0, [], [], 0, [], 0⟩
 private def f3fd : FunDef := chainFn (some "f2")
 private def spTop : Word := 0x8000
 private def f3sp  : Word := spTop - BitVec.ofNat 64 (totalFrame f3fd)   -- machine sp
