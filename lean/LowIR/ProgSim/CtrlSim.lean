@@ -1170,6 +1170,102 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
   · rw [hfinal, hFra, hZra, hPra, hm2mem_ra]
   · exact hFmem_m
 
+/-- **W6 — the callee-exit simulator.** Running `epilogueI fd` from a state
+    satisfying the callee's post-body `StInv` (with the saved return address `ra`
+    still in slot 0) marshals the return registers into `a0..`, restores `ra` and
+    the caller's `sp` (P1: machine `sp` back up by `totalFrame`), and lands the pc
+    at `ra`. The epilogue issues NO stores, so memory is untouched throughout. -/
+theorem epilogue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
+    (mE : State) (s1 : St) (ra : Word) (q : Nat)
+    (hinv : StInv L fd holes s1 mE)
+    (hpc : mE.pc = L.codeBase + BitVec.ofNat 64 q)
+    (hem : Emitted L q (epilogueI fd))
+    (hraslot : mE.loadWord s1.sp = ra)
+    (hraeven : ra.toNat % 2 = 0)
+    (hretb : ∀ x ∈ fd.rets.toList, x ≤ maxRegF fd)
+    (hretslot : ∀ x ∈ fd.rets.toList, slotOff x < 2 ^ 11)
+    (htf : totalFrame fd < 2 ^ 11) :
+    ∃ k, (stepN k mE).pc = ra
+       ∧ (stepN k mE).rget SP = s1.sp + BitVec.ofNat 64 (totalFrame fd)
+       ∧ (∀ j, (hj : j < fd.rets.toList.length) →
+            (stepN k mE).rget (A j) = s1.rget fd.rets.toList[j])
+       ∧ (stepN k mE).mem = mE.mem := by
+  rw [epilogueI] at hem
+  -- G1: marshal return registers → a0..
+  obtain ⟨kM, hMinv, hMpc, hMmem, hMval, _hMoth⟩ :=
+    run_marshalFrom L fd holes s1 fd.rets.toList 0 q mE hinv hpc
+      (Emitted_append_left _ _ _ _ hem) hretb hretslot
+  obtain ⟨hMx2, _hMslot, hMInst, _, _, _, _, _⟩ := hMinv
+  have hSP_M : (stepN kM mE).rget SP = s1.sp := hMx2
+  have hR : (fd.rets.toList.zipIdx.flatMap fun ri => loadSlotI ri.1 (A ri.2)).length
+      = fd.rets.toList.length := by rw [length_flatMap_loadSlotI, List.length_zipIdx]
+  have hemtail : Emitted L (q + 4 * fd.rets.toList.length)
+      [Instr.ld RA SP 0, Instr.addi SP SP (BitVec.ofNat 12 (totalFrame fd)), Instr.jalr 0 RA 0] := by
+    have h := Emitted_append_right _ _ _ _ hem; rwa [hR] at h
+  -- G2: ld ra sp 0 — restore return address from slot 0
+  have hdLd : decode (fetch32 (stepN kM mE)) = Instr.ld RA SP 0 := by
+    have h := decode_at L (stepN kM mE) (stepN kM mE) _ _ hemtail hMInst 0
+      (by simp) (by rw [hMpc]; apply pc_congr; omega) rfl
+    simpa using h
+  have hstepLd : step (stepN kM mE)
+      = ((stepN kM mE).rset RA ((stepN kM mE).loadWord
+          ((stepN kM mE).rget SP + (0 : BitVec 12).signExtend 64))).setPc ((stepN kM mE).pc + 4) :=
+    step_ld _ RA SP 0 hdLd
+  have hRAval : (step (stepN kM mE)).rget RA = ra := by
+    rw [hstepLd, rget_setPc, rget_rset_self _ RA _ (by decide), hSP_M,
+        show ((0 : BitVec 12).signExtend 64) = (0 : BitVec 64) from by decide,
+        show s1.sp + (0 : BitVec 64) = s1.sp from by simp,
+        loadWord_mem_congr _ _ _ hMmem]
+    exact hraslot
+  have hSPld : (step (stepN kM mE)).rget SP = s1.sp := by
+    rw [hstepLd, rget_setPc, rget_rset_ne _ RA SP _ (by decide), hSP_M]
+  have hPCld : (step (stepN kM mE)).pc
+      = L.codeBase + BitVec.ofNat 64 (q + 4 * fd.rets.toList.length + 4) := by
+    rw [hstepLd, pc_setPc, hMpc, pc_add4]
+  have hINSTld : Installed L (step (stepN kM mE)) :=
+    Installed_congr L (stepN kM mE) _ (by rw [hstepLd, mem_setPc, mem_rset]) hMInst
+  -- G3: addi sp sp totalFrame — deallocate the frame
+  have hdAddi : decode (fetch32 (step (stepN kM mE)))
+      = Instr.addi SP SP (BitVec.ofNat 12 (totalFrame fd)) := by
+    have h := decode_at L (step (stepN kM mE)) (step (stepN kM mE)) _ _ hemtail hINSTld 1
+      (by simp) (by rw [hPCld]) rfl
+    simpa using h
+  have hstepAddi : step (step (stepN kM mE))
+      = ((step (stepN kM mE)).rset SP ((step (stepN kM mE)).rget SP
+          + (BitVec.ofNat 12 (totalFrame fd)).signExtend 64)).setPc ((step (stepN kM mE)).pc + 4) :=
+    step_addi _ SP SP _ hdAddi
+  have hSPaddi : (step (step (stepN kM mE))).rget SP
+      = s1.sp + BitVec.ofNat 64 (totalFrame fd) := by
+    rw [hstepAddi, rget_setPc, rget_rset_self _ SP _ (by decide), hSPld,
+        signExtend_ofNat_lt (totalFrame fd) (by omega)]
+  have hRAaddi : (step (step (stepN kM mE))).rget RA = ra := by
+    rw [hstepAddi, rget_setPc, rget_rset_ne _ SP RA _ (by decide)]; exact hRAval
+  have hPCaddi : (step (step (stepN kM mE))).pc
+      = L.codeBase + BitVec.ofNat 64 (q + 4 * fd.rets.toList.length + 4 + 4) := by
+    rw [hstepAddi, pc_setPc, hPCld, pc_add4]
+  have hINSTaddi : Installed L (step (step (stepN kM mE))) :=
+    Installed_congr L (step (stepN kM mE)) _ (by rw [hstepAddi, mem_setPc, mem_rset]) hINSTld
+  -- G4: jalr x0 ra 0 — return
+  have hdJalr : decode (fetch32 (step (step (stepN kM mE)))) = Instr.jalr 0 RA 0 := by
+    have h := decode_at L (step (step (stepN kM mE))) (step (step (stepN kM mE))) _ _ hemtail
+      hINSTaddi 2 (by simp) (by rw [hPCaddi]) rfl
+    simpa using h
+  have hfin : stepN (kM + 3) mE = step (step (step (stepN kM mE))) := by rw [stepN_add]; rfl
+  refine ⟨kM + 3, ?_, ?_, ?_, ?_⟩
+  · rw [hfin]; exact jalr_lands _ RA ra hdJalr hRAaddi hraeven
+  · rw [hfin, step_jalr _ 0 RA 0 hdJalr, rget_setPc, rget_rset_ne _ 0 SP _ (by decide)]
+    exact hSPaddi
+  · intro j hj
+    rw [hfin, step_jalr _ 0 RA 0 hdJalr, rget_setPc,
+        rget_rset_ne _ 0 (A j) _ (by show 10 + j ≠ 0; omega),
+        hstepAddi, rget_setPc, rget_rset_ne _ SP (A j) _ (by show 10 + j ≠ 2; omega),
+        hstepLd, rget_setPc, rget_rset_ne _ RA (A j) _ (by show 10 + j ≠ 1; omega)]
+    simpa using hMval j hj
+  · rw [hfin]
+    have hjmem : (step (step (step (stepN kM mE)))).mem = (step (step (stepN kM mE))).mem := by
+      rw [step_jalr _ 0 RA 0 hdJalr, mem_setPc, mem_rset]
+    rw [hjmem, hstepAddi, mem_setPc, mem_rset, hstepLd, mem_setPc, mem_rset, hMmem]
+
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat} {dpos fnPos : Name → Nat}
