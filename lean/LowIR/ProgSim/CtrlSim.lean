@@ -416,6 +416,88 @@ theorem run_marshalFrom (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) 
               rwa [show base + (j' + 1) = base + 1 + j' from by omega] at h),
             h1oth t (by have h := hne 0 (by simp); rwa [Nat.add_zero] at h)]
 
+/-- Run `retStoresI`'s stores (indices `base, base+1, …`): starting from a machine
+    state whose `A (base+i)` hold the return values `vs[i]`, the `rvc` slot stores
+    mirror the IL last-wins fold `(rets.zip vs).foldl rset s` — same order, `rd=0`
+    ret emits 0 instructions vs an invisible `rset 0`. `StInv` is maintained across
+    each single slot write (`run_storeFrom`), whose register-preservation clause
+    keeps the yet-unstored `A` values live through earlier stores. -/
+theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
+    (hnw : ∀ s : St, s.sp.toNat + userOff fd ≤ 2 ^ 64)
+    (hseg : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64) :
+    ∀ (rets : List Nat) (vs : List Word) (base q : Nat) (s : St) (m : State),
+      StInv L fd holes s m →
+      m.pc = L.codeBase + BitVec.ofNat 64 q →
+      Emitted L q ((rets.zipIdx base).flatMap fun ri => storeSlotI ri.1 (A ri.2)) →
+      (∀ r ∈ rets, r ≤ maxRegF fd) →
+      (∀ r ∈ rets, slotOff r < 2 ^ 11) →
+      (L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
+         ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat) →
+      rets.length = vs.length →
+      (∀ i, (hi : i < vs.length) → m.rget (A (base + i)) = vs[i]) →
+      ∃ k, StInv L fd holes ((rets.zip vs).foldl (fun st rv => st.rset rv.1 rv.2) s) (stepN k m)
+         ∧ (stepN k m).pc = L.codeBase
+             + BitVec.ofNat 64 (q + 4 * ((rets.zipIdx base).flatMap
+                 fun ri => storeSlotI ri.1 (A ri.2)).length)
+         ∧ FramesPres holes s.sp fd m (stepN k m) := by
+  intro rets
+  induction rets with
+  | nil =>
+      intro vs base q s m hinv hpc _ _ _ _ _ _
+      refine ⟨0, ?_, ?_, ?_⟩
+      · simpa using hinv
+      · simp only [stepN_zero, List.zipIdx_nil, List.flatMap_nil, List.length_nil,
+                   Nat.mul_zero, Nat.add_zero]; exact hpc
+      · exact FramesPres_of_mem_eq holes s.sp fd m (stepN 0 m) (by rw [stepN_zero])
+  | cons r rest ih =>
+      intro vs base q s m hinv hpc hem hrd hfr hbd hlen hval
+      obtain ⟨v, vrest, rfl⟩ : ∃ v vrest, vs = v :: vrest := by
+        cases vs with
+        | nil => simp at hlen
+        | cons v vrest => exact ⟨v, vrest, rfl⟩
+      have hsp : (s.rset r v).sp = s.sp := by
+        by_cases h : r = 0 <;> simp [LowIR.Prog.St.rset, h]
+      simp only [List.zipIdx_cons, List.flatMap_cons] at hem
+      have hemL : Emitted L q (storeSlotI r (A base)) :=
+        Emitted_append_left _ _ _ _ hem
+      have hemR : Emitted L (q + 4 * (storeSlotI r (A base)).length)
+          ((rest.zipIdx (base + 1)).flatMap fun ri => storeSlotI ri.1 (A ri.2)) :=
+        Emitted_append_right _ _ _ _ hem
+      have hT : m.rget (A base) = v := by
+        have h := hval 0 (by simp)
+        rwa [Nat.add_zero, List.getElem_cons_zero] at h
+      obtain ⟨ks, hSts, hStpc, hFrs, hRegs⟩ :=
+        run_storeFrom L fd holes s m r (A base) v q hinv hT hpc hemL
+          (hrd r (by simp)) (hfr r (by simp)) (hnw s) hseg hblob hbd
+      -- recurse on the tail from the post-store machine state
+      have hbd' : L.codeBase.toNat + L.blobLen ≤ (s.rset r v).sp.toNat
+          ∨ (s.rset r v).sp.toNat + userOff fd ≤ L.codeBase.toNat := by rw [hsp]; exact hbd
+      have hlen' : rest.length = vrest.length := by
+        simpa using hlen
+      have hvalR : ∀ i, (hi : i < vrest.length) →
+          (stepN ks m).rget (A (base + 1 + i)) = vrest[i] := by
+        intro i hi
+        rw [hRegs (A (base + 1 + i))]
+        have h := hval (i + 1) (by simp only [List.length_cons]; omega)
+        rw [show base + (i + 1) = base + 1 + i from by omega,
+            List.getElem_cons_succ] at h
+        exact h
+      obtain ⟨k, hStK, hpcK, hFrK⟩ :=
+        ih vrest (base + 1) (q + 4 * (storeSlotI r (A base)).length) (s.rset r v) (stepN ks m)
+          hSts hStpc hemR (fun x hx => hrd x (List.mem_cons_of_mem r hx))
+          (fun x hx => hfr x (List.mem_cons_of_mem r hx)) hbd' hlen' hvalR
+      refine ⟨ks + k, ?_, ?_, ?_⟩
+      · rw [stepN_add]
+        simpa only [List.zip_cons_cons, List.foldl_cons] using hStK
+      · rw [stepN_add, hpcK]
+        apply pc_congr
+        simp only [List.zipIdx_cons, List.flatMap_cons, List.length_append]
+        omega
+      · rw [stepN_add]
+        exact FramesPres_trans holes s.sp fd m (stepN ks m) (stepN k (stepN ks m))
+          hFrs (by rw [hsp] at hFrK; exact hFrK)
+
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat} {dpos fnPos : Name → Nat}

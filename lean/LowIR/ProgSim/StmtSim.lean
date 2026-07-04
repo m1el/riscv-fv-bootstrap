@@ -415,13 +415,15 @@ theorem run_storeFrom (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m
     ∃ ks, StInv L fd holes (s.rset rd v) (stepN ks m2)
         ∧ (stepN ks m2).pc
             = L.codeBase + BitVec.ofNat 64 (q + 4 * (storeSlotI rd tsrc).length)
-        ∧ FramesPres holes s.sp fd m2 (stepN ks m2) := by
+        ∧ FramesPres holes s.sp fd m2 (stepN ks m2)
+        ∧ (∀ t, (stepN ks m2).rget t = m2.rget t) := by
   have hinst : Installed L m2 := hinv2.2.2.1
   cases Nat.decEq rd 0 with
   | isTrue hrd0 =>
     subst hrd0
     exact ⟨0, hinv2, by simp only [stepN_zero]; exact hq,
-           FramesPres_of_mem_eq holes s.sp fd m2 (stepN 0 m2) (by rw [stepN_zero])⟩
+           FramesPres_of_mem_eq holes s.sp fd m2 (stepN 0 m2) (by rw [stepN_zero]),
+           fun t => by rw [stepN_zero]⟩
   | isFalse hrd0 =>
     have hlen : 0 < (storeSlotI rd tsrc).length := by rw [storeSlotI_length, if_neg hrd0]; omega
     have hd : decode (fetch32 m2) = Instr.sd SP tsrc (BitVec.ofNat 12 (slotOff rd)) := by
@@ -442,7 +444,7 @@ theorem run_storeFrom (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m
       slotAddr_toNat s.sp rd (by omega)
     have hwa : (s.sp + BitVec.ofNat 64 (slotOff rd)).toNat + 8 ≤ 2 ^ 64 := by rw [hstoff]; omega
     have hsl16 : 16 ≤ slotOff rd := by unfold slotOff; omega
-    refine ⟨1, ?_, ?_, ?_⟩
+    refine ⟨1, ?_, ?_, ?_, ?_⟩
     · rw [show stepN 1 m2 = step m2 from rfl, hstep]
       exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hstore
     · rw [show stepN 1 m2 = step m2 from rfl, hstep, pc_setPc, hq, pc_add4,
@@ -453,6 +455,8 @@ theorem run_storeFrom (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m
       rw [hstoff]; rcases hw with hw | hw
       · exact Or.inl (by omega)
       · exact Or.inr (by omega)
+    · intro t
+      rw [show stepN 1 m2 = step m2 from rfl, hstep, rget_setPc, State_storeWord_rget]
 
 /-- The T0-source specialisation used by the arith/const-data cases. -/
 theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : State)
@@ -466,8 +470,10 @@ theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : 
     ∃ ks, StInv L fd holes (s.rset rd v) (stepN ks m2)
         ∧ (stepN ks m2).pc
             = L.codeBase + BitVec.ofNat 64 (q + 4 * (storeSlotI rd T0).length)
-        ∧ FramesPres holes s.sp fd m2 (stepN ks m2) :=
-  run_storeFrom L fd holes s m2 rd T0 v q hinv2 hT0 hq hem hrd hfrd hnw hseg hblob hbd
+        ∧ FramesPres holes s.sp fd m2 (stepN ks m2) := by
+  obtain ⟨ks, hSt, hpc, hFr, _⟩ :=
+    run_storeFrom L fd holes s m2 rd T0 v q hinv2 hT0 hq hem hrd hfrd hnw hseg hblob hbd
+  exact ⟨ks, hSt, hpc, hFr⟩
 
 /-! ## `synthConst` — materialising a constant into a scratch register.
 
