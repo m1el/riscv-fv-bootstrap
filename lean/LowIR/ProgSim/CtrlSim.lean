@@ -1277,7 +1277,7 @@ theorem lower_sim_cf
     (hem   : Emitted L here (emitCF P.data dpos fnPos brkPos contPos epiPos here stmt))
     (hreg  : maxRegS stmt ≤ maxRegF fd)
     (hnw   : s.sp.toNat + userOff fd ≤ 2 ^ 64)
-    (hbd   : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
+    (hbd   : (L.codeBase.toNat + L.blobLen ≤ stackLo.toNat ∧ stackLo.toNat ≤ s.sp.toNat)
                ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat)
     (haccess : MemAccOff L holes P dbase pad stackLo fuel stmt s)
     (hlbl  : LabelsOk brkPos contPos epiPos)
@@ -1297,6 +1297,13 @@ theorem lower_sim_cf
   induction fuel generalizing stmt s s' oc m here brkPos contPos with
   | zero => exact absurd hexec (by simp [LowIR.Prog.exec])
   | succ fuel ih =>
+    -- the old concrete `hbd` form the leaf/store atoms still expect: both stackLo
+    -- disjuncts collapse (codeBase+blob ≤ stackLo ≤ sp), disjunct-2 is identical.
+    have hbd_old : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
+        ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat := by
+      rcases hbd with ⟨h1, h2⟩ | h
+      · exact Or.inl (Nat.le_trans h1 h2)
+      · exact Or.inr h
     cases stmt
     case skip =>
       rw [LowIR.Prog.exec_skip, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1457,7 +1464,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.addi rd rs imm) s _ m here
           (LowIR.Prog.exec_addi P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case add rd r1 r2 =>
       rw [LowIR.Prog.exec_add, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1465,7 +1472,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.add rd r1 r2) s _ m here
           (LowIR.Prog.exec_add P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case sub rd r1 r2 =>
       rw [LowIR.Prog.exec_sub, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1473,7 +1480,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.sub rd r1 r2) s _ m here
           (LowIR.Prog.exec_sub P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case orr rd r1 r2 =>
       rw [LowIR.Prog.exec_orr, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1481,7 +1488,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.orr rd r1 r2) s _ m here
           (LowIR.Prog.exec_orr P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case slli rd rs sh =>
       rw [LowIR.Prog.exec_slli, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1489,7 +1496,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.slli rd rs sh) s _ m here
           (LowIR.Prog.exec_slli P dbase pad stackLo fuel rd rs sh s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case srli rd rs sh =>
       rw [LowIR.Prog.exec_srli, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1497,7 +1504,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.srli rd rs sh) s _ m here
           (LowIR.Prog.exec_srli P dbase pad stackLo fuel rd rs sh s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case lbu rd rs imm =>
       rw [LowIR.Prog.exec_lbu, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1505,7 +1512,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.lbu rd rs imm) s _ m here
           (LowIR.Prog.exec_lbu P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case ld rd rs imm =>
       rw [LowIR.Prog.exec_ld, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1513,7 +1520,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.ld rd rs imm) s _ m here
           (LowIR.Prog.exec_ld P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case sb rb rv imm =>
       rw [LowIR.Prog.exec_sb, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1521,7 +1528,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.sb rb rv imm) s _ m here
           (LowIR.Prog.exec_sb P dbase pad stackLo fuel rb rv imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case sd rb rv imm =>
       rw [LowIR.Prog.exec_sd, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1529,7 +1536,7 @@ theorem lower_sim_cf
       obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.sd rb rv imm) s _ m here
           (LowIR.Prog.exec_sd P dbase pad stackLo fuel rb rv imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd haccess rfl
+          hseg hblob hbd_old haccess rfl
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case ife c a b t e =>
       simp only [maxRegS] at hreg
@@ -1900,7 +1907,7 @@ theorem lower_sim_cf
               hinv hpc hemS hrange
           obtain ⟨ks, hinvF, hpcF, hfrStore⟩ :=
             run_store L fd holes s (stepN 3 m) rd (BitVec.ofInt 64 (bs.length : Int)) (here + 12)
-              hinvS hT0S hpcS hemST hrd hfrd hnw hseg hblob hbd
+              hinvS hT0S hpcS hemST hrd hfrd hnw hseg hblob hbd_old
           have hval : s.rset rd (BitVec.ofInt 64 (bs.length : Int))
               = s.rset rd (BitVec.ofNat 64 bs.length) := by rw [BitVec.ofInt_natCast]
           refine ⟨3 + ks, ?_, ?_, ?_⟩
@@ -1941,7 +1948,7 @@ theorem lower_sim_cf
             run_cref L fd holes s m (dpos d) here hinv hpc hemC hhere (hdpos d)
           obtain ⟨ks, hinvF, hpcF, hfrStore⟩ :=
             run_store L fd holes s (stepN 5 m) rd (L.codeBase + BitVec.ofNat 64 (dpos d))
-              (here + 20) hinvC hT0C hpcC hemST hrd hfrd hnw hseg hblob hbd
+              (here + 20) hinvC hT0C hpcC hemST hrd hfrd hnw hseg hblob hbd_old
           refine ⟨5 + ks, ?_, ?_, ?_⟩
           · rw [stepN_add 5 ks m]; rw [← ha] at hinvF; exact hinvF
           · rw [stepN_add 5 ks m, hpcF]
