@@ -224,6 +224,15 @@ theorem signExtend_ofInt_13 (δ : Int) (hlo : -(2 ^ 12) ≤ δ) (hhi : δ < 2 ^ 
     rw [Int.bmod_def]; split <;> omega
   simp only [BitVec.signExtend, ht]
 
+/-- The 12-bit immediate (`addi`/`synthConst`'s pieces) sign-extends to itself
+    when it fits `[-2¹¹, 2¹¹)`. Same `toInt = bmod` route as `_13`/`_21`. -/
+theorem signExtend_ofInt_12 (δ : Int) (hlo : -(2 ^ 11) ≤ δ) (hhi : δ < 2 ^ 11) :
+    (BitVec.ofInt 12 δ).signExtend 64 = BitVec.ofInt 64 δ := by
+  have ht : (BitVec.ofInt 12 δ).toInt = δ := by
+    rw [BitVec.toInt_ofInt]; show Int.bmod δ (2 ^ 12) = δ
+    rw [Int.bmod_def]; split <;> omega
+  simp only [BitVec.signExtend, ht]
+
 /-- Landing arithmetic: a PC-relative transfer from `codeBase + here` by the
     signed delta `target − here` lands at `codeBase + target` — regardless of
     direction (forward or backward), in `BitVec 64` (wrap-safe). -/
@@ -420,6 +429,98 @@ theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : 
       exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hstore
     · rw [show stepN 1 m2 = step m2 from rfl, hstep, pc_setPc, hq, pc_add4,
           storeSlotI_length, if_neg hrd0]
+
+/-! ## `synthConst` — materialising a constant into a scratch register.
+
+    `cref`/`clen` both compute a value with the compiler's fixed 3-instruction
+    `synthConst` sequence (`v = hi*4096 + lo`, both 12-bit signed): `addi t 0 hi;
+    slli t t 12; addi t t lo`. `run_synth` runs it, leaving IL state `s` related
+    and `t = ofInt 64 v` — the reusable core of the `clen` case and half of `cref`. -/
+
+/-- The low 12-bit signed piece of `v` (`∈ [-2048, 2047]`). -/
+def synthLo (v : Int) : Int := ((v + 2048) % 4096) - 2048
+/-- The high piece: `(v − lo)/4096`. Fits `[-2048, 2047]` exactly when `v` is in
+    the compiler's synth range (the `cref` `resolveOne` guard / the data-length
+    bound); supplied as a side condition. -/
+def synthHi (v : Int) : Int := (v - synthLo v) / 4096
+
+/-- The concrete `Instr` list `Compile.synthConst t v` erases to (all `.ins`). -/
+def synthI (t : Nat) (v : Int) : List Instr :=
+  [.addi t 0 (BitVec.ofInt 12 (synthHi v)), .slli t t 12, .addi t t (BitVec.ofInt 12 (synthLo v))]
+
+@[simp] theorem synthI_length (t : Nat) (v : Int) : (synthI t v).length = 3 := rfl
+
+/-- The value identity: `(ofInt hi) <<< 12 + ofInt lo = ofInt (hi*4096 + lo)`. -/
+theorem synth_val (hi lo : Int) :
+    ((BitVec.ofInt 64 hi) <<< (12:Nat)) + BitVec.ofInt 64 lo
+      = BitVec.ofInt 64 (hi * 4096 + lo) := by
+  have hc : BitVec.ofNat 64 (2^12) = BitVec.ofInt 64 (4096:Int) := by
+    rw [← BitVec.ofInt_natCast]; congr 1
+  rw [BitVec.shiftLeft_eq_mul_twoPow,
+      show BitVec.twoPow 64 12 = BitVec.ofNat 64 (2^12) from by
+        apply BitVec.eq_of_toNat_eq; rw [BitVec.toNat_twoPow, BitVec.toNat_ofNat],
+      hc, ← BitVec.ofInt_mul, ← BitVec.ofInt_add]
+
+/-- Run the 3-instruction `synthConst T0 v` sequence: materialises `ofInt 64 v`
+    into `T0`, IL state `s` unchanged (only `T0`/`pc` move), given `synthHi v`
+    fits the 12-bit signed window (the compiler's `cref` guard / data-length
+    bound). `[propext, Quot.sound]`. -/
+theorem run_synth (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State)
+    (v : Int) (q : Nat) (hinv : StInv L fd holes s m)
+    (hpc : m.pc = L.codeBase + BitVec.ofNat 64 q) (hem : Emitted L q (synthI T0 v))
+    (hhi : -2048 ≤ synthHi v ∧ synthHi v ≤ 2047) :
+    StInv L fd holes s (stepN 3 m)
+    ∧ (stepN 3 m).rget T0 = BitVec.ofInt 64 v
+    ∧ (stepN 3 m).pc = L.codeBase + BitVec.ofNat 64 (q + 12)
+    ∧ (stepN 3 m).mem = m.mem := by
+  have hinst : Installed L m := hinv.2.2.1
+  have hlo1 : -2048 ≤ synthLo v := by unfold synthLo; omega
+  have hlo2 : synthLo v ≤ 2047 := by unfold synthLo; omega
+  have hd0 : decode (fetch32 m) = Instr.addi T0 0 (BitVec.ofInt 12 (synthHi v)) := by
+    have h := decode_at L m m q (synthI T0 v) hem hinst 0 (by simp) (by simpa using hpc) rfl
+    simpa [synthI] using h
+  have hs0 : step m = (m.rset T0 (BitVec.ofInt 64 (synthHi v))).setPc (m.pc + 4) := by
+    rw [step_addi m T0 0 _ hd0]
+    have hv : m.rget 0 + (BitVec.ofInt 12 (synthHi v)).signExtend 64 = BitVec.ofInt 64 (synthHi v) := by
+      rw [signExtend_ofInt_12 _ (by omega) (by omega), show m.rget 0 = 0 from rfl]; simp
+    rw [hv]
+  have hpc0 : (step m).pc = L.codeBase + BitVec.ofNat 64 (q + 4) := by rw [hs0, pc_setPc, hpc, pc_add4]
+  have hmem0 : (step m).mem = m.mem := by rw [hs0, mem_setPc, mem_rset]
+  have hT0_0 : (step m).rget T0 = BitVec.ofInt 64 (synthHi v) := by
+    rw [hs0, rget_setPc]; exact rget_rset_self _ _ _ (by decide)
+  have hd1 : decode (fetch32 (step m)) = Instr.slli T0 T0 12 := by
+    have h := decode_at L m (step m) q (synthI T0 v) hem hinst 1 (by simp) (by rw [hpc0]) hmem0
+    simpa [synthI] using h
+  have hs1 : step (step m)
+      = ((step m).rset T0 ((BitVec.ofInt 64 (synthHi v)) <<< (12:Nat))).setPc ((step m).pc + 4) := by
+    rw [step_slli (step m) T0 T0 12 hd1, hT0_0]
+  have hpc1 : (step (step m)).pc = L.codeBase + BitVec.ofNat 64 (q + 8) := by
+    rw [hs1, pc_setPc, hpc0, pc_add4]
+  have hmem1 : (step (step m)).mem = m.mem := by rw [hs1, mem_setPc, mem_rset, hmem0]
+  have hT0_1 : (step (step m)).rget T0 = (BitVec.ofInt 64 (synthHi v)) <<< (12:Nat) := by
+    rw [hs1, rget_setPc]; exact rget_rset_self _ _ _ (by decide)
+  have hd2 : decode (fetch32 (step (step m))) = Instr.addi T0 T0 (BitVec.ofInt 12 (synthLo v)) := by
+    have h := decode_at L m (step (step m)) q (synthI T0 v) hem hinst 2 (by simp) (by rw [hpc1]) hmem1
+    simpa [synthI] using h
+  have hval : (BitVec.ofInt 64 v)
+      = ((BitVec.ofInt 64 (synthHi v)) <<< (12:Nat)) + BitVec.ofInt 64 (synthLo v) := by
+    rw [synth_val]; congr 1; unfold synthHi synthLo; omega
+  have hs2 : step (step (step m)) = ((step (step m)).rset T0 (BitVec.ofInt 64 v)).setPc
+      ((step (step m)).pc + 4) := by
+    rw [step_addi (step (step m)) T0 T0 _ hd2, hT0_1,
+        signExtend_ofInt_12 _ (by omega) (by omega), ← hval]
+  have hI0 : StInv L fd holes s (step m) := by
+    rw [hs0]; exact StInv_scratch L fd holes s m T0 _ _ (by decide) hinv
+  have hI1 : StInv L fd holes s (step (step m)) := by
+    rw [hs1]; exact StInv_scratch L fd holes s (step m) T0 _ _ (by decide) hI0
+  have hI2 : StInv L fd holes s (step (step (step m))) := by
+    rw [hs2]; exact StInv_scratch L fd holes s (step (step m)) T0 _ _ (by decide) hI1
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · rw [show stepN 3 m = step (step (step m)) from rfl]; exact hI2
+  · rw [show stepN 3 m = step (step (step m)) from rfl, hs2, rget_setPc]
+    exact rget_rset_self _ _ _ (by decide)
+  · rw [show stepN 3 m = step (step (step m)) from rfl, hs2, pc_setPc, hpc1, pc_add4]
+  · rw [show stepN 3 m = step (step (step m)) from rfl, hs2, mem_setPc, mem_rset, hmem1]
 
 /-- Two `StInv`s over the same `holes` pin the same frame pointer: `s'.sp = s.sp`.
     (`holes.head? = some (·.sp, userOff fd)` in each; `holes` is fixed.) This is how
