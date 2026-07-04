@@ -27,6 +27,6 @@ Define the **stop characters** as the characters that begin a `<SPACING>` or `<C
 - Not enough space for output: `ErrOutputShort`
 
 The grammar and error classification are formally machine-checked against the
-spec `decodeS` in `lean/Hex0/Grammar.lean`: every input matches exactly one of
+spec `decodeS` in `lean/Spec/Hex0/Grammar.lean`: every input matches exactly one of
 "valid program" (→ `Ok`) or one error class (totality + disjointness), and the
 classification agrees with the implementation.

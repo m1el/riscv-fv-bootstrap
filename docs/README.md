@@ -35,7 +35,7 @@ context — are in [archive/](archive/README.md).)
 
 ## Experiments
 
-- [LOWIR-SSA-EXPERIMENT.md](LOWIR-SSA-EXPERIMENT.md) — LowIRSSA (`lean/LowIR/SSA.lean`): an SSA/value-flavored variant of the Prog IR — valued outcomes, value-binding `block`/`ife`, block-parameter `while` loops with a guard-false `defaultBody`, never/thru typing, a decidable SSA checker. Design record, ambiguity resolutions, and the assessment (headline: lower SSA→Prog, don't fork the compiler).
+- [LOWIR-SSA-EXPERIMENT.md](LOWIR-SSA-EXPERIMENT.md) — LowIRSSA (`lean/LowSSA/Core.lean`): an SSA/value-flavored variant of the Prog IR — valued outcomes, value-binding `block`/`ife`, block-parameter `while` loops with a guard-false `defaultBody`, never/thru typing, a decidable SSA checker. Design record, ambiguity resolutions, and the assessment (headline: lower SSA→Prog, don't fork the compiler).
 - [REPRO-FINDINGS.md](REPRO-FINDINGS.md) — the full reproduction study: can open models reproduce verified hex0? Five phases (deepseek A/B/C clean-room → minimax-m3 → deepseek+`PREV_CTX` head-start → Kimi 2.7 → gpt-5.5-plans-kimi-executes) that progressively isolate the wall. Result: every model reproduces the engineering and (with the head-start) can *plan* the proof, but **none executes** the loop-simulation lemma — the wall is **raw proof-engineering execution under kernel-elaboration**, not comprehension. (Method/steering handbook: [archive/REPRO-SUPERVISOR.md](archive/REPRO-SUPERVISOR.md).)
 
 ## Analyses

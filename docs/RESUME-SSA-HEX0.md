@@ -3,7 +3,7 @@
 Plan written 2026-07-02, right after the strlen/hex0 ports landed. Read with
 [LOWIR-SSA-EXPERIMENT.md](LOWIR-SSA-EXPERIMENT.md) (the IR's design record —
 scopes, `defaultBody`, never/thru typing) and the baseline this campaign is
-measured against: `lean/LowIR/CtrlHex0Proof.lean` (1703 lines, sorry-free,
+measured against: `lean/LowIR/Hex0/CtrlProof.lean` (1703 lines, sorry-free,
 the Ctrl-IL hex0 proof).
 
 ## STATUS (updated 2026-07-03) — ✅ CAMPAIGN COMPLETE, all 6 phases DONE
@@ -34,7 +34,7 @@ All landed code is sorry-free, builds under `lake build LowIRSSA`, and its
 axioms track the Ctrl baseline `[propext, Classical.choice, Quot.sound]`
 (no `native_decide` anywhere in the chain).
 
-- **Phase 0 DONE** — `lean/LowIR/SSAProof/ExecFacts.lean` (~640 lines). All
+- **Phase 0 DONE** — `lean/LowSSA/ExecFacts.lean` (~640 lines). All
   one-layer unfolders (leaf ops, `seq`, `catch0`, `block`, `ife`, the
   block-parameter `while` via `exec_while_unfold` + resolved
   `cont0`/`brk0`/`ret`/`contS`/`F_*` lemmas, `call`), `exec_mono`/`_le` (P4,
@@ -42,14 +42,14 @@ axioms track the Ctrl baseline `[propext, Classical.choice, Quot.sound]`
   syntactic frame theorem, `catch0_frame` factors the break-scope analysis),
   `rget`/`rset`/`bindOuts`/`storeByte` helpers (P3 support; the `Slice`/`Wf`
   borrow layer is reused from `CtrlHex0Proof`). Commit `cb04884`.
-- **Phase 1 DONE — GO** — `lean/LowIR/SSAProof/StrlenProof.lean` (214 lines).
+- **Phase 1 DONE — GO** — `lean/LowSSA/Strlen/Proof.lean` (214 lines).
   `strlen_loop` (args-tuple invariant, induction on distance-to-NUL, `inits`
   parametrized by `inits.map (evalOpnd s) = [cur, mem cur]` so it survives the
   const-rebuilt back-edge; existential fuel + `exec_mono_le`) and the run-level
   `strlenS_correct` vs `IsLen`. **The GO/NO-GO passed**: the args-tuple
   invariant carries NO register-file clauses, exactly the experiment's claim.
   Commit `42de9b0`.
-- **Phase 2 UNDERWAY** — `lean/LowIR/SSAProof/Hex0Proof.lean`. Landed:
+- **Phase 2 UNDERWAY** — `lean/LowSSA/Hex0/Proof.lean`. Landed:
   `pnibS_eff` (the value-producing nibble `ife` → `pnibR c` in `dst`, all 5
   leaves threaded through the nested `catch0` scopes; frame NOT baked in — it
   comes from `exec_frame`), `signExtend_ofNat_small` + `exec_lit`. Commit
@@ -76,7 +76,7 @@ reusable recipe for the next SSA proof (hex1, or the ProgSim `compile_sim`).
 
 ## 0. Mission and the metric
 
-Prove **`hex0S_correct`**: on the SSA IL, `hex0S` (in `lean/LowIR/SSALib.lean`)
+Prove **`hex0S_correct`**: on the SSA IL, `hex0S` (in `lean/LowSSA/Lib.lean`)
 computes `Hex0.coreSpec` — the SSA sibling of `CtrlHex0Proof.hex0_correct`.
 The theorem is already executably true (`hex0S_matches_spec`: the full Ctrl
 battery via `native_decide`), so nothing is being defended; what is being
@@ -95,10 +95,10 @@ compiler-facing ones (LOWIR-SSA-EXPERIMENT.md assessment §1).
 
 ## 1. What exists (frozen inputs)
 
-- `lean/LowIR/SSA.lean` — the IR: `exec` (clocked, valued `Outcome`,
+- `lean/LowSSA/Core.lean` — the IR: `exec` (clocked, valued `Outcome`,
   `catch0`, the while-rebuild iteration `inits := consts of continued vals`),
   `check`/`wfEnv` (SSA census + arity/never typing), `run` returning values.
-- `lean/LowIR/SSALib.lean` — `hex0S` (loop args `5`=i, `6`=n; every failure a
+- `lean/LowSSA/Lib.lean` — `hex0S` (loop args `5`=i, `6`=n; every failure a
   `ret [.const code, .reg 6]`; success = guard-false `defaultBody`
   `ret [.const 0, .reg 6]`; `pnibS`/`skipCommentS` parameterized by scratch
   regs), `strlenS`, and the `native_decide` batteries — the executable oracle
@@ -255,9 +255,9 @@ hex0F agree (both = `coreSpec`). *Risk: low. ~150 lines.*
 ## 5. File & build plan
 
 ```
-lean/LowIR/SSAProof/ExecFacts.lean   Phase 0 (unfolders, mono, frame, borrows)
-lean/LowIR/SSAProof/StrlenProof.lean Phase 1 (the vertical slice)
-lean/LowIR/SSAProof/Hex0Proof.lean   Phases 2–6
+lean/LowSSA/ExecFacts.lean   Phase 0 (unfolders, mono, frame, borrows)
+lean/LowSSA/Strlen/Proof.lean Phase 1 (the vertical slice)
+lean/LowSSA/Hex0/Proof.lean   Phases 2–6
 ```
 
 Add `LowIR.SSAProof.Hex0Proof` to the `LowIRSSA` lib roots **in the same
@@ -374,7 +374,7 @@ evaluated once.
 
 ### Migration checklist (what it ripples through)
 
-- [x] `LowIR/SSA.lean` — `exec` `while` clause: evaluates `inits` once, then
+- [x] `LowSSA/Core.lean` — `exec` `while` clause: evaluates `inits` once, then
       hands off to the new top-level `iterWhile` iterator (budgeted recursion
       on a value list; the term is never reconstructed). Resolution of the
       open decision: a separate *function* `iterWhile` taking the branch
@@ -383,7 +383,7 @@ evaluated once.
       Lean's structural recursion accepts as a partial application; `while`
       stays the single surface constructor. Iteration budget `fuel+1` ≥ the
       old accounting, so surface behaviour is unchanged.
-- [x] `LowIR/SSAProof/ExecFacts.lean` — `exec_while` (entry) + the
+- [x] `LowSSA/ExecFacts.lean` — `exec_while` (entry) + the
       `iterWhile_*` head-step family (`_cont0`/`_contS`/`_brk0`/`_brkS`/
       `_ret`/`_F_*`, `_zero`; `_badlen` unchanged); `iterWhile_mono` and
       `iterWhile_frame` factor the loop halves of `exec_mono`/`exec_frame`,

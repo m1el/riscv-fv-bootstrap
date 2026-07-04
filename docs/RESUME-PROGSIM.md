@@ -168,7 +168,7 @@ Prove: **if the D7/D8 IL says a program computes something, the compiled RV64I
 bytes compute the same thing on the trusted `Rv64i` model.** This is the T1
 of `LowIR.lean:312` re-targeted at the real IR (functions, frames, calls,
 const data) — the pass that amortizes the flat-PC simulation cost paid
-per-program in `Hex0/Refine.lean` (~3400 lines for ONE program) into ONE
+per-program in `RawAsm/Hex0/Refine.lean` (~3400 lines for ONE program) into ONE
 proof reused by every program. After it, a structured-altitude proof like
 `strlen_correct` transports to actual bytes by composition, and the ProgLib
 functions get machine-level correctness for the price of their (easy)
@@ -189,16 +189,16 @@ executable oracle to test against while it is being stated.
   (`symSize`), `resolveOne` (range-checked), `compileProgT`/`progBytes`,
   entry stub + halt pad. Physical regs: x1=ra, x2=sp, x5/x6=t0/t1, x10..x17=a*.
   The compiler is FROZEN as-is for this campaign (P1 needs no change to it).
-- `LowIR/ProgLib.lean` + `CompileTests.lean` — the programs and the
+- `LowIR/Lib.lean` + `CompileTests.lean` — the programs and the
   differential batteries (the regression oracle for any compiler change).
 - Prior art to port: one-layer `exec_*` unfolder lemmas
   (`CtrlStrtoullProof.lean`: `exec_seq_normal`, `exec_block_catch`,
   `exec_while_step/brk`, …), the hex0 step/fetch/frame lemma style
-  (`Hex0/Refine.lean`, `LowIR/CtrlHex0Proof.lean`), `Layout`/`Installed`/`Agree`
+  (`RawAsm/Hex0/Refine.lean`, `LowIR/Hex0/CtrlProof.lean`), `Layout`/`Installed`/`Agree`
   shapes from old T1 (`LowIR.lean:325`). Old T1 `compile_sim` (line 370, the
   original flat IL) stays as a historical statement; **this campaign
   supersedes it — do not prove it**.
-- `LowIR/SSA.lean` + `SSAProof/{ExecFacts,StrlenProof,Hex0Proof}.lean` — the
+- `LowSSA/Core.lean` + `SSAProof/{ExecFacts,StrlenProof,Hex0Proof}.lean` — the
   upstream SSA experiment, since 2026-07-03 on the §8 rebind-in-environment
   `while` semantics (`iterWhile`: fixed loop term, carried values threaded as
   a value list — [RESUME-SSA-HEX0.md](RESUME-SSA-HEX0.md) §8). Not an input

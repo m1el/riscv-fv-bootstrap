@@ -42,7 +42,7 @@ the full plan and every finding needed to resume cold.
 ## Survey findings (task 1 — done, one check left)
 
 - **The Rv64i model already has everything the compiler needs.**
-  `lean/Hex0/Rv64i.lean` (210 lines): exactly 16 encodings —
+  `lean/RawAsm/Rv64i.lean` (210 lines): exactly 16 encodings —
   `addi add sub or slli srli lbu ld sb sd beq blt bge bgeu jal jalr` —
   with `decode`, `step`, `State.{rget,rset,loadByte,storeByte,loadWord,storeWord}`,
   `runFuel`/`stepsToHalt` (total, proof-usable) and `runUntil` (partial,

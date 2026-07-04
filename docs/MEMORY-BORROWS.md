@@ -54,7 +54,7 @@ def Wf (bs : List Borrow) : Prop :=                 -- a unique borrow is disjoi
   ∀ b ∈ bs, ∀ b' ∈ bs, b ≠ b' → (b.perm = .uniq ∨ b'.perm = .uniq) → Disjoint b.slice b'.slice
 ```
 
-(currently in `LowIR/CtrlHex0Proof.lean`; promote to `LowIR/Borrow.lean` for libc-wide reuse.)
+(currently in `LowIR/Hex0/CtrlProof.lean`; promote to `LowIR/Borrow.lean` for libc-wide reuse.)
 
 ## Standing assumption (record in TCB)
 

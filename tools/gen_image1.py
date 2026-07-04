@@ -55,7 +55,7 @@ def coreBytes  : List Nat := {lst(core)}
 def inputBytes : List Nat := {lst(inp)}
 end Rv64i.Image1
 '''
-open(os.path.join(ROOT, 'lean', 'Hex1', 'Image.lean'), 'w').write(lean)
+open(os.path.join(ROOT, 'lean', 'RawAsm', 'Hex1', 'Image.lean'), 'w').write(lean)
 
 coq = f'''(* AUTO-GENERATED from bare/hex1.elf by tools/gen_image1.py. Do not edit. *)
 From Coq Require Import ZArith List. Import ListNotations.

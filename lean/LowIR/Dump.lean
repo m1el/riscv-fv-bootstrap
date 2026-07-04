@@ -14,7 +14,7 @@
   can serve both proof-transfer and (verified) debug-info consumers. Parsing and
   round-trip correctness are explicitly out of scope here.
 -/
-import LowIR.ProgLib
+import LowIR.Lib
 
 namespace LowIR.Prog
 

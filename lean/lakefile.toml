@@ -1,36 +1,63 @@
 name = "hex0"
-defaultTargets = ["Hex0", "Hex1", "LowIRCompile", "LowIRProgSim", "LowIRSSA"]
+defaultTargets = ["Spec", "RawAsm", "LowIR", "LowSSA"]
+
+# The language tower is one library per top-level directory. Each lib is rooted
+# at an aggregator module (e.g. `RawAsm.lean` imports the rung's main entry
+# points) and claims its whole namespace subtree with a submodule glob
+# ("Ns.*"), so every module is claimed by exactly one lib (the disjoint
+# top-level namespaces guarantee no overlap). Cross-lib import dependencies
+# (RawAsm → Spec, LowIR → Spec/RawAsm, LowSSA → LowIR) are resolved by Lake's
+# global module graph. Build a whole rung with `lake build <Lib>`, or a single
+# module with `lake build <Module.Name>`.
+#
+#   Spec/     — functional specifications, the refinement targets (rung-independent)
+#   RawAsm/   — bare RV64I model + hex0/hex1 verified at the flat-PC altitude
+#   LowIR/    — structured IL (Core → Ctrl → Prog) + verified compiler + ProgSim
+#   LowSSA/   — the SSA variant of the Prog IR (docs/LOWIR-SSA-EXPERIMENT.md)
+#
+# (`lean/DumpProgMain.lean` lives outside every namespace on purpose — it is a
+# `lake env lean --run` tool, not a library module, so no lib claims it.)
 
 [[lean_lib]]
-name = "Hex0"
+name = "Spec"
+globs = ["Spec.*"]
 
 [[lean_lib]]
-name = "Hex1"
+name = "RawAsm"
+globs = ["RawAsm.*"]
 
 [[lean_lib]]
 name = "LowIR"
+globs = ["LowIR.*"]
 
-# The executable D7/D8 compiler cut (Prog IR + Compile + differential tests).
-# Rooted at the test module so `lake build LowIRCompile` checks the whole
-# pipeline (the bare `LowIR` lib only builds its root module — see
-# docs/RESUME-LOWIR-COMPILER.md on the globs trap).
 [[lean_lib]]
-name = "LowIRCompile"
+name = "LowSSA"
+globs = ["LowSSA.*"]
+
+# --- back-compat target aliases -------------------------------------------
+# The four libs above ARE the tower (and the default build). The aliases below
+# preserve the pre-reorg `lake build <name>` invocations documented in the
+# handoff/experiment docs. They are NOT in defaultTargets; each roots a subset
+# of the tower, and its cross-subtree dependencies resolve through the glob
+# libs above (Lake builds a single global module graph). Overlapping claims are
+# fine — a module builds once and both libs share the olean.
+
+[[lean_lib]]
+name = "Hex0"                       # the hex0 rung program (was lean/Hex0/*)
+roots = ["RawAsm.Hex0"]
+
+[[lean_lib]]
+name = "Hex1"                       # the hex1 rung program (was lean/Hex1/*)
+roots = ["RawAsm.Hex1"]
+
+[[lean_lib]]
+name = "LowIRCompile"               # the D7/D8 compiler cut + differential tests
 roots = ["LowIR.CompileTests"]
 
-# EXPERIMENT (2026-07-02): SSA variant of the Prog IR — valued outcomes,
-# block-parameter loops, never/thru typing (docs/LOWIR-SSA-EXPERIMENT.md).
-# Rooted at the Dump module (s-expression dumper), which transitively pulls
-# the Lib module (strlen/hex0 ports + spec validation) and the core LowIR.SSA.
 [[lean_lib]]
-name = "LowIRSSA"
-roots = ["LowIR.SSADump", "LowIR.SSAProof.ExecFacts", "LowIR.SSAProof.StrlenProof",
-         "LowIR.SSAProof.Hex0Proof"]
-
-# The compile_sim-for-Prog proof campaign (docs/RESUME-PROGSIM.md). Rooted at
-# the Defs module for now (the top-level `LowIR.ProgSim.Main` with the payoff
-# theorems arrives later — reroot then). Elaborates fast; stays in
-# defaultTargets while it does (revisit if it crosses ~1 min — §5).
-[[lean_lib]]
-name = "LowIRProgSim"
+name = "LowIRProgSim"               # the compile_sim-for-Prog proof campaign
 roots = ["LowIR.ProgSim.Defs", "LowIR.ProgSim.SlotFacts", "LowIR.ProgSim.MemFacts", "LowIR.ProgSim.StmtSim", "LowIR.ProgSim.CtrlSim"]
+
+[[lean_lib]]
+name = "LowIRSSA"                   # the SSA experiment rung
+roots = ["LowSSA.Dump", "LowSSA.ExecFacts", "LowSSA.Strlen.Proof", "LowSSA.Hex0.Proof"]

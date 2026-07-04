@@ -13,7 +13,7 @@
   big for kernel `#guard`).
 -/
 import LowIR.Compile
-import LowIR.ProgLib
+import LowIR.Lib
 
 namespace LowIR.CompileTests
 

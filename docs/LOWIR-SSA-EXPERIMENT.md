@@ -1,7 +1,7 @@
 # LowIRSSA — SSA/value-flavored variant of the Prog IR (experiment)
 
 Status: **design experiment**, user-directed, 2026-07-02. Code:
-`lean/LowIR/SSA.lean` (lib `LowIRSSA`, in `defaultTargets`; executable `#guard`
+`lean/LowSSA/Core.lean` (lib `LowIRSSA`, in `defaultTargets`; executable `#guard`
 battery, no proofs). Companions: [LOWIR-DESIGN.md](LOWIR-DESIGN.md) (D7/D8 and
 the explicit not-SSA decision this experiment probes),
 [RESUME-PROGSIM.md](RESUME-PROGSIM.md) (the campaign this must not disturb).
@@ -25,7 +25,7 @@ constructs *produce values* and registers are single-assignment:
 Omitted as orthogonal (would port verbatim from Prog): const data
 (`cref`/`clen`/`Program.data`), the P1 `pad` oracle, `execT` footprints.
 
-Tooling: `lean/LowIR/SSADump.lean` (the `LowIR.Dump` sibling, reusing its
+Tooling: `lean/LowSSA/Dump.lean` (the `LowIR.Dump` sibling, reusing its
 rendering helpers) pretty-prints SSA functions/envs as WAST-flavoured
 s-expressions — `brk`/`ret` as multi-value `(br k v…)`/`(return v…)`,
 `block`/`if` results as named `(outs $rN…)` binders, `while` with its
@@ -91,7 +91,7 @@ mismatch, fall-through loop body, missing return, dead code after `.never`).
 
 ## Port pilot: strlen and hex0 from ProgLib (2026-07-02)
 
-`lean/LowIR/SSALib.lean` ports `strlenF`/`hex0F` from `ProgLib.lean` onto the
+`lean/LowSSA/Lib.lean` ports `strlenF`/`hex0F` from `ProgLib.lean` onto the
 SSA IR, validated the same way as the originals: the SSA checker passes
 (`wfEnv`), and `native_decide` confirms hex0 ≡ `Hex0.coreSpec` on the full
 Ctrl battery and strlen on the string battery — results read from the

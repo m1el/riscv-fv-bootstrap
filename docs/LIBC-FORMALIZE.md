@@ -197,7 +197,7 @@ exactly where proof difficulty changes regime:
 
 - CompCert's RISC-V `Asm.v` is a flat PC machine — *the same shape* as this repo's
   hand-rolled `Rv64i` (PC register, fetch, branch-offset targets). So our existing
-  model already sits at the hard altitude — which is why `Hex0/Refine.lean` is ~3400
+  model already sits at the hard altitude — which is why `RawAsm/Hex0/Refine.lean` is ~3400
   lines, almost all the loop-simulation lemma.
 - **Sweet spot = Cminor altitude:** structured statements + big-step semantics, yet
   three-address and close to the machine. CakeML's lowest *still-structured* IL is
@@ -231,7 +231,7 @@ trusted RV64I model:
   bytes to the fall-through PC in an agreeing state. Proof is `sorry` for now (sanctioned)
   — once proved (by structural induction, *once*), it amortises the `Refine.lean` cost
   for every program.
-- **T2 — `strlen` proved correct, sorry-free** (`lean/LowIR/StrlenProof.lean`):
+- **T2 — `strlen` proved correct, sorry-free** (`lean/LowIR/Strlen/Proof.lean`):
   `strlen_correct` shows `strlen` computes the first-NUL offset for **all** strings, by a
   `while`-invariant + induction on the distance to the NUL — no PC, no decode, no offsets
   (core Lean only: `simp`/`omega`/`bv_omega`/`decide`). This is the concrete demonstration

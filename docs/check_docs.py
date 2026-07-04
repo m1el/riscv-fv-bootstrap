@@ -13,6 +13,15 @@ Checks:
      directory with docs must have a README.md linking every sibling —
      this is what makes archive/README.md the archive index, docs/README.md
      the root index, etc.; no per-directory special cases)
+  6. every inline-code file reference resolves — not just markdown links but
+     backticked paths like `lean/RawAsm/Rv64i.lean` or `tools/gen_image.py`.
+     A backticked token is treated as a repo file reference only when it is
+     ANCHORED at a real top-level repo entry (its first path segment names an
+     existing entry of the repo root) and is placeholder-free; that anchor
+     deliberately skips third-party-relative paths (`cfrontend/Clight.v`),
+     implicit-`lean/` paths (`LowIR/Compile.lean`) and templates (`<file>.lean`,
+     `{a,b}.lean`, `work-*/`), which cannot be resolved unambiguously. Frozen
+     archive/ and vendored third-party/ docs are exempt from this check.
 
 Exit code 0 = all green, 1 = at least one error. Run from anywhere:
     ./docs/check_docs.py
@@ -26,11 +35,14 @@ import urllib.parse
 from pathlib import Path
 
 DOCS = Path(__file__).resolve().parent
+ROOT = DOCS.parent  # repo root — file references anchor here
 README = DOCS / "README.md"
 
 LINK_RE = re.compile(r'!?\[[^\]]*\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)')
 HEADING_RE = re.compile(r"(#{1,6})\s+(.*)")
 SCHEME_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*:")
+CODE_RE = re.compile(r"`([^`]+)`")            # inline-code span
+PLACEHOLDER_RE = re.compile(r"[<>{}*\s]")     # template markers / not a literal path
 
 
 def slugify(heading: str) -> str:
@@ -40,6 +52,21 @@ def slugify(heading: str) -> str:
     text = text.strip().lower()
     text = re.sub(r"[^\w\- ]", "", text)
     return text.replace(" ", "-")
+
+
+def code_spans(path: Path) -> list[tuple[int, str]]:
+    """Return [(lineno, inline-code-token)] outside fenced code blocks."""
+    spans: list[tuple[int, str]] = []
+    in_fence = False
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        for m in CODE_RE.finditer(line):
+            spans.append((lineno, m.group(1)))
+    return spans
 
 
 def parse(path: Path) -> tuple[list[tuple[int, str]], set[str]]:
@@ -141,6 +168,23 @@ def main() -> int:
         for p in files:
             if p != index and p not in listed:
                 err(p, None, f"not indexed in {index.relative_to(DOCS)}")
+
+    # -- check 6: inline-code file references resolve ------------------------
+    toplevel = {p.name for p in ROOT.iterdir()}  # anchors: lean, docs, bare, ...
+    for path in corpus:
+        rel_parts = path.relative_to(DOCS).parts
+        if "archive" in rel_parts or "third-party" in rel_parts:
+            continue  # frozen snapshots / vendored — exempt
+        for lineno, tok in code_spans(path):
+            if PLACEHOLDER_RE.search(tok):
+                continue  # `<file>.lean`, `{a,b}.lean`, `work-*/`, prose
+            ref = tok.split("#", 1)[0].rstrip("/")
+            if "/" not in ref:
+                continue  # bare names / plain identifiers — not a path reference
+            if ref.split("/", 1)[0] not in toplevel:
+                continue  # not anchored at the repo root (e.g. third-party-relative)
+            if not (ROOT / ref).exists():
+                err(path, lineno, f"broken file reference `{tok}` (no such path '{ref}')")
 
     if errors:
         print(f"FAIL — {len(errors)} problem(s):")

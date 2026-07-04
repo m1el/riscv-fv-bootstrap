@@ -30,7 +30,7 @@ def coreBytes  : List Nat := {lst(core)}
 def inputBytes : List Nat := {lst(inp)}
 end Rv64i.Image
 '''
-open(os.path.join(ROOT, 'lean', 'Hex0', 'Image.lean'), 'w').write(lean)
+open(os.path.join(ROOT, 'lean', 'RawAsm', 'Hex0', 'Image.lean'), 'w').write(lean)
 
 # ---- Coq ----
 coq = f'''(* AUTO-GENERATED from bare/hex0.elf by tools/gen_image.py. Do not edit. *)

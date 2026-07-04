@@ -15,7 +15,7 @@
   Built additively over `LowIR` (reuses `St`/`Cond`/`evalCond`); the original
   `LowIR` IL + compiler + proofs are left intact for comparison.
 -/
-import LowIR
+import LowIR.Core
 
 namespace LowIR.Ctrl
 

@@ -21,7 +21,7 @@
   automatically pairwise distinct — the round-trip needs no no-overflow
   hypothesis; only the disjoint case (two independent bases) does.
 -/
-import Hex0.Rv64i
+import RawAsm.Rv64i
 
 namespace Rv64i
 

@@ -13,7 +13,7 @@
   Run from `lean/`:  lake env lean --run DumpProgMain.lean
   (Not part of any lib target — a tool, not a module.)
 -/
-import LowIR.ProgLib
+import LowIR.Lib
 import LowIR.Compile
 
 open LowIR.Compile LowIR.Prog.Lib

@@ -17,7 +17,7 @@
   tree; `emitCF`/`csize` annotate it with byte positions).
 -/
 import LowIR.ProgSim.StmtSim
-import LowIR.ProgLib
+import LowIR.Lib
 
 namespace LowIR.ProgSim
 

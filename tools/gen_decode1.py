@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate lean/Hex1/DecodeFacts.lean: one kernel-checked decode fact per
+"""Generate lean/RawAsm/Hex1/DecodeFacts.lean: one kernel-checked decode fact per
 core1 instruction, parsed from objdump. Auto-generated; do not edit output."""
 import os
 import re
@@ -80,7 +80,7 @@ for line in out.splitlines():
 lines = [
     "/- AUTO-GENERATED from bare/hex1.elf by tools/gen_decode1.py. Do not edit.",
     "   One kernel-checked decode fact per core1 instruction. -/",
-    "import Hex1.RefineBase",
+    "import RawAsm.Hex1.RefineBase",
     "open Rv64i",
     "",
     "namespace Hex1.Refine",
@@ -95,6 +95,6 @@ for off, word, mnem, ops, term in insns:
     lines.append(f"theorem dec_{off} : Rv64i.decode (wordAt1 {off}) = {term} := by decide")
 lines.append("")
 lines.append("end Hex1.Refine")
-open(os.path.join(ROOT, 'lean', 'Hex1', 'DecodeFacts.lean'), 'w').write("\n".join(lines) + "\n")
+open(os.path.join(ROOT, 'lean', 'RawAsm', 'Hex1', 'DecodeFacts.lean'), 'w').write("\n".join(lines) + "\n")
 print(f"core1 at {CORE_ADDR:#x}: {len(insns)} instructions, "
       f"{len(insns)*4} bytes")

@@ -91,7 +91,7 @@ the refactor).
 
 ## 2026-07-02 (later) — the library on Prog: strlen/strtoull/hex0/hex1 + driver
 
-`lean/LowIR/ProgLib.lean` (commit 8ba9a8f): the four programs as real D7/D8
+`lean/LowIR/Lib.lean` (commit 8ba9a8f): the four programs as real D7/D8
 FUNCTIONS (params/rets/frames) + a `main` driver staging all inputs in its own
 frame and calling all of them (8 observables). hex0/strtoull/strlen are ports
 of the Ctrl versions; **hex1 is new, written from HEX1.md** — two-phase

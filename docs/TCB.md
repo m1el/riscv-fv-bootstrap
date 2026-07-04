@@ -5,10 +5,10 @@ hex0 spec" to hold. Written CompCert-style: an explicit, enumerated boundary.
 
 ## Proven (NOT in the TCB)
 
-- **The `decode` spec** (`coq/Spec.v`, `lean/Hex0/Spec.lean`) — the meaning of
+- **The `decode` spec** (`coq/Spec.v`, `lean/Spec/Hex0/Spec.lean`) — the meaning of
   hex0. The two definitions compute identically on a battery of inputs, and the
   Lean `decodeS` is **proved equivalent to the published BNF grammar of HEX0.md**
-  (`lean/Hex0/Grammar.lean`): `decodeS .High inp = (out,st) ↔ Parse inp out st`,
+  (`lean/Spec/Hex0/Grammar.lean`): `decodeS .High inp = (out,st) ↔ Parse inp out st`,
   with the grammar shown total (`parse_total`) and deterministic (`parse_det`) —
   every input is *either* a valid program (→ `Ok`) *or* exactly one error class,
   and the classification matches the spec.
@@ -16,7 +16,7 @@ hex0 spec" to hold. Written CompCert-style: an explicit, enumerated boundary.
   matches `coreSpec` (differential battery + the embedded input).
 - **Concrete certification** (`*/Certify.*`) — the deployed bytes equal
   `coreSpec` on the embedded input and every error class. *Finite/testing-grade.*
-- **General refinement** (`lean/Hex0/Refine.lean`) — `core_refines : ∀ inp cap,
+- **General refinement** (`lean/RawAsm/Hex0/Refine.lean`) — `core_refines : ∀ inp cap,
   WellFormed inp cap → ∃ fuel, observe inp cap fuel = coreSpec inp cap`. **Fully
   proved, `sorry`-free** (axioms: `propext`/`Quot.sound` — `Classical.choice`-free).
   The **Coq `Refine.v`** port now proves `core_refines` **fully, `Admitted`-free**
@@ -102,14 +102,14 @@ hex1 = hex0 + label definitions (`:c`) / i32 little-endian relative references
 
 ## Proven (NOT in the TCB)
 
-- **The hex1 spec** (`lean/Hex1/Spec.lean`, `coq/Spec1.v`) — two-pass
+- **The hex1 spec** (`lean/Spec/Hex1/Spec.lean`, `coq/Spec1.v`) — two-pass
   `scan1`/`emit1`/`coreSpec1`, mirrored across systems; the Lean spec is proved
-  ≅ HEX1.md's BNF (`lean/Hex1/Grammar.lean`: lexer sound+complete ⇒ grammar
+  ≅ HEX1.md's BNF (`lean/Spec/Hex1/Grammar.lean`: lexer sound+complete ⇒ grammar
   total + deterministic), and the Coq `Grammar1.v` mirrors those theorems
   (`functional_extensionality_dep` only).
 - **General refinement, BOTH systems** — Lean: `core1_refines : ∀ inp cap,
   WellFormed1 inp cap → ∃ fuel, observe1 inp cap fuel = coreSpec1 inp cap`
-  (`lean/Hex1/Refine.lean`, sorry-free, no `native_decide`). Coq:
+  (`lean/RawAsm/Hex1/Refine.lean`, sorry-free, no `native_decide`). Coq:
   `core1_refines : forall inp cap, WellFormed1 inp cap -> runOn1 inp cap =
   specOn1 (zin inp) (Z.to_nat cap)` (`coq/Refine1.v`, fixed fuel 100000 +
   `runUntil_stab`; `Print Assumptions` ⇒ `functional_extensionality_dep`
@@ -120,7 +120,7 @@ hex1 = hex0 + label definitions (`:c`) / i32 little-endian relative references
   (724-byte image, `bare/hex1.elf`) compute `coreSpec1` on the embedded
   267-byte input (exact output value pinned to the QEMU log) and a 27-case
   battery covering every status code and offset shape. Lean:
-  `Hex1/Certify.lean` (`native_decide`). Coq: `Certify1.v` (`vm_compute`,
+  `RawAsm/Hex1/Certify.lean` (`native_decide`). Coq: `Certify1.v` (`vm_compute`,
   **zero axioms** — *Closed under the global context*).
 - **The 4 new ISA encodings are cross-checked.** `sub srli ld sd` are covered
   by the same `decode_agrees`/`step_agrees` theorems as hex0's 12 (see item 1
@@ -134,8 +134,8 @@ hex1 = hex0 + label definitions (`:c`) / i32 little-endian relative references
    disjoint from code/input/output).
 2. **Extraction**: `tools/gen_image1.py` (and `tools/gen_decode1.py` for the
    Lean DecodeFacts) faithfully transcribe `bare/hex1.elf` into
-   `Image1.{v,lean}`/`Hex1/DecodeFacts.lean`.
-3. **The grammar transcription gap**: `Hex1/Grammar.lean`'s inductive grammar
+   `Image1.{v,lean}`/`RawAsm/Hex1/DecodeFacts.lean`.
+3. **The grammar transcription gap**: `Spec/Hex1/Grammar.lean`'s inductive grammar
    vs HEX1.md's prose BNF — same eyeball-auditable human-reading gap as hex0
    item 7.
 4. Items 3–6 of the hex0 list (QEMU image load, assembler/linker, proof
