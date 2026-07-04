@@ -600,6 +600,180 @@ theorem lower_sim_cf
           | ret =>
               refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_⟩
               rw [hsN ke, hpcE]; simp only [landPos]
+    case «while» c a b body =>
+      -- register bounds (`maxRegS (.while) = max (max a b) (maxRegS body)`).
+      have hregU : max (max a b) (maxRegS body) ≤ maxRegF fd := hreg
+      have hab : max a b ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hregU
+      have hra : a ≤ maxRegF fd := Nat.le_trans (Nat.le_max_left _ _) hab
+      have hrb : b ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hab
+      have hregBody : maxRegS body ≤ maxRegF fd := Nat.le_trans (Nat.le_max_right _ _) hregU
+      have hfa : slotOff a < 2 ^ 11 := by have := slotOff_add8_le_userOff fd a hra; omega
+      have hfb : slotOff b < 2 ^ 11 := by have := slotOff_add8_le_userOff fd b hrb; omega
+      have hinst : Installed L m := hinv.2.2.1
+      have hbrBody : BranchOk body := hbr
+      obtain ⟨haccBody, haccRec⟩ := haccess
+      -- position facts (keep `hbnd` intact for the fuel IH).
+      have hbnd20 : here + 20 + 4 * csize body < 2 ^ 20 := by
+        have h := hbnd; simp only [csize] at h; omega
+      have hhere : here < 2 ^ 20 := by omega
+      -- the whole emitCF stream, unfolded.
+      have hemU : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1
+          ++ [condInstr c T0 T1 8, jal0 (8 + 4 * csize body)]
+          ++ emitCF brkPos (here :: contPos) epiPos (here + 16) body
+          ++ [jal0 (-(16 + 4 * csize body : Int))]) := hem
+      -- two slot loads (a→T0, b→T1)
+      have hP2 : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1) :=
+        Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _
+          (Emitted_append_left _ _ _ _ hemU))
+      obtain ⟨hinv1, h1pc, h1mem, h1T0, -⟩ :=
+        run_load L fd holes s m a T0 here hinv hra hfa (by decide) (by decide) hpc
+          (Emitted_append_left _ _ _ _ hP2)
+      have hemLb : Emitted L (here + 4) (loadSlotI b T1) := by
+        have h := Emitted_append_right _ _ _ _ hP2; rwa [loadSlotI_length, Nat.mul_one] at h
+      obtain ⟨hinv2, h2pc, h2mem, h2T1, h2oth⟩ :=
+        run_load L fd holes s (step m) b T1 (here + 4) hinv1 hrb hfb (by decide) (by decide) h1pc hemLb
+      have h2T0 : (step (step m)).rget T0 = s.rget a := by rw [h2oth T0 (by decide)]; exact h1T0
+      have h2mm : (step (step m)).mem = m.mem := by rw [h2mem, h1mem]
+      -- the `[branch, exit-jmp]` chunk sits at here+8.
+      have hemCJ : Emitted L (here + 8) [condInstr c T0 T1 8, jal0 (8 + 4 * csize body)] := by
+        have h := Emitted_append_right _ _ _ _ (Emitted_append_left _ _ _ _
+          (Emitted_append_left _ _ _ _ hemU))
+        rw [List.length_append, loadSlotI_length, loadSlotI_length] at h
+        rwa [show here + 4 * (1 + 1) = here + 8 from by omega] at h
+      have hemBr : Emitted L (here + 8) [condInstr c T0 T1 8] :=
+        Emitted_append_left L (here + 8) [condInstr c T0 T1 8] [jal0 (8 + 4 * csize body)] hemCJ
+      have hdBr : decode (fetch32 (step (step m))) = condInstr c T0 T1 8 := by
+        have h := decode_at L m (step (step m)) (here + 8) _ hemBr hinst 0 (by simp)
+          (by rw [h2pc]) h2mm
+        simpa using h
+      -- body-stream Emitted (at here+16) and the back-edge (at here+16+4·csize body).
+      have hemBody : Emitted L (here + 16)
+          (emitCF brkPos (here :: contPos) epiPos (here + 16) body) := by
+        have h := Emitted_append_right _ _ _ _ (Emitted_append_left _ _ _ _ hemU)
+        rw [show (loadSlotI a T0 ++ loadSlotI b T1
+              ++ [condInstr c T0 T1 8, jal0 (8 + 4 * csize body)]).length = 4 from by
+              simp only [List.length_append, loadSlotI_length, List.length_cons,
+                         List.length_nil]] at h
+        rwa [show here + 4 * 4 = here + 16 from by omega] at h
+      have hemBack : Emitted L (here + 16 + 4 * csize body)
+          [jal0 (-(16 + 4 * csize body : Int))] := by
+        have h := Emitted_append_right _ _ _ _ hemU
+        rw [show ((loadSlotI a T0 ++ loadSlotI b T1
+              ++ [condInstr c T0 T1 8, jal0 (8 + 4 * csize body)])
+              ++ emitCF brkPos (here :: contPos) epiPos (here + 16) body).length
+              = 4 + csize body from by
+            simp only [List.length_append, loadSlotI_length, List.length_cons,
+                       List.length_nil, emitCF_length]] at h
+        rwa [show here + 4 * (4 + csize body) = here + 16 + 4 * csize body from by omega] at h
+      -- label env for the body: continue scope gains `lTop = here`.
+      have hlbl' : LabelsOk brkPos (here :: contPos) epiPos := by
+        obtain ⟨hb, hc, he⟩ := hlbl
+        refine ⟨hb, fun p hp => ?_, he⟩
+        rcases List.mem_cons.mp hp with h | h
+        · exact h ▸ hhere
+        · exact hc p h
+      have hbndBody : here + 16 + 4 * csize body < 2 ^ 20 := by omega
+      -- step chain: 2 loads + branch = 3 machine steps.
+      have h3 : stepN 3 m = step (step (step m)) := rfl
+      have hsN : ∀ n, stepN (3 + n) m = stepN n (step (step (step m))) := fun n => by
+        rw [stepN_add, h3]
+      cases hev : evalCond c (s.rget a) (s.rget b) with
+      | false =>
+          -- loop exits: `exec` gives `(s, .normal)`; machine falls through then jumps to lEnd.
+          rw [LowIR.Prog.exec_while_false P dbase pad stackLo fuel c a b body s hev,
+              Option.some.injEq, Prod.mk.injEq] at hexec
+          obtain ⟨rfl, rfl⟩ := hexec
+          have hs3 : step (step (step m)) = (step (step m)).setPc ((step (step m)).pc + 4) :=
+            cond_not_taken (step (step m)) c 8 (s.rget a) (s.rget b) hdBr h2T0 h2T1 hev
+          have hinv3 : StInv L fd holes s (step (step (step m))) := by
+            rw [hs3]; exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hinv2
+          have hpc3 : (step (step (step m))).pc = L.codeBase + BitVec.ofNat 64 (here + 12) := by
+            rw [hs3, pc_setPc, h2pc, pc_add4]
+          have hemJmp : Emitted L (here + 12) [jal0 (8 + 4 * csize body)] :=
+            Emitted_append_right L (here + 8) [condInstr c T0 T1 8]
+              [jal0 (8 + 4 * csize body)] hemCJ
+          obtain ⟨hstJmp, hpcJmp⟩ :=
+            jump_sim L fd holes s (step (step (step m))) (here + 12) (here + 20 + 4 * csize body) _
+              hinv3 hpc3 hemJmp (by push_cast; omega) (by omega) (by omega)
+          have h4 : stepN 4 m = step (step (step (step m))) := rfl
+          refine ⟨4, ?_, ?_⟩
+          · rw [h4]; exact hstJmp
+          · rw [h4, hpcJmp]; simp only [landPos]; exact pc_congr _ (by simp only [csize]; omega)
+      | true =>
+          -- loop enters: branch taken to lBody (here+16), then the body IH.
+          have hs3 : step (step (step m)) = (step (step m)).setPc
+              ((step (step m)).pc + (BitVec.ofInt 13 8).signExtend 64) :=
+            cond_taken (step (step m)) c 8 (s.rget a) (s.rget b) hdBr h2T0 h2T1 hev
+          have hinv3 : StInv L fd holes s (step (step (step m))) := by
+            rw [hs3]; exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hinv2
+          have hpc3 : (step (step (step m))).pc = L.codeBase + BitVec.ofNat 64 (here + 16) := by
+            rw [hs3, pc_setPc, h2pc, signExtend_ofInt_13 8 (by omega) (by omega)]
+            rw [show ((8 : Int)) = (↑(here + 16) : Int) - ↑(here + 4 + 4) from by push_cast; omega]
+            exact jump_lands L.codeBase (here + 4 + 4) (here + 16)
+          cases hbody : LowIR.Prog.exec P dbase pad stackLo fuel body s with
+          | none =>
+              rw [LowIR.Prog.exec_while_none P dbase pad stackLo fuel c a b body s hev hbody] at hexec
+              simp at hexec
+          | some pr =>
+              obtain ⟨sb, ocb⟩ := pr
+              obtain ⟨kb, hinvB, hpcB⟩ :=
+                ih body s sb ocb (step (step (step m))) (here + 16) brkPos (here :: contPos)
+                  hbody hinv3 hpc3 hemBody hregBody hnw hbd haccBody hlbl' hbndBody hbrBody
+              have hsp : sb.sp = s.sp :=
+                StInv_sp_eq L fd holes s sb m (stepN kb (step (step (step m)))) hinv hinvB
+              cases ocb with
+              | normal =>
+                  rw [LowIR.Prog.exec_while_normal P dbase pad stackLo fuel c a b body s sb hev hbody]
+                    at hexec
+                  have hpcB' : (stepN kb (step (step (step m)))).pc
+                      = L.codeBase + BitVec.ofNat 64 (here + 16 + 4 * csize body) := by
+                    rw [hpcB]; simp only [landPos]
+                  obtain ⟨hstBack, hpcBack⟩ :=
+                    jump_sim L fd holes sb (stepN kb (step (step (step m))))
+                      (here + 16 + 4 * csize body) here _ hinvB hpcB' hemBack
+                      (by push_cast; omega) (by omega) (by omega)
+                  obtain ⟨kw, hinvW, hpcW⟩ :=
+                    ih (.while c a b body) sb s' oc (step (stepN kb (step (step (step m)))))
+                      here brkPos contPos hexec hstBack hpcBack hem hreg
+                      (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd)
+                      (haccRec sb (Or.inl hbody)) hlbl hbnd hbr
+                  refine ⟨3 + kb + 1 + kw, ?_, ?_⟩
+                  · rw [stepN_add (3 + kb + 1) kw, stepN_add (3 + kb) 1, hsN kb]; exact hinvW
+                  · rw [stepN_add (3 + kb + 1) kw, stepN_add (3 + kb) 1, hsN kb]; exact hpcW
+              | brk k =>
+                  rw [LowIR.Prog.exec_while_brk P dbase pad stackLo fuel c a b body s sb k hev hbody,
+                      Option.some.injEq, Prod.mk.injEq] at hexec
+                  obtain ⟨rfl, rfl⟩ := hexec
+                  refine ⟨3 + kb, by rw [hsN kb]; exact hinvB, ?_⟩
+                  rw [hsN kb, hpcB]; simp only [landPos]
+              | cont k =>
+                  cases k with
+                  | zero =>
+                      rw [LowIR.Prog.exec_while_cont0 P dbase pad stackLo fuel c a b body s sb hev
+                          hbody] at hexec
+                      have hpcB' : (stepN kb (step (step (step m)))).pc
+                          = L.codeBase + BitVec.ofNat 64 here := by
+                        rw [hpcB]; simp only [landPos, List.getD_cons_zero]
+                      obtain ⟨kw, hinvW, hpcW⟩ :=
+                        ih (.while c a b body) sb s' oc (stepN kb (step (step (step m))))
+                          here brkPos contPos hexec hinvB hpcB' hem hreg
+                          (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd)
+                          (haccRec sb (Or.inr hbody)) hlbl hbnd hbr
+                      refine ⟨3 + kb + kw, ?_, ?_⟩
+                      · rw [stepN_add (3 + kb) kw, hsN kb]; exact hinvW
+                      · rw [stepN_add (3 + kb) kw, hsN kb]; exact hpcW
+                  | succ k' =>
+                      rw [LowIR.Prog.exec_while_contS P dbase pad stackLo fuel c a b body s sb k' hev
+                          hbody, Option.some.injEq, Prod.mk.injEq] at hexec
+                      obtain ⟨rfl, rfl⟩ := hexec
+                      refine ⟨3 + kb, by rw [hsN kb]; exact hinvB, ?_⟩
+                      rw [hsN kb, hpcB]; simp only [landPos, List.getD_cons_succ]
+              | ret =>
+                  rw [LowIR.Prog.exec_while_ret P dbase pad stackLo fuel c a b body s sb hev hbody,
+                      Option.some.injEq, Prod.mk.injEq] at hexec
+                  obtain ⟨rfl, rfl⟩ := hexec
+                  refine ⟨3 + kb, by rw [hsN kb]; exact hinvB, ?_⟩
+                  rw [hsN kb, hpcB]; simp only [landPos]
     all_goals sorry
 
 end LowIR.ProgSim

@@ -581,6 +581,14 @@ def MemAccOff (L : Layout) (holes : List Hole)
   | fuel + 1, .ife _ _ _ t e, s =>
       MemAccOff L holes P dbase pad stackLo fuel t s ∧
         MemAccOff L holes P dbase pad stackLo fuel e s
+  | fuel + 1, .while c a b body, s =>
+      -- one unrolling: the body runs at `fuel`, and every iteration that loops
+      -- back (`.normal`/`.cont 0`) must itself be access-safe — mirrors `exec`'s
+      -- self-recursion, fuel-structural exactly like `seq`.
+      MemAccOff L holes P dbase pad stackLo fuel body s ∧
+        (∀ s', (LowIR.Prog.exec P dbase pad stackLo fuel body s = some (s', .normal) ∨
+                LowIR.Prog.exec P dbase pad stackLo fuel body s = some (s', .cont 0)) →
+           MemAccOff L holes P dbase pad stackLo fuel (.while c a b body) s')
   | _, _, _ => True
 
 /-! ## `jump_sim` — the leaf unconditional jump (the `ret`/`brkB`/`contL` atom).
