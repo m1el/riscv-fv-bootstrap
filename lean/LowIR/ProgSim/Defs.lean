@@ -394,6 +394,27 @@ def StInv (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State) : 
   ∧ (∀ h ∈ holes, s.sp.toNat ≤ h.1.toNat)          -- C2: live holes sit at-or-above sp (LIFO)
   ∧ (∀ h ∈ holes, h.1.toNat + h.2 ≤ 2 ^ 64)        -- C2: each hole is wrap-free
 
+/-- **C3 — `FramesPres holes sp fd m m'`**: running the statement's code
+    (`m ↦ m'`) preserves every live-hole byte EXCEPT the current activation's own
+    register-slot window `[sp+8, sp+userOff fd)`. The machine only writes there
+    (slot stores) or off `MachPriv` (user stores), so ancestor holes and the
+    activation's own saved-ra slot `[sp, sp+8)` survive the whole statement —
+    exactly what the epilogue's `ld ra sp 0` and the caller-slot restoration need
+    after a call returns. Carried as a THIRD conclusion conjunct of `lower_sim`. -/
+def FramesPres (holes : List Hole) (sp : Word) (fd : FunDef) (m m' : State) : Prop :=
+  ∀ a, (∃ h ∈ holes, memRange a h.1 h.2) →
+       (a.toNat < sp.toNat + 8 ∨ sp.toNat + userOff fd ≤ a.toNat) →
+       m'.mem a = m.mem a
+
+/-- A step that changes NO memory preserves every frame byte. -/
+theorem FramesPres_of_mem_eq (holes : List Hole) (sp : Word) (fd : FunDef) (m m' : State)
+    (h : m'.mem = m.mem) : FramesPres holes sp fd m m' := fun a _ _ => by rw [h]
+
+/-- Frame preservation composes transitively (`seq`/`while`, same sp/window). -/
+theorem FramesPres_trans (holes : List Hole) (sp : Word) (fd : FunDef) (m m' m'' : State)
+    (h1 : FramesPres holes sp fd m m') (h2 : FramesPres holes sp fd m' m'') :
+    FramesPres holes sp fd m m'' := fun a hh hw => by rw [h2 a hh hw, h1 a hh hw]
+
 /-- The top-level separation bundle for `prog_sim`: the entry stack `[stackLo,
     sp0)` is well-formed and disjoint from the code+data blob, and `sp0` is
     8-aligned. (The per-function stack budget is SUBSUMED by P1's overflow

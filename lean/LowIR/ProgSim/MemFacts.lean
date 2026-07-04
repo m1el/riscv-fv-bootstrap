@@ -132,6 +132,36 @@ theorem range_disjoint_of_bytes (addr base : Word) (len : Nat)
     · exact key 0 (by omega) ⟨by omega, by omega⟩
   · exact Or.inr (by omega)
 
+/-! ## §2.6 — a user store off every hole preserves ALL frame bytes (`FramesPres`).
+
+    A user `storeWord`/`storeByte` whose target bytes are off every live hole
+    (guaranteed by `MemAccOff`, since holes ⊆ `MachPriv`) touches no hole byte at
+    all, so it preserves the whole frame — a fortiori everything outside the
+    reg-slot window. The `C3` frame-preservation conjunct for `sd`/`sb`. -/
+theorem FramesPres_user_store (holes : List Hole) (sp : Word) (fd : FunDef)
+    (m : State) (addr v : Word) (hwa : addr.toNat + 8 ≤ 2 ^ 64)
+    (hoff : ∀ i, i < 8 → ¬ ∃ h ∈ holes, memRange (addr + BitVec.ofNat 64 i) h.1 h.2) :
+    FramesPres holes sp fd m (m.storeWord addr v) := by
+  intro a hex _
+  obtain ⟨h, hh, ha⟩ := hex
+  have hlen : 0 < h.2 := by unfold memRange at ha; omega
+  have hdisj := range_disjoint_of_bytes addr h.1 h.2 hlen hwa
+    (fun i hi hc => hoff i hi ⟨h, hh, hc⟩)
+  apply Rv64i.storeWord_mem_outside m addr v a hwa
+  unfold memRange at ha
+  rcases hdisj with hd | hd
+  · exact Or.inr (by omega)
+  · exact Or.inl (by omega)
+
+theorem FramesPres_user_storeByte (holes : List Hole) (sp : Word) (fd : FunDef)
+    (m : State) (addr : Word) (b : Byte)
+    (hoff : ¬ ∃ h ∈ holes, memRange addr h.1 h.2) :
+    FramesPres holes sp fd m (m.storeByte addr b) := by
+  intro a hex _
+  obtain ⟨h, hh, ha⟩ := hex
+  have hne : ¬ a = addr := fun heq => hoff ⟨h, hh, heq ▸ ha⟩
+  simp only [State.storeByte, if_neg hne]
+
 /-! ## §3 — the payoff: a user `storeWord` preserves `StInv`.
 
     The store hits `addr`, off THIS activation's hole `[sp, sp + userOff fd)` (so

@@ -406,12 +406,14 @@ theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : 
              ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat) :
     ∃ ks, StInv L fd holes (s.rset rd v) (stepN ks m2)
         ∧ (stepN ks m2).pc
-            = L.codeBase + BitVec.ofNat 64 (q + 4 * (storeSlotI rd T0).length) := by
+            = L.codeBase + BitVec.ofNat 64 (q + 4 * (storeSlotI rd T0).length)
+        ∧ FramesPres holes s.sp fd m2 (stepN ks m2) := by
   have hinst : Installed L m2 := hinv2.2.2.1
   cases Nat.decEq rd 0 with
   | isTrue hrd0 =>
     subst hrd0
-    exact ⟨0, hinv2, by simp only [stepN_zero]; exact hq⟩
+    exact ⟨0, hinv2, by simp only [stepN_zero]; exact hq,
+           FramesPres_of_mem_eq holes s.sp fd m2 (stepN 0 m2) (by rw [stepN_zero])⟩
   | isFalse hrd0 =>
     have hlen : 0 < (storeSlotI rd T0).length := by rw [storeSlotI_length, if_neg hrd0]; omega
     have hd : decode (fetch32 m2) = Instr.sd SP T0 (BitVec.ofNat 12 (slotOff rd)) := by
@@ -425,11 +427,24 @@ theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : 
     have hstore : StInv L fd holes (s.rset rd v)
         (m2.storeWord (s.sp + BitVec.ofNat 64 (slotOff rd)) v) :=
       StInv_store_slot L fd holes s m2 rd v hinv2 (by omega) hrd hnw hseg hblob hbd
-    refine ⟨1, ?_, ?_⟩
+    -- the slot write [sp+slotOff rd, +8) sits inside the reg-slot window [sp+8, sp+userOff),
+    -- so every frame byte outside that window is untouched → FramesPres.
+    have hslot8 : slotOff rd + 8 ≤ userOff fd := slotOff_add8_le_userOff fd rd hrd
+    have hstoff : (s.sp + BitVec.ofNat 64 (slotOff rd)).toNat = s.sp.toNat + slotOff rd :=
+      slotAddr_toNat s.sp rd (by omega)
+    have hwa : (s.sp + BitVec.ofNat 64 (slotOff rd)).toNat + 8 ≤ 2 ^ 64 := by rw [hstoff]; omega
+    have hsl16 : 16 ≤ slotOff rd := by unfold slotOff; omega
+    refine ⟨1, ?_, ?_, ?_⟩
     · rw [show stepN 1 m2 = step m2 from rfl, hstep]
       exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hstore
     · rw [show stepN 1 m2 = step m2 from rfl, hstep, pc_setPc, hq, pc_add4,
           storeSlotI_length, if_neg hrd0]
+    · intro a _ hw
+      rw [show stepN 1 m2 = step m2 from rfl, hstep, mem_setPc]
+      apply Rv64i.storeWord_mem_outside m2 _ v a hwa
+      rw [hstoff]; rcases hw with hw | hw
+      · exact Or.inl (by omega)
+      · exact Or.inr (by omega)
 
 /-! ## `synthConst` — materialising a constant into a scratch register.
 
@@ -643,7 +658,8 @@ theorem single_op_sim {L : Layout} {fd : FunDef} {holes : List Hole}
             step m' = (m'.rset T0 vC).setPc (m'.pc + 4)) :
     ∃ k, StInv L fd holes (s.rset rd vC) (stepN k m)
        ∧ (stepN k m).pc = L.codeBase
-           + BitVec.ofNat 64 (pos + 4 * (loadSlotI rs T0 ++ [C] ++ storeSlotI rd T0).length) := by
+           + BitVec.ofNat 64 (pos + 4 * (loadSlotI rs T0 ++ [C] ++ storeSlotI rd T0).length)
+       ∧ FramesPres holes s.sp fd m (stepN k m) := by
   have hinst : Installed L m := hinv.2.2.1
   -- instruction 0: load rs into T0
   have hemL : Emitted L pos (loadSlotI rs T0) :=
@@ -668,13 +684,17 @@ theorem single_op_sim {L : Layout} {fd : FunDef} {holes : List Hole}
   have hemS : Emitted L (pos + 8) (storeSlotI rd T0) := by
     have h := Emitted_append_right L pos (loadSlotI rs T0 ++ [C]) (storeSlotI rd T0) hem
     rw [List.length_append, loadSlotI_length] at h; simpa using h
-  obtain ⟨ks, hSt, hStpc⟩ := run_store L fd holes s (step (step m)) rd vC (pos + 8)
+  obtain ⟨ks, hSt, hStpc, hFrStore⟩ := run_store L fd holes s (step (step m)) rd vC (pos + 8)
     hinv2 h2T0 h2pc hemS hrd hfrd hnw hseg hblob hbd
   have h2run : stepN 2 m = step (step m) := rfl
-  refine ⟨2 + ks, ?_, ?_⟩
+  have hmem2 : (step (step m)).mem = m.mem := by rw [hsC, mem_setPc, mem_rset, h1mem]
+  refine ⟨2 + ks, ?_, ?_, ?_⟩
   · rw [stepN_add, h2run]; exact hSt
   · rw [stepN_add, h2run, hStpc, List.length_append, List.length_append, loadSlotI_length]
     exact pc_congr _ (by simp only [List.length_cons, List.length_nil]; omega)
+  · rw [stepN_add, h2run]
+    exact FramesPres_trans holes s.sp fd m (step (step m)) (stepN ks (step (step m)))
+      (FramesPres_of_mem_eq _ _ _ _ _ hmem2) hFrStore
 
 /-- Two-source op: `emit = loadSlotI r1 T0 ++ loadSlotI r2 T1 ++ [C] ++ storeSlotI rd T0`,
     result `s.rset rd vC`. `hC`: once `T0 = s.rget r1` and `T1 = s.rget r2`,
@@ -693,7 +713,8 @@ theorem two_op_sim {L : Layout} {fd : FunDef} {holes : List Hole}
             step m' = (m'.rset T0 vC).setPc (m'.pc + 4)) :
     ∃ k, StInv L fd holes (s.rset rd vC) (stepN k m)
        ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64
-           (pos + 4 * (loadSlotI r1 T0 ++ loadSlotI r2 T1 ++ [C] ++ storeSlotI rd T0).length) := by
+           (pos + 4 * (loadSlotI r1 T0 ++ loadSlotI r2 T1 ++ [C] ++ storeSlotI rd T0).length)
+       ∧ FramesPres holes s.sp fd m (stepN k m) := by
   have hinst : Installed L m := hinv.2.2.1
   -- instruction 0: load r1 into T0
   have hemL0 : Emitted L pos (loadSlotI r1 T0) :=
@@ -732,14 +753,18 @@ theorem two_op_sim {L : Layout} {fd : FunDef} {holes : List Hole}
                 (storeSlotI rd T0) hem
     rw [List.length_append, List.length_append, loadSlotI_length, loadSlotI_length] at h
     simpa using h
-  obtain ⟨ks, hSt, hStpc⟩ := run_store L fd holes s (step (step (step m))) rd vC (pos + 12)
+  obtain ⟨ks, hSt, hStpc, hFrStore⟩ := run_store L fd holes s (step (step (step m))) rd vC (pos + 12)
     hinv3 h3T0 h3pc hemS hrd hfrd hnw hseg hblob hbd
   have h3run : stepN 3 m = step (step (step m)) := rfl
-  refine ⟨3 + ks, ?_, ?_⟩
+  have hmem3 : (step (step (step m))).mem = m.mem := by rw [hsC, mem_setPc, mem_rset, h2mem, h1mem]
+  refine ⟨3 + ks, ?_, ?_, ?_⟩
   · rw [stepN_add, h3run]; exact hSt
   · rw [stepN_add, h3run, hStpc, List.length_append, List.length_append, List.length_append,
         loadSlotI_length, loadSlotI_length]
     exact pc_congr _ (by simp only [List.length_cons, List.length_nil]; omega)
+  · rw [stepN_add, h3run]
+    exact FramesPres_trans holes s.sp fd m (step (step (step m))) (stepN ks (step (step (step m))))
+      (FramesPres_of_mem_eq _ _ _ _ _ hmem3) hFrStore
 
 /-! ## `MemAccOff` — the memory-access side condition for `lower_sim`. -/
 
@@ -795,16 +820,18 @@ theorem jump_sim (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : St
     (hem  : Emitted L here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 δ)])
     (hδ   : δ = (tgt : Int) - (here : Int))
     (hlo  : -(2 ^ 20) ≤ δ) (hhi : δ < 2 ^ 20) :
-    StInv L fd holes s (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 tgt := by
+    StInv L fd holes s (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 tgt
+    ∧ FramesPres holes s.sp fd m (step m) := by
   have hinst : Installed L m := hinv.2.2.1
   have hd : decode (fetch32 m) = Rv64i.Instr.jal 0 (BitVec.ofInt 21 δ) := by
     have h := decode_at L m m here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 δ)] hem hinst 0
                 (by simp) (by rw [hpc, Nat.mul_zero, Nat.add_zero]) rfl
     simpa using h
   have hs := step_jal m 0 (BitVec.ofInt 21 δ) hd
-  refine ⟨?_, ?_⟩
+  refine ⟨?_, ?_, ?_⟩
   · rw [hs]; exact StInv_scratch L fd holes s m 0 (m.pc + 4) _ (by decide) hinv
   · rw [hs, pc_setPc, hpc, signExtend_ofInt_21 δ hlo hhi, hδ, jump_lands]
+  · exact FramesPres_of_mem_eq holes s.sp fd m (step m) (by rw [hs, mem_setPc, mem_rset])
 
 /-! ## The three leaf control-transfer ops (`ret` / `brkB` / `contL`).
 
@@ -823,7 +850,8 @@ theorem ret_sim
     (hpc  : m.pc = L.codeBase + BitVec.ofNat 64 here)
     (hem  : Emitted L here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 ((epiPos : Int) - here))])
     (hlo  : -(2 ^ 20) ≤ (epiPos : Int) - here) (hhi : (epiPos : Int) - here < 2 ^ 20) :
-    StInv L fd holes s' (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 epiPos := by
+    StInv L fd holes s' (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 epiPos
+    ∧ FramesPres holes s.sp fd m (step m) := by
   rw [LowIR.Prog.exec_ret, Option.some.injEq, Prod.mk.injEq] at hexec
   obtain ⟨rfl, -⟩ := hexec
   exact jump_sim L fd holes s m here epiPos _ hinv hpc hem rfl hlo hhi
@@ -837,7 +865,8 @@ theorem brkB_sim
     (hpc  : m.pc = L.codeBase + BitVec.ofNat 64 here)
     (hem  : Emitted L here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 ((tgt : Int) - here))])
     (hlo  : -(2 ^ 20) ≤ (tgt : Int) - here) (hhi : (tgt : Int) - here < 2 ^ 20) :
-    StInv L fd holes s' (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 tgt := by
+    StInv L fd holes s' (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 tgt
+    ∧ FramesPres holes s.sp fd m (step m) := by
   rw [LowIR.Prog.exec_brkB, Option.some.injEq, Prod.mk.injEq] at hexec
   obtain ⟨rfl, -⟩ := hexec
   exact jump_sim L fd holes s m here tgt _ hinv hpc hem rfl hlo hhi
@@ -851,7 +880,8 @@ theorem contL_sim
     (hpc  : m.pc = L.codeBase + BitVec.ofNat 64 here)
     (hem  : Emitted L here [Rv64i.Instr.jal 0 (BitVec.ofInt 21 ((tgt : Int) - here))])
     (hlo  : -(2 ^ 20) ≤ (tgt : Int) - here) (hhi : (tgt : Int) - here < 2 ^ 20) :
-    StInv L fd holes s' (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 tgt := by
+    StInv L fd holes s' (step m) ∧ (step m).pc = L.codeBase + BitVec.ofNat 64 tgt
+    ∧ FramesPres holes s.sp fd m (step m) := by
   rw [LowIR.Prog.exec_contL, Option.some.injEq, Prod.mk.injEq] at hexec
   obtain ⟨rfl, -⟩ := hexec
   exact jump_sim L fd holes s m here tgt _ hinv hpc hem rfl hlo hhi
@@ -900,7 +930,8 @@ theorem lower_sim
     (hleaf : isLeaf stmt = true) :
     ∃ k, StInv L fd holes s' (stepN k m)
        ∧ (stepN k m).pc
-           = L.codeBase + BitVec.ofNat 64 (pos + 4 * (emit stmt).length) := by
+           = L.codeBase + BitVec.ofNat 64 (pos + 4 * (emit stmt).length)
+       ∧ FramesPres holes s.sp fd m (stepN k m) := by
   cases fuel with
   | zero => exact absurd hexec (by simp [LowIR.Prog.exec])
   | succ fuel =>
@@ -909,12 +940,14 @@ theorem lower_sim
       rw [LowIR.Prog.exec_skip, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, -⟩ := hexec
       exact ⟨0, hinv, by simp only [stepN_zero, emit, List.length_nil, Nat.mul_zero,
-                                    Nat.add_zero]; exact hpc⟩
+                                    Nat.add_zero]; exact hpc,
+             FramesPres_of_mem_eq holes s.sp fd m (stepN 0 m) (by rw [stepN_zero])⟩
     case annot a =>
       rw [LowIR.Prog.exec_annot, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, -⟩ := hexec
       exact ⟨0, hinv, by simp only [stepN_zero, emit, List.length_nil, Nat.mul_zero,
-                                    Nat.add_zero]; exact hpc⟩
+                                    Nat.add_zero]; exact hpc,
+             FramesPres_of_mem_eq holes s.sp fd m (stepN 0 m) (by rw [stepN_zero])⟩
     case addi rd rs imm =>
       rw [LowIR.Prog.exec_addi, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, -⟩ := hexec
@@ -1089,18 +1122,22 @@ theorem lower_sim
           (fun i hi hc => (hoff i hi).1 (Or.inl hc))).symm
       have hStore := StInv_storeWord_user L fd holes s (step (step m))
         (s.rget rb + imm.signExtend 64) (s.rget rv) hinv2 hwaddr hhole hbdA hseg hblob hnw
-      refine ⟨3, ?_, ?_⟩
-      · have hrun : stepN 3 m = ((step (step m)).storeWord
-            (s.rget rb + imm.signExtend 64) (s.rget rv)).setPc ((step (step m)).pc + 4) := by
-          simp only [stepN]; exact hsS
-        rw [hrun]
+      have hrun : stepN 3 m = ((step (step m)).storeWord
+          (s.rget rb + imm.signExtend 64) (s.rget rv)).setPc ((step (step m)).pc + 4) := by
+        simp only [stepN]; exact hsS
+      refine ⟨3, ?_, ?_, ?_⟩
+      · rw [hrun]
         exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hStore
-      · have hrun : stepN 3 m = ((step (step m)).storeWord
-            (s.rget rb + imm.signExtend 64) (s.rget rv)).setPc ((step (step m)).pc + 4) := by
-          simp only [stepN]; exact hsS
-        rw [hrun, pc_setPc, h2pc, pc_add4]
+      · rw [hrun, pc_setPc, h2pc, pc_add4]
         exact pc_congr _ (by simp only [emit, List.length_append, loadSlotI_length,
                                         List.length_cons, List.length_nil])
+      · intro a hh hw
+        rw [hrun, mem_setPc]
+        exact FramesPres_trans holes s.sp fd m (step (step m)) _
+          (FramesPres_of_mem_eq _ _ _ _ _ h2memm)
+          (FramesPres_user_store holes s.sp fd (step (step m))
+            (s.rget rb + imm.signExtend 64) (s.rget rv) hwaddr
+            (fun i hi hcon => (hoff i hi).1 (Or.inr hcon))) a hh hw
     case sb rb rv imm =>
       rw [LowIR.Prog.exec_sb, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, -⟩ := hexec
@@ -1175,12 +1212,19 @@ theorem lower_sim
       have hrun : stepN 3 m = ((step (step m)).storeByte
           (s.rget rb + imm.signExtend 64) ((s.rget rv).setWidth 8)).setPc
             ((step (step m)).pc + 4) := by simp only [stepN]; exact hsS
-      refine ⟨3, ?_, ?_⟩
+      refine ⟨3, ?_, ?_, ?_⟩
       · rw [hrun]
         exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hStore
       · rw [hrun, pc_setPc, h2pc, pc_add4]
         exact pc_congr _ (by simp only [emit, List.length_append, loadSlotI_length,
                                         List.length_cons, List.length_nil])
+      · intro a hh hw
+        rw [hrun, mem_setPc]
+        exact FramesPres_trans holes s.sp fd m (step (step m)) _
+          (FramesPres_of_mem_eq _ _ _ _ _ h2memm)
+          (FramesPres_user_storeByte holes s.sp fd (step (step m))
+            (s.rget rb + imm.signExtend 64) ((s.rget rv).setWidth 8)
+            (fun hcon => haccess.1 (Or.inr hcon))) a hh hw
     -- the non-leaf constructors are excluded by `hleaf` (they are `lower_sim_cf`'s job)
     all_goals simp [isLeaf] at hleaf
 
@@ -1237,11 +1281,11 @@ theorem sub3_body_sim {P : Program} {dbase : Name → Option Word} {pad : Name �
   have hemA : Emitted L pos (emit (.add 6 10 11)) := Emitted_append_left L pos _ _ hem
   have hemB : Emitted L (pos + 4 * (emit (.add 6 10 11)).length) (emit (.sub 10 6 12)) :=
     Emitted_append_right L pos _ _ hem
-  obtain ⟨k1, hinv1, hpc1⟩ := two_op_sim s m 6 10 11 pos (.add T0 T0 T1)
+  obtain ⟨k1, hinv1, hpc1, -⟩ := two_op_sim s m 6 10 11 pos (.add T0 T0 T1)
     (s.rget 10 + s.rget 11) hinv hpc hemA (by decide) (by decide) (by decide)
     (by decide) (by decide) (by decide) hnw hseg hblob hbd
     (fun m' hd hT0 hT1 => by rw [step_add m' T0 T0 T1 hd, hT0, hT1])
-  obtain ⟨k2, hinv2, hpc2⟩ := two_op_sim (s.rset 6 (s.rget 10 + s.rget 11)) (stepN k1 m)
+  obtain ⟨k2, hinv2, hpc2, -⟩ := two_op_sim (s.rset 6 (s.rget 10 + s.rget 11)) (stepN k1 m)
     10 6 12 (pos + 4 * (emit (.add 6 10 11)).length) (.sub T0 T0 T1)
     ((s.rset 6 (s.rget 10 + s.rget 11)).rget 6 - (s.rset 6 (s.rget 10 + s.rget 11)).rget 12)
     hinv1 hpc1 hemB (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)

@@ -374,7 +374,8 @@ theorem lower_sim_cf
     (hdpos : ∀ d, dpos d < 2 ^ 20) :
     ∃ k, StInv L fd holes s' (stepN k m)
        ∧ (stepN k m).pc = L.codeBase
-           + BitVec.ofNat 64 (landPos brkPos contPos epiPos (here + 4 * csize stmt) oc) := by
+           + BitVec.ofNat 64 (landPos brkPos contPos epiPos (here + 4 * csize stmt) oc)
+       ∧ FramesPres holes s.sp fd m (stepN k m) := by
   induction fuel generalizing stmt s s' oc m here brkPos contPos with
   | zero => exact absurd hexec (by simp [LowIR.Prog.exec])
   | succ fuel ih =>
@@ -383,12 +384,14 @@ theorem lower_sim_cf
       rw [LowIR.Prog.exec_skip, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
       exact ⟨0, hinv, by simp only [stepN_zero, csize, emit, List.length_nil, Nat.mul_zero,
-                                    Nat.add_zero, landPos]; exact hpc⟩
+                                    Nat.add_zero, landPos]; exact hpc,
+             FramesPres_of_mem_eq holes s.sp fd m (stepN 0 m) (by rw [stepN_zero])⟩
     case annot a =>
       rw [LowIR.Prog.exec_annot, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
       exact ⟨0, hinv, by simp only [stepN_zero, csize, emit, List.length_nil, Nat.mul_zero,
-                                    Nat.add_zero, landPos]; exact hpc⟩
+                                    Nat.add_zero, landPos]; exact hpc,
+             FramesPres_of_mem_eq holes s.sp fd m (stepN 0 m) (by rw [stepN_zero])⟩
     case block body =>
       -- csize/emitCF/MemAccOff for `.block body` reduce to `body` with `lEnd` pushed.
       have hbnd' : here + 4 * csize body < 2 ^ 20 := hbnd
@@ -413,7 +416,7 @@ theorem lower_sim_cf
           simp at hexec
       | some pr =>
           obtain ⟨s'', ocb⟩ := pr
-          obtain ⟨k, hst, hpck⟩ :=
+          obtain ⟨k, hst, hpck, hfr⟩ :=
             ih body s s'' ocb m here ((here + 4 * csize body) :: brkPos) contPos
               hb hinv hpc hem' hreg' hnw hbd hacc' hlbl' hbnd' hbr'
           cases ocb with
@@ -421,56 +424,56 @@ theorem lower_sim_cf
               rw [LowIR.Prog.exec_block_normal P dbase pad stackLo fuel body s s'' hb,
                   Option.some.injEq, Prod.mk.injEq] at hexec
               obtain ⟨rfl, rfl⟩ := hexec
-              exact ⟨k, hst, by rw [hpck]; simp only [csize, landPos]⟩
+              exact ⟨k, hst, by rw [hpck]; simp only [csize, landPos], hfr⟩
           | brk kk =>
               cases kk with
               | zero =>
                   rw [LowIR.Prog.exec_block_catch P dbase pad stackLo fuel body s s'' hb,
                       Option.some.injEq, Prod.mk.injEq] at hexec
                   obtain ⟨rfl, rfl⟩ := hexec
-                  refine ⟨k, hst, by rw [hpck]; simp only [csize, landPos, List.getD_cons_zero]⟩
+                  refine ⟨k, hst, by rw [hpck]; simp only [csize, landPos, List.getD_cons_zero], hfr⟩
               | succ kk' =>
                   rw [LowIR.Prog.exec_block_brkS P dbase pad stackLo fuel body s s'' kk' hb,
                       Option.some.injEq, Prod.mk.injEq] at hexec
                   obtain ⟨rfl, rfl⟩ := hexec
-                  refine ⟨k, hst, by rw [hpck]; simp only [landPos, List.getD_cons_succ]⟩
+                  refine ⟨k, hst, by rw [hpck]; simp only [landPos, List.getD_cons_succ], hfr⟩
           | cont kk =>
               rw [LowIR.Prog.exec_block_cont P dbase pad stackLo fuel body s s'' kk hb,
                   Option.some.injEq, Prod.mk.injEq] at hexec
               obtain ⟨rfl, rfl⟩ := hexec
-              exact ⟨k, hst, by rw [hpck]; simp only [landPos]⟩
+              exact ⟨k, hst, by rw [hpck]; simp only [landPos], hfr⟩
           | ret =>
               rw [LowIR.Prog.exec_block_ret P dbase pad stackLo fuel body s s'' hb,
                   Option.some.injEq, Prod.mk.injEq] at hexec
               obtain ⟨rfl, rfl⟩ := hexec
-              exact ⟨k, hst, by rw [hpck]; simp only [landPos]⟩
+              exact ⟨k, hst, by rw [hpck]; simp only [landPos], hfr⟩
     case ret =>
       rw [LowIR.Prog.exec_ret, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
       have he : here < 2 ^ 20 := by simp only [csize] at hbnd; omega
       have hep : epiPos < 2 ^ 20 := hlbl.2.2
       simp only [emitCF] at hem
-      obtain ⟨hst, hpcr⟩ :=
+      obtain ⟨hst, hpcr, hfrj⟩ :=
         jump_sim L fd holes s m here epiPos _ hinv hpc hem rfl (by omega) (by omega)
-      exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos]⟩
+      exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos], hfrj⟩
     case brkB k =>
       rw [LowIR.Prog.exec_brkB, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
       have he : here < 2 ^ 20 := by simp only [csize] at hbnd; omega
       have htgt : brkPos.getD k 0 < 2 ^ 20 := getD_lt brkPos k _ (by omega) hlbl.1
       simp only [emitCF] at hem
-      obtain ⟨hst, hpcr⟩ :=
+      obtain ⟨hst, hpcr, hfrj⟩ :=
         jump_sim L fd holes s m here (brkPos.getD k 0) _ hinv hpc hem rfl (by omega) (by omega)
-      exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos]⟩
+      exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos], hfrj⟩
     case contL k =>
       rw [LowIR.Prog.exec_contL, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
       have he : here < 2 ^ 20 := by simp only [csize] at hbnd; omega
       have htgt : contPos.getD k 0 < 2 ^ 20 := getD_lt contPos k _ (by omega) hlbl.2.1
       simp only [emitCF] at hem
-      obtain ⟨hst, hpcr⟩ :=
+      obtain ⟨hst, hpcr, hfrj⟩ :=
         jump_sim L fd holes s m here (contPos.getD k 0) _ hinv hpc hem rfl (by omega) (by omega)
-      exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos]⟩
+      exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos], hfrj⟩
     case seq a b =>
       simp only [maxRegS] at hreg
       obtain ⟨haccA, haccB⟩ := haccess
@@ -494,119 +497,122 @@ theorem lower_sim_cf
             rw [LowIR.Prog.exec_seq_normal (h := hea)] at hexec
             have hbndB : (here + 4 * csize a) + 4 * csize b < 2 ^ 20 := by
               simp only [csize] at hbnd; omega
-            obtain ⟨k1, hinvA, hpcA⟩ :=
+            obtain ⟨k1, hinvA, hpcA, hfrA⟩ :=
               ih a s s1 .normal m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
                 hlbl hbndA hbrA
             have hsp : s1.sp = s.sp := StInv_sp_eq L fd holes s s1 m (stepN k1 m) hinv hinvA
-            obtain ⟨k2, hinvB, hpcB⟩ :=
+            obtain ⟨k2, hinvB, hpcB, hfrB⟩ :=
               ih b s1 s' oc (stepN k1 m) (here + 4 * csize a) brkPos contPos hexec hinvA
                 (by rw [hpcA]; simp only [landPos]) hemB hregB (by rw [hsp]; exact hnw)
                 (by rw [hsp]; exact hbd) (haccB s1 hea) hlbl hbndB hbrB
-            refine ⟨k1 + k2, by rw [stepN_add]; exact hinvB, ?_⟩
-            have hft : (here + 4 * csize a) + 4 * csize b
-                = here + 4 * csize (LowIR.Prog.Stmt.seq a b) := by simp only [csize]; omega
-            rw [stepN_add, hpcB, hft]
+            refine ⟨k1 + k2, by rw [stepN_add]; exact hinvB, ?_, ?_⟩
+            · have hft : (here + 4 * csize a) + 4 * csize b
+                  = here + 4 * csize (LowIR.Prog.Stmt.seq a b) := by simp only [csize]; omega
+              rw [stepN_add, hpcB, hft]
+            · rw [hsp] at hfrB
+              rw [stepN_add]
+              exact FramesPres_trans holes s.sp fd m (stepN k1 m) (stepN k2 (stepN k1 m)) hfrA hfrB
         | brk k =>
             rw [LowIR.Prog.exec_seq_brk (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
             obtain ⟨rfl, rfl⟩ := hexec
-            obtain ⟨k1, hinvA, hpcA⟩ :=
+            obtain ⟨k1, hinvA, hpcA, hfrA⟩ :=
               ih a s s1 (.brk k) m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
                 hlbl hbndA hbrA
-            exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos]⟩
+            exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos], hfrA⟩
         | cont k =>
             rw [LowIR.Prog.exec_seq_cont (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
             obtain ⟨rfl, rfl⟩ := hexec
-            obtain ⟨k1, hinvA, hpcA⟩ :=
+            obtain ⟨k1, hinvA, hpcA, hfrA⟩ :=
               ih a s s1 (.cont k) m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
                 hlbl hbndA hbrA
-            exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos]⟩
+            exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos], hfrA⟩
         | ret =>
             rw [LowIR.Prog.exec_seq_ret (h := hea), Option.some.injEq, Prod.mk.injEq] at hexec
             obtain ⟨rfl, rfl⟩ := hexec
-            obtain ⟨k1, hinvA, hpcA⟩ :=
+            obtain ⟨k1, hinvA, hpcA, hfrA⟩ :=
               ih a s s1 .ret m here brkPos contPos hea hinv hpc hemA hregA hnw hbd haccA
                 hlbl hbndA hbrA
-            exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos]⟩
+            exact ⟨k1, hinvA, by rw [hpcA]; simp only [landPos], hfrA⟩
     case addi rd rs imm =>
       rw [LowIR.Prog.exec_addi, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.addi rd rs imm) s _ m here
           (LowIR.Prog.exec_addi P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case add rd r1 r2 =>
       rw [LowIR.Prog.exec_add, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.add rd r1 r2) s _ m here
           (LowIR.Prog.exec_add P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case sub rd r1 r2 =>
       rw [LowIR.Prog.exec_sub, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.sub rd r1 r2) s _ m here
           (LowIR.Prog.exec_sub P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case orr rd r1 r2 =>
       rw [LowIR.Prog.exec_orr, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.orr rd r1 r2) s _ m here
           (LowIR.Prog.exec_orr P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case slli rd rs sh =>
       rw [LowIR.Prog.exec_slli, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.slli rd rs sh) s _ m here
           (LowIR.Prog.exec_slli P dbase pad stackLo fuel rd rs sh s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case srli rd rs sh =>
       rw [LowIR.Prog.exec_srli, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.srli rd rs sh) s _ m here
           (LowIR.Prog.exec_srli P dbase pad stackLo fuel rd rs sh s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case lbu rd rs imm =>
       rw [LowIR.Prog.exec_lbu, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.lbu rd rs imm) s _ m here
           (LowIR.Prog.exec_lbu P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case ld rd rs imm =>
       rw [LowIR.Prog.exec_ld, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.ld rd rs imm) s _ m here
           (LowIR.Prog.exec_ld P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case sb rb rv imm =>
       rw [LowIR.Prog.exec_sb, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.sb rb rv imm) s _ m here
           (LowIR.Prog.exec_sb P dbase pad stackLo fuel rb rv imm s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case sd rb rv imm =>
       rw [LowIR.Prog.exec_sd, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck⟩ :=
+      obtain ⟨k, hst, hpck, hfr⟩ :=
         lower_sim (fuel + 1) (.sd rb rv imm) s _ m here
           (LowIR.Prog.exec_sd P dbase pad stackLo fuel rb rv imm s) hinv hpc hem hreg hframe hnw
           hseg hblob hbd haccess rfl
-      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize]⟩
+      exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case ife c a b t e =>
       simp only [maxRegS] at hreg
       obtain ⟨hbrbr, hbrT, hbrE⟩ := hbr
@@ -677,13 +683,17 @@ theorem lower_sim_cf
                   simp only [List.length_append, loadSlotI_length, List.length_cons,
                              List.length_nil, emitCF_length]; omega] at h
             rwa [show here + 4 * (4 + csize e) = here + 16 + 4 * csize e from by omega] at h
-          obtain ⟨kt, hinvT, hpcT⟩ :=
+          have hmem3 : (step (step (step m))).mem = m.mem := by rw [hs3, mem_setPc]; exact h2mm
+          obtain ⟨kt, hinvT, hpcT, hfrT⟩ :=
             ih t s s' oc (step (step (step m))) (here + 16 + 4 * csize e) brkPos contPos hexec hinv3
               hpc3 hemT hregT hnw hbd haccT hlbl (by simp only [csize] at hbnd; omega) hbrT
-          refine ⟨3 + kt, by rw [hsN kt]; exact hinvT, ?_⟩
-          rw [hsN kt, hpcT,
-              show here + 16 + 4 * csize e + 4 * csize t
-                = here + 4 * csize (LowIR.Prog.Stmt.ife c a b t e) from by simp only [csize]; omega]
+          refine ⟨3 + kt, by rw [hsN kt]; exact hinvT, ?_, ?_⟩
+          · rw [hsN kt, hpcT,
+                show here + 16 + 4 * csize e + 4 * csize t
+                  = here + 4 * csize (LowIR.Prog.Stmt.ife c a b t e) from by simp only [csize]; omega]
+          · rw [hsN kt]
+            exact FramesPres_trans holes s.sp fd m (step (step (step m)))
+              (stepN kt (step (step (step m)))) (FramesPres_of_mem_eq _ _ _ _ _ hmem3) hfrT
       | false =>
           rw [LowIR.Prog.exec_ife_else (h := hev)] at hexec
           have hs3 : step (step (step m)) = (step (step m)).setPc ((step (step m)).pc + 4) :=
@@ -692,6 +702,7 @@ theorem lower_sim_cf
             rw [hs3]; exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hinv2
           have hpc3 : (step (step (step m))).pc = L.codeBase + BitVec.ofNat 64 (here + 12) := by
             rw [hs3, pc_setPc, h2pc, pc_add4]
+          have hmem3 : (step (step (step m))).mem = m.mem := by rw [hs3, mem_setPc]; exact h2mm
           have hemE : Emitted L (here + 12) (emitCF P.data dpos fnPos brkPos contPos epiPos (here + 12) e) := by
             have h := Emitted_append_right _ _ _ _ (Emitted_append_left _ _ _ _
               (Emitted_append_left _ _ _ _ hemU))
@@ -700,9 +711,12 @@ theorem lower_sim_cf
                   simp only [List.length_append, loadSlotI_length, List.length_cons,
                              List.length_nil]] at h
             rwa [show here + 4 * 3 = here + 12 from by omega] at h
-          obtain ⟨ke, hinvE, hpcE⟩ :=
+          obtain ⟨ke, hinvE, hpcE, hfrE⟩ :=
             ih e s s' oc (step (step (step m))) (here + 12) brkPos contPos hexec hinv3 hpc3 hemE
               hregE hnw hbd haccE hlbl (by simp only [csize] at hbnd; omega) hbrE
+          have hframesE : FramesPres holes s.sp fd m (stepN ke (step (step (step m)))) :=
+            FramesPres_trans holes s.sp fd m (step (step (step m))) (stepN ke (step (step (step m))))
+              (FramesPres_of_mem_eq _ _ _ _ _ hmem3) hfrE
           cases oc with
           | normal =>
               have hemJ : Emitted L (here + 12 + 4 * csize e) [jal0 (4 + 4 * csize t)] := by
@@ -715,11 +729,15 @@ theorem lower_sim_cf
               have hpcE' : (stepN ke (step (step (step m)))).pc
                   = L.codeBase + BitVec.ofNat 64 (here + 12 + 4 * csize e) := by
                 rw [hpcE]; simp only [landPos]
-              obtain ⟨hstJ, hpcJ⟩ :=
+              have hspE : s'.sp = s.sp :=
+                StInv_sp_eq L fd holes s s' (step (step (step m))) (stepN ke (step (step (step m))))
+                  hinv3 hinvE
+              obtain ⟨hstJ, hpcJ, hfrJ⟩ :=
                 jump_sim L fd holes s' (stepN ke (step (step (step m)))) (here + 12 + 4 * csize e)
                   (here + 16 + 4 * csize e + 4 * csize t) _ hinvE hpcE' hemJ (by push_cast; omega)
                   (by omega) (by omega)
-              refine ⟨3 + ke + 1, ?_, ?_⟩
+              rw [hspE] at hfrJ
+              refine ⟨3 + ke + 1, ?_, ?_, ?_⟩
               · rw [show stepN (3 + ke + 1) m = step (stepN (3 + ke) m) from by rw [stepN_add]; rfl,
                     hsN ke]
                 exact hstJ
@@ -727,14 +745,18 @@ theorem lower_sim_cf
                     hsN ke, hpcJ]
                 simp only [landPos]
                 exact pc_congr _ (by simp only [csize]; omega)
+              · rw [show stepN (3 + ke + 1) m = step (stepN (3 + ke) m) from by rw [stepN_add]; rfl,
+                    hsN ke]
+                exact FramesPres_trans holes s.sp fd m (stepN ke (step (step (step m))))
+                  (step (stepN ke (step (step (step m))))) hframesE hfrJ
           | brk k =>
-              refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_⟩
+              refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_, by rw [hsN ke]; exact hframesE⟩
               rw [hsN ke, hpcE]; simp only [landPos]
           | cont k =>
-              refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_⟩
+              refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_, by rw [hsN ke]; exact hframesE⟩
               rw [hsN ke, hpcE]; simp only [landPos]
           | ret =>
-              refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_⟩
+              refine ⟨3 + ke, by rw [hsN ke]; exact hinvE, ?_, by rw [hsN ke]; exact hframesE⟩
               rw [hsN ke, hpcE]; simp only [landPos]
     case «while» c a b body =>
       -- register bounds (`maxRegS (.while) = max (max a b) (maxRegS body)`).
@@ -825,16 +847,20 @@ theorem lower_sim_cf
             rw [hs3]; exact StInv_congr L fd holes _ _ _ (by rw [rget_setPc]) (by rw [mem_setPc]) hinv2
           have hpc3 : (step (step (step m))).pc = L.codeBase + BitVec.ofNat 64 (here + 12) := by
             rw [hs3, pc_setPc, h2pc, pc_add4]
+          have hmem3 : (step (step (step m))).mem = m.mem := by rw [hs3, mem_setPc]; exact h2mm
           have hemJmp : Emitted L (here + 12) [jal0 (8 + 4 * csize body)] :=
             Emitted_append_right L (here + 8) [condInstr c T0 T1 8]
               [jal0 (8 + 4 * csize body)] hemCJ
-          obtain ⟨hstJmp, hpcJmp⟩ :=
+          obtain ⟨hstJmp, hpcJmp, hfrJmp⟩ :=
             jump_sim L fd holes s (step (step (step m))) (here + 12) (here + 20 + 4 * csize body) _
               hinv3 hpc3 hemJmp (by push_cast; omega) (by omega) (by omega)
           have h4 : stepN 4 m = step (step (step (step m))) := rfl
-          refine ⟨4, ?_, ?_⟩
+          refine ⟨4, ?_, ?_, ?_⟩
           · rw [h4]; exact hstJmp
           · rw [h4, hpcJmp]; simp only [landPos]; exact pc_congr _ (by simp only [csize]; omega)
+          · rw [h4]
+            exact FramesPres_trans holes s.sp fd m (step (step (step m)))
+              (step (step (step (step m)))) (FramesPres_of_mem_eq _ _ _ _ _ hmem3) hfrJmp
       | true =>
           -- loop enters: branch taken to lBody (here+16), then the body IH.
           have hs3 : step (step (step m)) = (step (step m)).setPc
@@ -846,17 +872,22 @@ theorem lower_sim_cf
             rw [hs3, pc_setPc, h2pc, signExtend_ofInt_13 8 (by omega) (by omega)]
             rw [show ((8 : Int)) = (↑(here + 16) : Int) - ↑(here + 4 + 4) from by push_cast; omega]
             exact jump_lands L.codeBase (here + 4 + 4) (here + 16)
+          have hmem3 : (step (step (step m))).mem = m.mem := by rw [hs3, mem_setPc]; exact h2mm
           cases hbody : LowIR.Prog.exec P dbase pad stackLo fuel body s with
           | none =>
               rw [LowIR.Prog.exec_while_none P dbase pad stackLo fuel c a b body s hev hbody] at hexec
               simp at hexec
           | some pr =>
               obtain ⟨sb, ocb⟩ := pr
-              obtain ⟨kb, hinvB, hpcB⟩ :=
+              obtain ⟨kb, hinvB, hpcB, hfrB⟩ :=
                 ih body s sb ocb (step (step (step m))) (here + 16) brkPos (here :: contPos)
                   hbody hinv3 hpc3 hemBody hregBody hnw hbd haccBody hlbl' hbndBody hbrBody
               have hsp : sb.sp = s.sp :=
                 StInv_sp_eq L fd holes s sb m (stepN kb (step (step (step m)))) hinv hinvB
+              -- prefix (3 steps) + body preserve the frame → up to `stepN kb (step^3 m)`.
+              have hframesBody : FramesPres holes s.sp fd m (stepN kb (step (step (step m)))) :=
+                FramesPres_trans holes s.sp fd m (step (step (step m)))
+                  (stepN kb (step (step (step m)))) (FramesPres_of_mem_eq _ _ _ _ _ hmem3) hfrB
               cases ocb with
               | normal =>
                   rw [LowIR.Prog.exec_while_normal P dbase pad stackLo fuel c a b body s sb hev hbody]
@@ -864,23 +895,32 @@ theorem lower_sim_cf
                   have hpcB' : (stepN kb (step (step (step m)))).pc
                       = L.codeBase + BitVec.ofNat 64 (here + 16 + 4 * csize body) := by
                     rw [hpcB]; simp only [landPos]
-                  obtain ⟨hstBack, hpcBack⟩ :=
+                  obtain ⟨hstBack, hpcBack, hfrBack⟩ :=
                     jump_sim L fd holes sb (stepN kb (step (step (step m))))
                       (here + 16 + 4 * csize body) here _ hinvB hpcB' hemBack
                       (by push_cast; omega) (by omega) (by omega)
-                  obtain ⟨kw, hinvW, hpcW⟩ :=
+                  rw [hsp] at hfrBack
+                  obtain ⟨kw, hinvW, hpcW, hfrW⟩ :=
                     ih (.while c a b body) sb s' oc (step (stepN kb (step (step (step m)))))
                       here brkPos contPos hexec hstBack hpcBack hem hreg
                       (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd)
                       (haccRec sb (Or.inl hbody)) hlbl hbnd hbr
-                  refine ⟨3 + kb + 1 + kw, ?_, ?_⟩
+                  rw [hsp] at hfrW
+                  refine ⟨3 + kb + 1 + kw, ?_, ?_, ?_⟩
                   · rw [stepN_add (3 + kb + 1) kw, stepN_add (3 + kb) 1, hsN kb]; exact hinvW
                   · rw [stepN_add (3 + kb + 1) kw, stepN_add (3 + kb) 1, hsN kb]; exact hpcW
+                  · rw [stepN_add (3 + kb + 1) kw, stepN_add (3 + kb) 1, hsN kb]
+                    exact FramesPres_trans holes s.sp fd m (stepN kb (step (step (step m))))
+                      (stepN kw (step (stepN kb (step (step (step m))))))
+                      hframesBody
+                      (FramesPres_trans holes s.sp fd (stepN kb (step (step (step m))))
+                        (step (stepN kb (step (step (step m)))))
+                        (stepN kw (step (stepN kb (step (step (step m)))))) hfrBack hfrW)
               | brk k =>
                   rw [LowIR.Prog.exec_while_brk P dbase pad stackLo fuel c a b body s sb k hev hbody,
                       Option.some.injEq, Prod.mk.injEq] at hexec
                   obtain ⟨rfl, rfl⟩ := hexec
-                  refine ⟨3 + kb, by rw [hsN kb]; exact hinvB, ?_⟩
+                  refine ⟨3 + kb, by rw [hsN kb]; exact hinvB, ?_, by rw [hsN kb]; exact hframesBody⟩
                   rw [hsN kb, hpcB]; simp only [landPos]
               | cont k =>
                   cases k with
@@ -890,25 +930,30 @@ theorem lower_sim_cf
                       have hpcB' : (stepN kb (step (step (step m)))).pc
                           = L.codeBase + BitVec.ofNat 64 here := by
                         rw [hpcB]; simp only [landPos, List.getD_cons_zero]
-                      obtain ⟨kw, hinvW, hpcW⟩ :=
+                      obtain ⟨kw, hinvW, hpcW, hfrW⟩ :=
                         ih (.while c a b body) sb s' oc (stepN kb (step (step (step m))))
                           here brkPos contPos hexec hinvB hpcB' hem hreg
                           (by rw [hsp]; exact hnw) (by rw [hsp]; exact hbd)
                           (haccRec sb (Or.inr hbody)) hlbl hbnd hbr
-                      refine ⟨3 + kb + kw, ?_, ?_⟩
+                      rw [hsp] at hfrW
+                      refine ⟨3 + kb + kw, ?_, ?_, ?_⟩
                       · rw [stepN_add (3 + kb) kw, hsN kb]; exact hinvW
                       · rw [stepN_add (3 + kb) kw, hsN kb]; exact hpcW
+                      · rw [stepN_add (3 + kb) kw, hsN kb]
+                        exact FramesPres_trans holes s.sp fd m (stepN kb (step (step (step m))))
+                          (stepN kw (stepN kb (step (step (step m))))) hframesBody hfrW
                   | succ k' =>
                       rw [LowIR.Prog.exec_while_contS P dbase pad stackLo fuel c a b body s sb k' hev
                           hbody, Option.some.injEq, Prod.mk.injEq] at hexec
                       obtain ⟨rfl, rfl⟩ := hexec
-                      refine ⟨3 + kb, by rw [hsN kb]; exact hinvB, ?_⟩
+                      refine ⟨3 + kb, by rw [hsN kb]; exact hinvB, ?_,
+                              by rw [hsN kb]; exact hframesBody⟩
                       rw [hsN kb, hpcB]; simp only [landPos, List.getD_cons_succ]
               | ret =>
                   rw [LowIR.Prog.exec_while_ret P dbase pad stackLo fuel c a b body s sb hev hbody,
                       Option.some.injEq, Prod.mk.injEq] at hexec
                   obtain ⟨rfl, rfl⟩ := hexec
-                  refine ⟨3 + kb, by rw [hsN kb]; exact hinvB, ?_⟩
+                  refine ⟨3 + kb, by rw [hsN kb]; exact hinvB, ?_, by rw [hsN kb]; exact hframesBody⟩
                   rw [hsN kb, hpcB]; simp only [landPos]
     case clen rd d =>
       -- synthConst the length into T0 (`run_synth`), then park it into rd's slot
@@ -932,20 +977,23 @@ theorem lower_sim_cf
             rwa [synthI_length] at h
           have hrange : -2048 ≤ synthHi (bs.length : Int) ∧ synthHi (bs.length : Int) ≤ 2047 := by
             have h := hdat d; rwa [hlk, Option.map_some, Option.getD_some] at h
-          obtain ⟨hinvS, hT0S, hpcS, -, -⟩ :=
+          obtain ⟨hinvS, hT0S, hpcS, hmemS, -⟩ :=
             run_synth L fd holes s m T0 (by decide) (by decide) (bs.length : Int) here
               hinv hpc hemS hrange
-          obtain ⟨ks, hinvF, hpcF⟩ :=
+          obtain ⟨ks, hinvF, hpcF, hfrStore⟩ :=
             run_store L fd holes s (stepN 3 m) rd (BitVec.ofInt 64 (bs.length : Int)) (here + 12)
               hinvS hT0S hpcS hemST hrd hfrd hnw hseg hblob hbd
           have hval : s.rset rd (BitVec.ofInt 64 (bs.length : Int))
               = s.rset rd (BitVec.ofNat 64 bs.length) := by rw [BitVec.ofInt_natCast]
-          refine ⟨3 + ks, ?_, ?_⟩
+          refine ⟨3 + ks, ?_, ?_, ?_⟩
           · rw [stepN_add 3 ks m]; rw [hval] at hinvF; exact hinvF
           · rw [stepN_add 3 ks m, hpcF]
             apply pc_congr
             simp only [landPos, csize, storeSlotI_length]
             by_cases hrd0 : rd = 0 <;> simp only [hrd0, if_true, if_false] <;> omega
+          · rw [stepN_add 3 ks m]
+            exact FramesPres_trans holes s.sp fd m (stepN 3 m) (stepN ks (stepN 3 m))
+              (FramesPres_of_mem_eq _ _ _ _ _ hmemS) hfrStore
     case cref rd d =>
       -- pc-read + delta-synth + add (`run_cref`) loads the data address into T0,
       -- then park it into rd's slot (`run_store`). `hdbase` links the IL `dbase`
@@ -971,17 +1019,20 @@ theorem lower_sim_cf
             have h := Emitted_append_right L here
               (crefI T0 T1 ((dpos d : Int) - ((here : Int) + 4))) (storeSlotI rd T0) hem
             rwa [crefI_length] at h
-          obtain ⟨hinvC, hT0C, hpcC, -⟩ :=
+          obtain ⟨hinvC, hT0C, hpcC, hmemC⟩ :=
             run_cref L fd holes s m (dpos d) here hinv hpc hemC hhere (hdpos d)
-          obtain ⟨ks, hinvF, hpcF⟩ :=
+          obtain ⟨ks, hinvF, hpcF, hfrStore⟩ :=
             run_store L fd holes s (stepN 5 m) rd (L.codeBase + BitVec.ofNat 64 (dpos d))
               (here + 20) hinvC hT0C hpcC hemST hrd hfrd hnw hseg hblob hbd
-          refine ⟨5 + ks, ?_, ?_⟩
+          refine ⟨5 + ks, ?_, ?_, ?_⟩
           · rw [stepN_add 5 ks m]; rw [← ha] at hinvF; exact hinvF
           · rw [stepN_add 5 ks m, hpcF]
             apply pc_congr
             simp only [landPos, csize, storeSlotI_length]
             by_cases hrd0 : rd = 0 <;> simp only [hrd0, if_true, if_false] <;> omega
+          · rw [stepN_add 5 ks m]
+            exact FramesPres_trans holes s.sp fd m (stepN 5 m) (stepN ks (stepN 5 m))
+              (FramesPres_of_mem_eq _ _ _ _ _ hmemC) hfrStore
     case call argc rvc f args rets => sorry
 
 end LowIR.ProgSim
