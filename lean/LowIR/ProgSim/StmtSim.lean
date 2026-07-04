@@ -891,6 +891,18 @@ def MemAccOff (L : Layout) (holes : List Hole)
         (∀ s', (LowIR.Prog.exec P dbase pad stackLo fuel body s = some (s', .normal) ∨
                 LowIR.Prog.exec P dbase pad stackLo fuel body s = some (s', .cont 0)) →
            MemAccOff L holes P dbase pad stackLo fuel (.while c a b body) s')
+  | fuel + 1, .call _ _ f args _, s =>
+      -- C6: a call is access-safe iff the CALLEE's body is access-safe from its
+      -- entry state, against the callee's own hole pushed onto the ancestors'.
+      -- The caller emits no memory ops for the call itself; its footprint IS the
+      -- callee's (validated by `execT`'s call-footprint accumulation).
+      match List.lookup f P.env with
+      | some fd =>
+          match LowIR.Prog.frameEnter stackLo fd (pad f) (args.toList.map s.rget) s.mem s.sp with
+          | some callee =>
+              MemAccOff L ((callee.sp, userOff fd) :: holes) P dbase pad stackLo fuel fd.body callee
+          | none => True
+      | none => True
   | _, _, _ => True
 
 /-! ## `jump_sim` — the leaf unconditional jump (the `ret`/`brkB`/`contL` atom).
