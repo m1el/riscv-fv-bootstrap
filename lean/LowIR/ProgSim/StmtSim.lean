@@ -188,6 +188,14 @@ theorem step_bgeu (m : State) (a b : Nat) (imm : BitVec 13)
     step m = m.setPc (if (m.rget a).ult (m.rget b) then m.pc + 4 else m.pc + imm.signExtend 64) := by
   simp only [step, h]
 
+/-- `jalr rd rs1 imm`: link `pc+4` into `rd`, jump to `(rget rs1 + sext imm) &&& ~~~1`
+    (bit-0 cleared). The epilogue's `jalr x0 ra 0` returns to the saved address. -/
+theorem step_jalr (m : State) (rd rs1 : Nat) (imm : BitVec 12)
+    (h : decode (fetch32 m) = .jalr rd rs1 imm) :
+    step m = (m.rset rd (m.pc + 4)).setPc
+               ((m.rget rs1 + imm.signExtend 64) &&& (~~~ (1 : Word))) := by
+  simp only [step, h]
+
 /-! ## Immediate roundtrip for slot offsets. -/
 
 /-- A small non-negative 12-bit immediate sign-extends to itself: the machine's
@@ -396,9 +404,9 @@ theorem run_load (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : St
 /-- Run the final `storeSlotI rd T0` segment given `T0 = v`: reaches `StInv` for
     `s.rset rd v`. `rd = 0` is a no-op (0 steps, `rset 0` discards); `rd ≠ 0` is
     the `sd` + `StInv_store_slot` (the P1 payoff). -/
-theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : State)
-    (rd : Nat) (v : Word) (q : Nat) (hinv2 : StInv L fd holes s m2) (hT0 : m2.rget T0 = v)
-    (hq : m2.pc = L.codeBase + BitVec.ofNat 64 q) (hem : Emitted L q (storeSlotI rd T0))
+theorem run_storeFrom (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : State)
+    (rd tsrc : Nat) (v : Word) (q : Nat) (hinv2 : StInv L fd holes s m2) (hT : m2.rget tsrc = v)
+    (hq : m2.pc = L.codeBase + BitVec.ofNat 64 q) (hem : Emitted L q (storeSlotI rd tsrc))
     (hrd : rd ≤ maxRegF fd) (hfrd : slotOff rd < 2 ^ 11)
     (hnw : s.sp.toNat + userOff fd ≤ 2 ^ 64) (hseg : 4 * L.instrs.length ≤ L.segStart)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
@@ -406,7 +414,7 @@ theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : 
              ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat) :
     ∃ ks, StInv L fd holes (s.rset rd v) (stepN ks m2)
         ∧ (stepN ks m2).pc
-            = L.codeBase + BitVec.ofNat 64 (q + 4 * (storeSlotI rd T0).length)
+            = L.codeBase + BitVec.ofNat 64 (q + 4 * (storeSlotI rd tsrc).length)
         ∧ FramesPres holes s.sp fd m2 (stepN ks m2) := by
   have hinst : Installed L m2 := hinv2.2.2.1
   cases Nat.decEq rd 0 with
@@ -415,15 +423,15 @@ theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : 
     exact ⟨0, hinv2, by simp only [stepN_zero]; exact hq,
            FramesPres_of_mem_eq holes s.sp fd m2 (stepN 0 m2) (by rw [stepN_zero])⟩
   | isFalse hrd0 =>
-    have hlen : 0 < (storeSlotI rd T0).length := by rw [storeSlotI_length, if_neg hrd0]; omega
-    have hd : decode (fetch32 m2) = Instr.sd SP T0 (BitVec.ofNat 12 (slotOff rd)) := by
-      have h := decode_at L m2 m2 q (storeSlotI rd T0) hem hinst 0 hlen
+    have hlen : 0 < (storeSlotI rd tsrc).length := by rw [storeSlotI_length, if_neg hrd0]; omega
+    have hd : decode (fetch32 m2) = Instr.sd SP tsrc (BitVec.ofNat 12 (slotOff rd)) := by
+      have h := decode_at L m2 m2 q (storeSlotI rd tsrc) hem hinst 0 hlen
                   (by simp only [Nat.mul_zero, Nat.add_zero]; exact hq) rfl
-      rwa [storeSlotI_get0 rd T0 hrd0] at h
+      rwa [storeSlotI_get0 rd tsrc hrd0] at h
     have hstep : step m2
         = (m2.storeWord (s.sp + BitVec.ofNat 64 (slotOff rd)) v).setPc (m2.pc + 4) := by
-      rw [step_sd m2 SP T0 (BitVec.ofNat 12 (slotOff rd)) hd,
-          show m2.rget SP = s.sp from hinv2.1, signExtend_ofNat_lt (slotOff rd) hfrd, hT0]
+      rw [step_sd m2 SP tsrc (BitVec.ofNat 12 (slotOff rd)) hd,
+          show m2.rget SP = s.sp from hinv2.1, signExtend_ofNat_lt (slotOff rd) hfrd, hT]
     have hstore : StInv L fd holes (s.rset rd v)
         (m2.storeWord (s.sp + BitVec.ofNat 64 (slotOff rd)) v) :=
       StInv_store_slot L fd holes s m2 rd v hinv2 (by omega) hrd hnw hseg hblob hbd
@@ -445,6 +453,21 @@ theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : 
       rw [hstoff]; rcases hw with hw | hw
       · exact Or.inl (by omega)
       · exact Or.inr (by omega)
+
+/-- The T0-source specialisation used by the arith/const-data cases. -/
+theorem run_store (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m2 : State)
+    (rd : Nat) (v : Word) (q : Nat) (hinv2 : StInv L fd holes s m2) (hT0 : m2.rget T0 = v)
+    (hq : m2.pc = L.codeBase + BitVec.ofNat 64 q) (hem : Emitted L q (storeSlotI rd T0))
+    (hrd : rd ≤ maxRegF fd) (hfrd : slotOff rd < 2 ^ 11)
+    (hnw : s.sp.toNat + userOff fd ≤ 2 ^ 64) (hseg : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
+    (hbd : L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
+             ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat) :
+    ∃ ks, StInv L fd holes (s.rset rd v) (stepN ks m2)
+        ∧ (stepN ks m2).pc
+            = L.codeBase + BitVec.ofNat 64 (q + 4 * (storeSlotI rd T0).length)
+        ∧ FramesPres holes s.sp fd m2 (stepN ks m2) :=
+  run_storeFrom L fd holes s m2 rd T0 v q hinv2 hT0 hq hem hrd hfrd hnw hseg hblob hbd
 
 /-! ## `synthConst` — materialising a constant into a scratch register.
 
