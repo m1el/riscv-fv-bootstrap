@@ -196,6 +196,66 @@ theorem step_jalr (m : State) (rd rs1 : Nat) (imm : BitVec 12)
                ((m.rget rs1 + imm.signExtend 64) &&& (~~~ (1 : Word))) := by
   simp only [step, h]
 
+/-! ## `jalr` landing: the `&&& ~~~1` bit-clear is a no-op on an even target.
+
+    `jalr x0 ra 0` jumps to `(ra + 0) &&& ~~~1`. Return addresses are 4-aligned
+    (all code positions and `codeBase` are), hence even, so the low-bit clear
+    leaves them fixed. Proved bit-blast style through the CLEAN `getLsbD_ofNat`
+    (the `getLsbD_not`/`toNat_not` route is `Classical.choice`-tainted in this
+    stdlib, so we keep `~~~1` as the concrete literal `2⁶⁴−2` via `rfl`). -/
+
+/-- Every low bit of `2ⁿ−1` (below `n`) is set — clean replacement for the
+    `Classical`-tainted `Nat.testBit_two_pow_sub_one`. -/
+theorem testBit_pow_two_sub_one (n : Nat) :
+    ∀ i, i < n → Nat.testBit (2 ^ n - 1) i = true := by
+  induction n with
+  | zero => intro i hi; omega
+  | succ n ih =>
+    intro i hi
+    have hpow : (2 : Nat) ^ (n + 1) = 2 * 2 ^ n := by rw [Nat.pow_succ, Nat.mul_comm]
+    have h2n : 1 ≤ (2 : Nat) ^ n := Nat.one_le_two_pow
+    cases i with
+    | zero =>
+      have hm : (2 ^ (n + 1) - 1) % 2 = 1 := by rw [hpow]; omega
+      rw [Nat.testBit_zero, hm]; decide
+    | succ i' =>
+      have hd : (2 ^ (n + 1) - 1) / 2 = 2 ^ n - 1 := by rw [hpow]; omega
+      rw [Nat.testBit_succ, hd]; exact ih i' (by omega)
+
+/-- Clearing bit 0 (`&&& ~~~1`) fixes any word whose bit 0 is already clear. -/
+theorem word_and_not_one (x : Word) (h : x.getLsbD 0 = false) :
+    x &&& (~~~ (1 : Word)) = x := by
+  rw [show (~~~ (1 : Word)) = BitVec.ofNat 64 (2 ^ 64 - 2) from rfl]
+  apply BitVec.eq_of_getLsbD_eq
+  intro i hi
+  rw [BitVec.getLsbD_and, BitVec.getLsbD_ofNat]
+  by_cases h0 : i = 0
+  · subst h0
+    have hb0 : ((2 : Nat) ^ 64 - 2).testBit 0 = false := by decide
+    rw [hb0]; simp only [Bool.and_false, h]
+  · obtain ⟨i', rfl⟩ : ∃ i', i = i' + 1 := ⟨i - 1, by omega⟩
+    have hb : ((2 : Nat) ^ 64 - 2).testBit (i' + 1) = true := by
+      rw [show (2 : Nat) ^ 64 - 2 = 2 * (2 ^ 63 - 1) from by decide, Nat.testBit_succ,
+          Nat.mul_div_cancel_left _ (by decide)]
+      exact testBit_pow_two_sub_one 63 i' (by omega)
+    rw [hb]; simp only [Bool.and_true, decide_eq_true_eq.mpr hi]
+
+/-- An even word has bit 0 clear. -/
+theorem getLsbD0_of_even (x : Word) (h : x.toNat % 2 = 0) : x.getLsbD 0 = false := by
+  rw [BitVec.getLsbD, Nat.testBit_zero, h]; decide
+
+/-- `jalr x0 rs1 0` with an even `rs1` lands exactly at `rs1`'s value. -/
+theorem jalr_lands (m : State) (rs1 : Nat) (ra : Word)
+    (hd : decode (fetch32 m) = .jalr 0 rs1 (0 : BitVec 12))
+    (hra : m.rget rs1 = ra) (heven : ra.toNat % 2 = 0) :
+    (step m).pc = ra := by
+  have hpc : (step m).pc = (m.rget rs1 + (0 : BitVec 12).signExtend 64) &&& (~~~ (1 : Word)) := by
+    rw [step_jalr m 0 rs1 (0 : BitVec 12) hd]; rfl
+  rw [hpc, hra, show ((0 : BitVec 12).signExtend 64) = 0 from by decide]
+  have hz : ra + (0 : Word) = ra := by bv_omega
+  rw [hz]
+  exact word_and_not_one ra (getLsbD0_of_even ra heven)
+
 /-! ## Immediate roundtrip for slot offsets. -/
 
 /-- A small non-negative 12-bit immediate sign-extends to itself: the machine's
