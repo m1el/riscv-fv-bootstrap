@@ -7,11 +7,28 @@ Plan written 2026-07-02, immediately after the executable cut landed. Read with
 
 **Status (updated 2026-07-04).** Phase 0 done, relation validated, and the
 statement-level simulation `lower_sim_cf` now covers EVERY control-flow
-construct except const-data/call: skip/annot/seq/block/ife/**while**, all six
-arith + four mem ops, and the three leaf jumps ret/brkB/contL. The only
-statement-level `sorry` left is `CtrlSim.lean:777`'s `all_goals sorry` over
-**cref/clen/call**. `lower_sim` was pruned to leaf-only and is axiom-clean
-(`[propext, Quot.sound]`). Concretely (older entries retained below):
+construct AND both const-data ops — skip/annot/seq/block/ife/**while**, all six
+arith + four mem ops, the three leaf jumps ret/brkB/contL, and **cref/clen**.
+The ONLY remaining statement-level `sorry` is the **`call`** case (Phase 5).
+`lower_sim` was pruned to leaf-only and is axiom-clean (`[propext, Quot.sound]`).
+The const-data machinery (all `[propext, Quot.sound]`):
+- **`run_synth`** (StmtSim) — the 3-instr `synthConst t v` sequence materialises
+  `ofInt 64 v` into any scratch `t` (≠0,2), IL state preserved, plus an
+  other-registers-preserved clause; `signExtend_ofInt_12` + `synth_val`
+  (`(ofInt hi)<<<12 + ofInt lo = ofInt (hi*4096+lo)`) are the reusable atoms.
+- **`run_cref`** (StmtSim) — the 5-instr cref sequence (`jal T0,+4` pc-read →
+  synth δ into T1 via `run_synth`, T0 preserved → `add T0,T0,T1`) loads
+  `codeBase + dpos(d)` into T0; `dp`/`here < 2²⁰` (blob fits) give the synth range.
+- **`emitCF`/`csize`/`emitCF_length`** gained a `(dat : Data) (dpos : Name → Nat)`
+  context + real clen/cref arms; `matchesReal` validates BOTH against the real
+  `Compile.lower ▸ resolveOne` pipeline (8 new #guards: clen lengths/rd=0/seq,
+  cref offsets/rd=0/seq-of-two).
+- **`lower_sim_cf`** gained flat hypotheses `hdat` (data lengths synth-safe),
+  `hdbase` (IL `dbase d` = the machine layout address `codeBase + dpos d`) and
+  `hdpos` (`dpos d < 2²⁰`). clen = `run_synth`→`run_store`; cref = `run_cref`→
+  `run_store`. NOTE: `hdbase`/`hdpos`/`hdat` are the Phase-2 obligations the real
+  layout must discharge (`dpos := segStart + dataOffsetsFrom`; `dbaseOf` = it).
+Concretely (older entries retained below):
 - **Phase 0.1 (P1 oracle) — DONE.** `pad : Name → Nat` in `frameEnter`/`exec`/
   `run` (default `fun _ => 0`, everything re-greens); `CompileTests.lean` has
   the `pad = userOff` frame-memory differential tests validating P1. Committed.
@@ -177,11 +194,14 @@ statement-level `sorry` left is `CtrlSim.lean:777`'s `all_goals sorry` over
      → `cases fuel`) and turned the control-flow `all_goals sorry` into a
      `hleaf`-contradiction. `#print axioms lower_sim` = `[propext, Quot.sound]` — its
      completed `lower_sim_cf` callers no longer inherit `sorryAx`.
-  2. ~~`lower_sim_cf` **while**~~ **DONE (`0615725`).** Next: **cref/clen**
-     (`synthConst`; needs the `emitCF`/`csize` extension first — both are currently
-     stubbed to `emit s = []` / `(emit s).length`; the `synthConst_correct` 3-step
-     `ofInt v` lemma + the `cref` 5-step jal-pc-read are Phase-2 material).
-  3. Phase 5 (**call**), then Phases 1/2 (encode/decode; AsmFacts —
+  2. ~~`lower_sim_cf` **while**~~ **DONE (`0615725`).**
+     ~~**cref/clen**~~ **DONE (`05d5ac8`, + `9ec08e5` run_synth generalisation,
+     clen at the prior commit).** `emitCF`/`csize`/`emitCF_length` extended with the
+     `(dat, dpos)` context + real clen/cref arms, validated against `resolveOne`;
+     `run_synth`/`run_cref` are the axiom-clean simulators; the flat `hdat`/`hdbase`/
+     `hdpos` hypotheses are the Phase-2 layout obligations.
+  3. **`lower_sim_cf` `call` (Phase 5) is the last statement-level `sorry`.** Then
+     Phases 1/2 (encode/decode; AsmFacts —
      `Emitted L pos (emit stmt)` from the real pipeline, today only `#guard`-
      validated), then 6 (**prog_sim**).
   4. **Before starting `ProgProof`** (post-campaign): prove the Prog syntactic
@@ -620,10 +640,16 @@ crosses ~1 min). Check individual files with `lake env lean` during work.
 - [x] Prune `lower_sim`'s superseded tail — `f0cdeff` (leaf-only via `isLeaf`,
   axiom-clean `[propext, Quot.sound]`).
 - [x] `lower_sim_cf` **while** — `0615725` (fuel-IH back-edge; `MemAccOff` while arm).
-- [ ] Finish `lower_sim_cf`: **cref/clen** (unstub `emitCF`/`csize` +
-  `synthConst_correct`), then **call** (Phase 5).
-- [ ] Then Phases 1/2 (encode/decode, assembler) in parallel-friendly chunks,
-  then 6 (`prog_sim`).
+- [x] `lower_sim_cf` **clen** then **cref** — `05d5ac8` (+ `run_synth` generalised to
+  any scratch target with a reg-preservation clause, `9ec08e5`). `emitCF`/`csize`
+  gained the `(dat, dpos)` context + real clen/cref arms (validated vs `resolveOne`
+  by 8 new `matchesReal` #guards); `run_synth`/`run_cref`/`synth_val`/
+  `signExtend_ofInt_12` are the axiom-clean atoms; `hdat`/`hdbase`/`hdpos` are the
+  flat Phase-2 layout obligations.
+- [ ] Finish `lower_sim_cf`: **call** (Phase 5) — the last statement-level `sorry`.
+- [ ] Then Phases 1/2 (encode/decode, assembler; the AsmFacts pipeline must
+  DISCHARGE `hdat`/`hdbase`/`hdpos` from the real `layout`/`dataOffsetsFrom`/
+  `dbaseOf` — today they are theorem hypotheses), then 6 (`prog_sim`).
 - [ ] Post-campaign: Prog frame theorem, then `hex0F_correct` at the Prog
   altitude (the ONE maintained hex0 proof), then the SSA→Prog lowering sim —
   the ladder in [PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md) §3.
