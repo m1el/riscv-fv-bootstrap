@@ -423,20 +423,35 @@ before W4, several details deviate from the pre-implementation sketch below:
   goal, or `intro`-the-negation then re-ascribe `have : (10+base : Nat) = … := h;
   omega`. Also: `stepN (1+k) m` unfolds to `stepN k (stepN 1 m)` NOT `stepN k
   (step m)` — carry `h1run : stepN 1 m = step m := rfl` in every rw list.
-- **W4c NEXT — `run_retStoresFrom` (+ `park_lastwins`)**: the analog of
-  `run_marshalFrom` but with **stores from A-regs** matching the IL last-wins fold
-  `(rets.toList.zip retVals).foldl (fun st rv => st.rset rv.1 rv.2) s0` (Prog.lean
-  :233 for the caller return; :150 `withParams` for the prologue). Each fold step ↔
-  `run_storeFrom` + `StInv_store_slot` (already maintains StInv across a single slot
-  write). BLOCKER to handle first: `run_storeFrom` does not expose register
-  preservation, but the induction needs `(stepN ks m).rget (A (base+1+i)) = vs[1+i]`
-  to survive each store — so **add a `∀ t, (…).rget t = m.rget t` conjunct to
-  `run_storeFrom`** (a store touches mem+pc only; rd=0 is 0 steps, rd≠0 is one `sd`)
-  and update its callers/`run_store` wrapper. Then `run_retStoresFrom` inducts on
-  `(rets, vs)` pairwise exactly like `run_marshalFrom`.
-- **Then W5/W6/W7**: `prologue_sim` (`withParams` fold, same machinery),
-  `epilogue_sim` (needs `jalr_lands`), and W3 (generalize induction over
-  `fd`/`holes`/`epiPos` — only the call case changes them) + the call assembly.
+- **W4c DONE** (`177504e`): `run_storeFrom` gained the reg-preservation conjunct
+  `∀ t, (stepN ks m2).rget t = m2.rget t` (4th component; store touches mem+pc only,
+  rd=0 is 0 steps) — the `run_store` T0-wrapper projects it away so its 4 callers are
+  UNCHANGED. `run_retStoresFrom` (CtrlSim, after `run_marshalFrom`) inducts on
+  `(rets, vs)` pairwise: each store is a `run_storeFrom` whose reg-preservation keeps
+  the yet-unstored A-values live; result mirrors the IL last-wins fold
+  `(rets.zip vs).foldl rset s` exactly (rd=0 ret = 0 instrs vs an invisible `rset 0`,
+  which is defeq `s` since `St.rset` guards `if i=0`). FramesPres chains via
+  `FramesPres_trans` over the rset-invariant sp (`(s.rset r v).sp = s.sp` by
+  `simp [St.rset]`, split on `r=0`). Value hyp bounds on `vs.length` (not
+  `rets.length`) to keep `vs[i]` elaboration happy; `rets.length = vs.length` ties them.
+  `park_lastwins` folded into W5 (prologue) — it needs the fresh-regfile +
+  frameReg-override context, not the return-store context.
+- **W4d DONE** (`0045c3c`): `jalr_lands` — `jalr x0 rs1 0` with even `rs1` lands at
+  `rs1`'s value. ⚠ **KEY AXIOM GOTCHA (cost real time — read before any BitVec bit-op
+  work)**: `BitVec.getLsbD_not` AND `BitVec.toNat_not` AND `Nat.testBit_two_pow_sub_one`
+  are ALL **`Classical.choice`-tainted** in this Mathlib-free stdlib — touching `~~~`
+  through them contaminates the axiom set (target is `[propext, Quot.sound]`). Also
+  `bv_decide` is UNAVAILABLE (needs `Std.Tactic.BVDecide`); `bv_omega` IS available and
+  clean but only does linear arith, not `&&&`. The clean recipe used in
+  `word_and_not_one` (the `x &&& ~~~1 = x` no-op): keep `~~~1` as the concrete literal
+  `BitVec.ofNat 64 (2^64−2)` via **`rfl`** (axiom-free), bit-blast through the CLEAN
+  `getLsbD_ofNat`+`getLsbD_and`, and replace `testBit_two_pow_sub_one` with a hand
+  induction (`testBit_pow_two_sub_one`, only `testBit_zero`/`testBit_succ`/`omega`).
+  `getLsbD0_of_even` bridges `toNat % 2 = 0 → getLsbD 0 = false`. `halign` (codeBase
+  alignment feeding the evenness) still a W7 flat hypothesis.
+- **W4 COMPLETE.** Next **W5** (`prologue_sim`, the fiddliest — incl. `park_lastwins`),
+  then **W6** (`epilogue_sim`, now unblocked — `jalr_lands` ready), then **W3+W7**
+  (generalize induction over `fd`/`holes`/`epiPos` + the call assembly).
 
 ## 5. Work plan (commit-ordered; each step green + committed before the next)
 
@@ -445,7 +460,7 @@ before W4, several details deviate from the pre-implementation sketch below:
 | W1 | ✅ DONE (`bf83654`). C5 defs: `csize`/`emitCF` call arms + `fnPos`, `prologueI`/`epilogueI`/sizes, `matchesRealProg`, `#guard`s on caller/chain/recSum + a corner-case fn. NO proofs | ~200 | low — pure defs, decidably validated |
 | W2 | ✅ DONE (`d2d5e54` C2 + `07ab057` C3). C2+C3 surgery: `StInv` (stackLo FIELD, free-stack `OffPriv` domain, ordering + no-wrap conjuncts), `MemAccOff` strengthening, `FramesPres` as a separate ∧ conclusion; re-threaded everything incl. `sub3_body_sim`. `hbd` reshape deferred to W7 | ~500 delta | done — the ∧-at-top FramesPres (not woven into StInv) kept it tractable |
 | W3 | C1: add `fd holes epiPos` to `generalizing`; existing cases pass current values to the 3 extra IH args. **Do together with W7** (only the call case needs it) | ~50 delta | low |
-| W4 | Atoms: ✅ `step_jalr`+`run_storeFrom` (W4a `e0161c3`), ✅ `run_marshalFrom` (W4b `d7e0e69`); REMAINING: `run_retStoresFrom`+`park_lastwins` (W4c — needs run_storeFrom reg-preservation first), `jalr_lands`+`halign` (with W6). `run_loadTo` unneeded (`run_load` already generic over target `t`) | ~450 | low-medium; copy the `9ec08e5` generalization pattern. **Reg-typed ≠ is invisible to omega** — see STATUS |
+| W4 | ✅ COMPLETE. Atoms: `step_jalr`+`run_storeFrom` (W4a `e0161c3`), `run_marshalFrom` (W4b `d7e0e69`), `run_retStoresFrom`+`run_storeFrom` reg-preservation (W4c `177504e`), `jalr_lands`+`word_and_not_one`+`testBit_pow_two_sub_one`+`getLsbD0_of_even` (W4d `0045c3c`). `park_lastwins` → W5; `halign` → W7. `run_loadTo` unneeded (`run_load` already generic over target `t`) | ~450 | done. **Reg-typed ≠ is invisible to omega**; **`~~~`/`not` lemmas are Classical-tainted** — see STATUS |
 | W5 | `prologue_sim` standalone + oracle instantiation on `diff_caller` state | ~300 | **medium** — the per-slot three-way case walk (param/frameReg/zeroed) with last-wins is the fiddliest lemma of the phase |
 | W6 | `epilogue_sim` standalone | ~150 | low |
 | W7 | C4 hyps (`hpad`/`hfn`/`halign`) + C6 arm + the call case assembly (§4) | ~300 | medium — pure plumbing if W2–W6 landed as stated |
