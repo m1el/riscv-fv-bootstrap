@@ -91,6 +91,15 @@ theorem exec_clen (fuel rd : Nat) (d : Name) (s : St) {bs : List Byte}
       = some (s.rset rd (BitVec.ofNat 64 bs.length), .normal) := by
   simp [exec, h]
 
+theorem exec_clen_none (fuel rd : Nat) (d : Name) (s : St)
+    (h : List.lookup d P.data = none) :
+    exec P dbase pad stackLo (fuel+1) (.clen rd d) s = none := by
+  simp [exec, h]
+
+theorem exec_cref_none (fuel rd : Nat) (d : Name) (s : St) (h : dbase d = none) :
+    exec P dbase pad stackLo (fuel+1) (.cref rd d) s = none := by
+  simp [exec, h]
+
 /-! ### `ife` — collapse to the taken branch. -/
 
 theorem exec_ife_then (fuel : Nat) (c : Cond) (a b : Reg) (t e : Stmt) (s : St)
