@@ -405,12 +405,38 @@ before W4, several details deviate from the pre-implementation sketch below:
   `run_store` (4th component), `single_op_sim`/`two_op_sim` (4th), `jump_sim`
   (3rd, + `ret_sim`/`brkB_sim`/`contL_sim` carry it). Every `lower_sim`/`_cf`
   case produces it — so W4+ inherits a stable conclusion.
-- **Ready for W4**: the atoms and `prologue_sim`/`epilogue_sim`/call-assembly are
-  the remaining work. `step_jalr`/`jalr_lands` (W4) still to write; `A`/`RA`/`SP`
-  are opened in CtrlSim; `run_load`/`run_store`/`run_synth` are the generalization
-  templates. Do W3 (generalize induction) immediately before W7 (only the call
-  case changes `fd`/`holes`/`epiPos`); W4/W5/W6 are standalone and need no
-  induction change.
+- **W4a DONE** (`e0161c3`): `step_jalr` (one-instr lemma, StmtSim) + `run_storeFrom`
+  (generalizes `run_store`'s source reg T0→any scratch; `run_store` is now a thin
+  T0 wrapper, its 4 callers unchanged). `jalr_lands` (the `&&&~~~1`-is-a-no-op fact
+  under alignment) deferred to W6.
+- **W4b DONE** (`d7e0e69`): `run_marshalFrom` (CtrlSim, before `lower_sim_cf`) —
+  runs `marshalI`'s arg loads by induction on the reg list, A-base generalized;
+  each `A (base+j)` ends `= s.rget args[j]`, StInv+mem preserved, regs outside the
+  A-window untouched. A-regs (≥10) don't intersect the StInv-constrained x2/slots,
+  so loading them preserves StInv.
+- **⚠ KEY GOTCHA (cost real time in W4b — read before W4c/W5)**: `Reg := Nat` is an
+  `abbrev`, but a **`Reg`-typed (in)equality is invisible to `omega`** — it silently
+  drops the goal/hyp as non-arithmetic and reports a spurious counterexample from
+  unrelated Nat context hyps. `A i ≠ 2` worked only because `run_load`'s param is
+  `t : Nat` (forcing `@Ne Nat`); `A base ≠ A (base+1+j')` is `@Ne Reg` and omega
+  ignores it. Fixes that work: `rw [hAb]` to put a literal `10+base : Nat` in the
+  goal, or `intro`-the-negation then re-ascribe `have : (10+base : Nat) = … := h;
+  omega`. Also: `stepN (1+k) m` unfolds to `stepN k (stepN 1 m)` NOT `stepN k
+  (step m)` — carry `h1run : stepN 1 m = step m := rfl` in every rw list.
+- **W4c NEXT — `run_retStoresFrom` (+ `park_lastwins`)**: the analog of
+  `run_marshalFrom` but with **stores from A-regs** matching the IL last-wins fold
+  `(rets.toList.zip retVals).foldl (fun st rv => st.rset rv.1 rv.2) s0` (Prog.lean
+  :233 for the caller return; :150 `withParams` for the prologue). Each fold step ↔
+  `run_storeFrom` + `StInv_store_slot` (already maintains StInv across a single slot
+  write). BLOCKER to handle first: `run_storeFrom` does not expose register
+  preservation, but the induction needs `(stepN ks m).rget (A (base+1+i)) = vs[1+i]`
+  to survive each store — so **add a `∀ t, (…).rget t = m.rget t` conjunct to
+  `run_storeFrom`** (a store touches mem+pc only; rd=0 is 0 steps, rd≠0 is one `sd`)
+  and update its callers/`run_store` wrapper. Then `run_retStoresFrom` inducts on
+  `(rets, vs)` pairwise exactly like `run_marshalFrom`.
+- **Then W5/W6/W7**: `prologue_sim` (`withParams` fold, same machinery),
+  `epilogue_sim` (needs `jalr_lands`), and W3 (generalize induction over
+  `fd`/`holes`/`epiPos` — only the call case changes them) + the call assembly.
 
 ## 5. Work plan (commit-ordered; each step green + committed before the next)
 
@@ -419,7 +445,7 @@ before W4, several details deviate from the pre-implementation sketch below:
 | W1 | ✅ DONE (`bf83654`). C5 defs: `csize`/`emitCF` call arms + `fnPos`, `prologueI`/`epilogueI`/sizes, `matchesRealProg`, `#guard`s on caller/chain/recSum + a corner-case fn. NO proofs | ~200 | low — pure defs, decidably validated |
 | W2 | ✅ DONE (`d2d5e54` C2 + `07ab057` C3). C2+C3 surgery: `StInv` (stackLo FIELD, free-stack `OffPriv` domain, ordering + no-wrap conjuncts), `MemAccOff` strengthening, `FramesPres` as a separate ∧ conclusion; re-threaded everything incl. `sub3_body_sim`. `hbd` reshape deferred to W7 | ~500 delta | done — the ∧-at-top FramesPres (not woven into StInv) kept it tractable |
 | W3 | C1: add `fd holes epiPos` to `generalizing`; existing cases pass current values to the 3 extra IH args. **Do together with W7** (only the call case needs it) | ~50 delta | low |
-| W4 | Atoms: `step_jalr`, `jalr_lands` (+`halign` hyp), `run_loadTo`, `run_storeFrom`, `run_marshal`, `run_retstores`, `park_lastwins` | ~450 | low-medium; copy the `9ec08e5` generalization pattern |
+| W4 | Atoms: ✅ `step_jalr`+`run_storeFrom` (W4a `e0161c3`), ✅ `run_marshalFrom` (W4b `d7e0e69`); REMAINING: `run_retStoresFrom`+`park_lastwins` (W4c — needs run_storeFrom reg-preservation first), `jalr_lands`+`halign` (with W6). `run_loadTo` unneeded (`run_load` already generic over target `t`) | ~450 | low-medium; copy the `9ec08e5` generalization pattern. **Reg-typed ≠ is invisible to omega** — see STATUS |
 | W5 | `prologue_sim` standalone + oracle instantiation on `diff_caller` state | ~300 | **medium** — the per-slot three-way case walk (param/frameReg/zeroed) with last-wins is the fiddliest lemma of the phase |
 | W6 | `epilogue_sim` standalone | ~150 | low |
 | W7 | C4 hyps (`hpad`/`hfn`/`halign`) + C6 arm + the call case assembly (§4) | ~300 | medium — pure plumbing if W2–W6 landed as stated |
