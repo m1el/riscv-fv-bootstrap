@@ -222,4 +222,41 @@ theorem exec_call_lookup_none (fuel argc rvc : Nat) (f : Name) (args : Vector Re
     (rets : Vector Reg rvc) (s : St) (hlk : List.lookup f P.env = none) :
     exec P dbase pad stackLo (fuel+1) (.call argc rvc f args rets) s = none := by simp [exec, hlk]
 
+/-- **Inversion for the successful call** — the shape the `lower_sim_cf` call case
+    consumes. From a successful `.call` run, recover the callee (`lookup` + arity),
+    its entry state (`frameEnter`), the body run and its live outcome
+    (`.normal`/`.ret` — escaping brk/cont and overflow/lookup failures all force
+    `h` to `none`), the caller-side return-register writeback, and `oc = .normal`. -/
+theorem exec_call_inv (fuel argc rvc : Nat) (f : Name) (args : Vector Reg argc)
+    (rets : Vector Reg rvc) (s s' : St) (oc : Outcome)
+    (h : exec P dbase pad stackLo (fuel+1) (.call argc rvc f args rets) s = some (s', oc)) :
+    ∃ (fd : FunDef) (callee s1 : St) (ocb : Outcome),
+      List.lookup f P.env = some fd
+      ∧ (fd.argc == argc && fd.rvc == rvc) = true
+      ∧ frameEnter stackLo fd (pad f) (args.toList.map s.rget) s.mem s.sp = some callee
+      ∧ exec P dbase pad stackLo fuel fd.body callee = some (s1, ocb)
+      ∧ (ocb = Outcome.normal ∨ ocb = Outcome.ret)
+      ∧ s' = (rets.toList.zip (fd.rets.toList.map s1.rget)).foldl
+                (fun st rv => st.rset rv.1 rv.2) { s with mem := s1.mem }
+      ∧ oc = Outcome.normal := by
+  simp only [exec] at h
+  split at h
+  · simp at h
+  · next fd hlk =>
+    split at h
+    · next harity =>
+      split at h
+      · next hfe => simp at h
+      · next callee hfe =>
+        split at h
+        · next s1 hbody =>
+          simp only [Option.some.injEq, Prod.mk.injEq] at h
+          exact ⟨fd, callee, s1, .normal, hlk, harity, hfe, hbody, Or.inl rfl, h.1.symm, h.2.symm⟩
+        · next s1 hbody =>
+          simp only [Option.some.injEq, Prod.mk.injEq] at h
+          exact ⟨fd, callee, s1, .ret, hlk, harity, hfe, hbody, Or.inr rfl, h.1.symm, h.2.symm⟩
+        · simp at h
+        · simp at h
+    · next harity => simp at h
+
 end LowIR.Prog
