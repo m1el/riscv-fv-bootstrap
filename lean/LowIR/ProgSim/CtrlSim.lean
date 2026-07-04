@@ -1266,6 +1266,20 @@ theorem epilogue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
       rw [step_jalr _ 0 RA 0 hdJalr, mem_setPc, mem_rset]
     rw [hjmem, hstepAddi, mem_setPc, mem_rset, hstepLd, mem_setPc, mem_rset, hMmem]
 
+/-- The accumulator only grows under `foldl max`. -/
+theorem foldl_max_ge_acc : ∀ (l : List Nat) (a : Nat), a ≤ l.foldl max a
+  | [], a => Nat.le_refl a
+  | x :: xs, a => Nat.le_trans (Nat.le_max_left a x) (foldl_max_ge_acc xs (max a x))
+
+/-- Every element of a list is ≤ its `foldl max` (used to bound `args`/`rets`
+    registers by `maxRegS`/`maxRegF`). -/
+theorem mem_le_foldl_max (x : Nat) : ∀ (l : List Nat) (a : Nat), x ∈ l → x ≤ l.foldl max a
+  | [], _, h => absurd h (by simp)
+  | y :: ys, a, h => by
+      rcases List.mem_cons.mp h with rfl | h
+      · exact Nat.le_trans (Nat.le_max_right a x) (foldl_max_ge_acc ys (max a x))
+      · exact mem_le_foldl_max x ys (max a y) h
+
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat} {dpos fnPos : Name → Nat}
@@ -1974,6 +1988,57 @@ theorem lower_sim_cf
           · rw [stepN_add 5 ks m]
             exact FramesPres_trans holes s.sp fd m (stepN 5 m) (stepN ks (stepN 5 m))
               (FramesPres_of_mem_eq _ _ _ _ _ hmemC) hfrStore
-    case call argc rvc f args rets => sorry
+    case call argc rvc f args rets =>
+      -- ==== destructure the successful call ====
+      obtain ⟨gd, callee, s1, ocb, hlk, harity, hfe, hbody, hocb, hs', hoc⟩ :=
+        LowIR.Prog.exec_call_inv P dbase pad stackLo fuel argc rvc f args rets s s' oc hexec
+      subst hoc
+      simp only [Bool.and_eq_true, beq_iff_eq] at harity
+      obtain ⟨hgargc, hgrvc⟩ := harity
+      obtain ⟨hfnEm, hfnBnd, hfnBr, hfnTF, hfnFS8⟩ := hfn f gd hlk
+      have hpadf : pad f = userOff gd := hpad f gd hlk
+      -- caller register/slot bounds from `maxRegS`
+      simp only [maxRegS] at hreg
+      have hargB : ∀ a ∈ args.toList, a ≤ maxRegF fd := fun a ha =>
+        Nat.le_trans (mem_le_foldl_max a args.toList 0 ha) (Nat.le_trans (Nat.le_max_left _ _) hreg)
+      have hretB : ∀ a ∈ rets.toList, a ≤ maxRegF fd := fun a ha =>
+        Nat.le_trans (mem_le_foldl_max a rets.toList 0 ha) (Nat.le_trans (Nat.le_max_right _ _) hreg)
+      have hargSlot : ∀ a ∈ args.toList, slotOff a < 2 ^ 11 := fun a ha => by
+        have := slotOff_add8_le_userOff fd a (hargB a ha); omega
+      simp only [emitCF] at hem
+      -- ==== segment 1: marshal caller args into a0.. ====
+      obtain ⟨kMar, hMarInv, hMarPc, hMarMem, hMarVal, hMarOth⟩ :=
+        run_marshalFrom L fd holes s args.toList 0 here m hinv hpc
+          (Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hem)) hargB hargSlot
+      have hAL : args.toList.length = argc := by simp
+      have hbndArgc : here + 4 * argc < 2 ^ 20 := by
+        have h := hbnd; simp only [csize] at h; omega
+      -- ==== segment 2: `jal RA` to the callee entry ====
+      have hemJal : Emitted L (here + 4 * argc)
+          [Instr.jal RA (BitVec.ofInt 21 ((fnPos f : Int) - ((here : Int) + 4 * argc)))] := by
+        have h := Emitted_append_right L here (marshalI args.toList)
+          [Instr.jal RA (BitVec.ofInt 21 ((fnPos f : Int) - ((here : Int) + 4 * argc)))]
+          (Emitted_append_left _ _ _ _ hem)
+        rwa [marshalI_length, hAL] at h
+      have hdJal : decode (fetch32 (stepN kMar m))
+          = Instr.jal RA (BitVec.ofInt 21 ((fnPos f : Int) - ((here : Int) + 4 * argc))) := by
+        have h := decode_at L (stepN kMar m) (stepN kMar m) _ _ hemJal hMarInv.2.2.1 0
+          (by simp) (by rw [hMarPc, hAL]; apply pc_congr; omega) rfl
+        simpa using h
+      have hδlo : -(2 ^ 20 : Int) ≤ (fnPos f : Int) - ((here : Int) + 4 * argc) := by omega
+      have hδhi : ((fnPos f : Int) - ((here : Int) + 4 * argc)) < 2 ^ 20 := by omega
+      have hstepJal := step_jal (stepN kMar m) RA _ hdJal
+      have hJalInv : StInv L fd holes s (step (stepN kMar m)) := by
+        rw [hstepJal]; exact StInv_scratch L fd holes s (stepN kMar m) RA _ _ (by decide) hMarInv
+      have hJalPc : (step (stepN kMar m)).pc = L.codeBase + BitVec.ofNat 64 (fnPos f) := by
+        rw [hstepJal, pc_setPc, hMarPc, hAL, signExtend_ofInt_21 _ hδlo hδhi,
+            show ((fnPos f : Int) - ((here : Int) + 4 * argc))
+               = ((fnPos f : Int) - ((here + 4 * argc : Nat) : Int)) from by omega, jump_lands]
+      have hJalRA : (step (stepN kMar m)).rget RA
+          = L.codeBase + BitVec.ofNat 64 (here + 4 * argc) + 4 := by
+        rw [hstepJal, rget_setPc, rget_rset_self _ RA _ (by decide), hMarPc, hAL]
+      have hJalMem : (step (stepN kMar m)).mem = m.mem := by
+        rw [hstepJal, mem_setPc, mem_rset, hMarMem]
+      sorry
 
 end LowIR.ProgSim
