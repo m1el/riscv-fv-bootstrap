@@ -548,6 +548,19 @@ theorem parkFold_not_mem (target : Nat) :
       rw [parkFold_cons, parkFold_not_mem target ps _ h.2]
       simp only [if_neg h.1]
 
+/-- If `target` IS a fold key, the last write to it wins and the base is
+    irrelevant: `parkFold` is independent of the base at that target. -/
+theorem parkFold_mem_indep (target : Nat) :
+    ∀ (ps : List (Nat × Word)) (b1 b2 : Nat → Word), target ∈ ps.map Prod.fst →
+      parkFold b1 ps target = parkFold b2 ps target
+  | [], _, _, h => by simp at h
+  | p :: ps, b1, b2, h => by
+      rw [parkFold_cons, parkFold_cons]
+      simp only [List.map_cons, List.mem_cons] at h
+      rcases h with hh | hh
+      · exact parkFold_base_congr target ps _ _ (by rw [if_pos hh, if_pos hh])
+      · exact parkFold_mem_indep target ps _ _ hh
+
 /-- `Installed` reads `m` only through `m.mem` (fetch overrides `pc`), so a `pc`
     write preserves it. -/
 theorem Installed_setPc (L : Layout) (m : State) (p : Word) (h : Installed L m) :
@@ -555,6 +568,17 @@ theorem Installed_setPc (L : Layout) (m : State) (p : Word) (h : Installed L m) 
 
 @[simp] theorem loadWord_setPc (m : State) (p a : Word) :
     (m.setPc p).loadWord a = m.loadWord a := rfl
+
+/-- `Installed` depends on `m` only through `m.mem` (fetch overrides `pc`), so any
+    two states with equal memory install the same blob. -/
+theorem Installed_congr (L : Layout) (m m' : State) (hmem : m'.mem = m.mem)
+    (h : Installed L m) : Installed L m' := by
+  obtain ⟨hc, hd⟩ := h
+  refine ⟨fun j hj => ?_, fun i hi => by rw [hmem]; exact hd i hi⟩
+  have : fetch32 { m' with pc := L.codeBase + BitVec.ofNat 64 (4 * j) }
+       = fetch32 { m with pc := L.codeBase + BitVec.ofNat 64 (4 * j) } := by
+    simp only [fetch32, hmem]
+  rw [this]; exact hc j hj
 
 /-- Run one prologue slot store `sd SP tsrc (slotOff r)` (`r ≠ 0`, `r ≤ maxRegF`)
     from a machine state whose x2 already holds the callee sp `sp`: it writes
@@ -580,8 +604,10 @@ theorem run_slotStore (L : Layout) (fd : FunDef) (m : State) (sp : Word) (r tsrc
     ∧ (step m).loadWord (sp + BitVec.ofNat 64 (slotOff r)) = m.rget tsrc
     ∧ (∀ target : Nat, target ≠ r → 1 ≤ target → target ≤ maxRegF fd →
          (step m).loadWord (sp + BitVec.ofNat 64 (slotOff target))
-           = m.loadWord (sp + BitVec.ofNat 64 (slotOff target))) := by
+           = m.loadWord (sp + BitVec.ofNat 64 (slotOff target)))
+    ∧ (step m).loadWord sp = m.loadWord sp := by
   have hslot8 : slotOff r + 8 ≤ userOff fd := slotOff_add8_le_userOff fd r hrm
+  have hsl16 : 16 ≤ slotOff r := by unfold slotOff; omega
   have hslot : slotOff r < 2 ^ 11 := by omega
   have hlen : (0 : Nat) < ([Instr.sd SP tsrc (BitVec.ofNat 12 (slotOff r))]).length := by simp
   have hd : decode (fetch32 m) = Instr.sd SP tsrc (BitVec.ofNat 12 (slotOff r)) := by
@@ -599,7 +625,7 @@ theorem run_slotStore (L : Layout) (fd : FunDef) (m : State) (sp : Word) (r tsrc
     rw [hatoNat]; rcases hbd with hbd | hbd
     · exact Or.inl (by omega)
     · exact Or.inr (by omega)
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hstep, pc_setPc, hpc, pc_add4]
   · intro t; rw [hstep, rget_setPc, State_storeWord_rget]
   · rw [hstep]; exact Installed_setPc L _ _ hInstStore
@@ -617,6 +643,11 @@ theorem run_slotStore (L : Layout) (fd : FunDef) (m : State) (sp : Word) (r tsrc
     have htslot8 : slotOff target + 8 ≤ userOff fd := slotOff_add8_le_userOff fd target htm
     rw [hstep, loadWord_setPc]
     exact loadWord_store_slot_ne m sp (m.rget tsrc) r target (Ne.symm htr) (by omega) (by omega)
+  · -- the ra word `[sp, sp+8)` (offset 0) is below every register slot (`slotOff ≥ 16`)
+    rw [hstep, loadWord_setPc]
+    apply Rv64i.loadWord_storeWord_disjoint m (sp + BitVec.ofNat 64 (slotOff r)) sp (m.rget tsrc) hwa
+      (by omega)
+    rw [hatoNat]; exact Or.inr (by omega)
 
 /-- Run the prologue's param-parking segment (`params.zipIdx.flatMap (storeSlotI
     pi.1 (A pi.2))`) from a machine state whose x2 = the callee sp and whose
@@ -647,13 +678,14 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
          ∧ (∀ target : Nat, 1 ≤ target → target ≤ maxRegF fd →
               (stepN k m).loadWord (sp + BitVec.ofNat 64 (slotOff target))
                 = parkFold (fun t => m.loadWord (sp + BitVec.ofNat 64 (slotOff t)))
-                    (params.zip argVals) target) := by
+                    (params.zip argVals) target)
+         ∧ (stepN k m).loadWord sp = m.loadWord sp := by
   intro params
   induction params with
   | nil =>
       intro argVals base q m hsp hpc _ hinst _ _ _
       refine ⟨0, by simpa using hsp, ?_, fun t => by rw [stepN_zero], by simpa using hinst,
-              fun a _ => by rw [stepN_zero], fun target _ _ => ?_⟩
+              fun a _ => by rw [stepN_zero], fun target _ _ => ?_, by rw [stepN_zero]⟩
       · simp only [stepN_zero, List.zipIdx_nil, List.flatMap_nil, List.length_nil, Nat.mul_zero,
                    Nat.add_zero]; exact hpc
       · rw [stepN_zero]; rfl
@@ -677,10 +709,10 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
           have h := hval (i + 1) (by simp only [List.length_cons]; omega)
           rw [show base + (i + 1) = base + 1 + i from by omega, List.getElem_cons_succ] at h
           exact h
-        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK⟩ :=
+        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK, hraK⟩ :=
           ih vrest (base + 1) q m hsp hpc hem hinst
             (fun p hp => hreg p (List.mem_cons_of_mem 0 hp)) (by simpa using hlen) hval'
-        refine ⟨k, hspK, ?_, hregK, hinstK, hmemK, ?_⟩
+        refine ⟨k, hspK, ?_, hregK, hinstK, hmemK, ?_, hraK⟩
         · rw [hpcK]; apply pc_congr
           simp only [List.zipIdx_cons, List.flatMap_cons, hs0, List.nil_append]
         · intro target ht1 htm
@@ -693,7 +725,7 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
         have hemL : Emitted L q [Instr.sd SP (A base) (BitVec.ofNat 12 (slotOff r))] := by
           have h := Emitted_append_left _ _ _ _ hem
           rwa [storeSlotI, if_neg hr0] at h
-        obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne⟩ :=
+        obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne, hra1⟩ :=
           run_slotStore L fd m sp r (A base) q (by omega) (hreg r (by simp)) hsp hpc hinst hemL
             huser hnw hseg hblob hbd
         have hemR : Emitted L (q + 4)
@@ -708,10 +740,10 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
           have h := hval (i + 1) (by simp only [List.length_cons]; omega)
           rw [show base + (i + 1) = base + 1 + i from by omega, List.getElem_cons_succ] at h
           exact h
-        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK⟩ :=
+        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK, hraK⟩ :=
           ih vrest (base + 1) (q + 4) (step m) hsp' hpc1 hemR hinst1
             (fun p hp => hreg p (List.mem_cons_of_mem r hp)) (by simpa using hlen) hval'
-        refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_⟩
+        refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
         · rw [stepN_add, hstep1]; exact hspK
         · rw [stepN_add, hstep1, hpcK]; apply pc_congr
           simp only [List.zipIdx_cons, List.flatMap_cons, storeSlotI, if_neg hr0,
@@ -727,6 +759,7 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
           by_cases htr : target = r
           · subst htr; rw [hslotr, hv0, if_pos rfl]
           · rw [hslotne target htr ht1 htm, if_neg htr]
+        · rw [stepN_add, hstep1, hraK, hra1]
 
 /-- Run the prologue's zero-init segment (`sd SP 0 (slotOff r)` for each register
     in the filtered list `regs`): every slot in `regs` ends holding `0` (the IL
@@ -753,14 +786,15 @@ theorem run_zeroSlots (L : Layout) (fd : FunDef) (sp : Word)
               (stepN k m).loadWord (sp + BitVec.ofNat 64 (slotOff target)) = 0)
          ∧ (∀ target : Nat, 1 ≤ target → target ≤ maxRegF fd → target ∉ regs →
               (stepN k m).loadWord (sp + BitVec.ofNat 64 (slotOff target))
-                = m.loadWord (sp + BitVec.ofNat 64 (slotOff target))) := by
+                = m.loadWord (sp + BitVec.ofNat 64 (slotOff target)))
+         ∧ (stepN k m).loadWord sp = m.loadWord sp := by
   intro regs
   induction regs with
   | nil =>
       intro q m hsp hpc _ hinst _
       refine ⟨0, by simpa using hsp, ?_, fun t => by rw [stepN_zero], by simpa using hinst,
               fun a _ => by rw [stepN_zero], fun target ht => by simp at ht,
-              fun target _ _ _ => by rw [stepN_zero]⟩
+              fun target _ _ _ => by rw [stepN_zero], by rw [stepN_zero]⟩
       simp only [stepN_zero, List.length_nil, Nat.mul_zero, Nat.add_zero]; exact hpc
   | cons r rest ih =>
       intro q m hsp hpc hem hinst hbounds
@@ -768,7 +802,7 @@ theorem run_zeroSlots (L : Layout) (fd : FunDef) (sp : Word)
       obtain ⟨hr1, hrm⟩ := hbounds r (by simp)
       have hemL : Emitted L q [Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r))] :=
         Emitted_append_left _ _ _ _ hem
-      obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne⟩ :=
+      obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne, hra1⟩ :=
         run_slotStore L fd m sp r 0 q hr1 hrm hsp hpc hinst hemL huser hnw hseg hblob hbd
       have hslot_r0 : (step m).loadWord (sp + BitVec.ofNat 64 (slotOff r)) = 0 := by
         rw [hslotr]; rfl
@@ -778,10 +812,10 @@ theorem run_zeroSlots (L : Layout) (fd : FunDef) (sp : Word)
         rw [List.length_singleton, Nat.mul_one] at h; exact h
       have hstep1 : stepN 1 m = step m := rfl
       have hsp' : (step m).rget SP = sp := by rw [hreg1]; exact hsp
-      obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hzeroK, hpresK⟩ :=
+      obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hzeroK, hpresK, hraK⟩ :=
         ih (q + 4) (step m) hsp' hpc1 hemR hinst1
           (fun p hp => hbounds p (List.mem_cons_of_mem r hp))
-      refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
       · rw [stepN_add, hstep1]; exact hspK
       · rw [stepN_add, hstep1, hpcK]; apply pc_congr
         simp only [List.length_cons]; omega
@@ -798,6 +832,343 @@ theorem run_zeroSlots (L : Layout) (fd : FunDef) (sp : Word)
       · intro target ht1 htm htni
         simp only [List.mem_cons, not_or] at htni
         rw [stepN_add, hstep1, hpresK target ht1 htm htni.2, hslotne target htni.1 ht1 htm]
+      · rw [stepN_add, hstep1, hraK, hra1]
+
+/-- **`prologue_sim` (RESUME-CALL W5).** Running `prologueI fd` from a call-entry
+    machine state establishes the callee's `StInv` against `frameEnter`'s IL state
+    (given the P1 pad `= userOff fd`, packaged as `hcsp`/`hcrg`): x2 drops to the
+    callee sp, the register slots hold the callee's fresh register file (params
+    parked last-wins ↔ `withParams`, everything else zeroed, `frameReg` ↦ frame
+    base), ra is saved at `[sp', sp'+8)`, and pc reaches the body. `hmemF` is the
+    entry memory agreement over the callee's `OffPriv` domain (the callee-frame
+    obligation W7 discharges — see RESUME-CALL §2 C2); the caller-hole facts feed
+    the LIFO ordering / no-wrap conjuncts. -/
+theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
+    (m : State) (sp0 ra : Word) (callee : St) (argVals : List Word) (p : Nat)
+    (hpc : m.pc = L.codeBase + BitVec.ofNat 64 p)
+    (hem : Emitted L p (prologueI fd))
+    (hinst : Installed L m)
+    (hsp0 : m.rget SP = sp0)
+    (hra : m.rget RA = ra)
+    (hargs : ∀ i, (hi : i < argVals.length) → m.rget (A i) = argVals[i])
+    (hlen : fd.params.toList.length = argVals.length)
+    (hparb : ∀ x ∈ fd.params.toList, x ≤ maxRegF fd)
+    (hfrb : fd.frameReg ≤ maxRegF fd)
+    (hcsp : callee.sp = sp0 - BitVec.ofNat 64 (totalFrame fd))
+    (hcrg : ∀ r, 1 ≤ r → callee.rget r
+              = if r = fd.frameReg then sp0 - BitVec.ofNat 64 fd.frameSize
+                else parkFold (fun _ => 0) (fd.params.toList.zip argVals) r)
+    (hmemF : ∀ a, OffPriv L ((callee.sp, userOff fd) :: holes) callee.sp a → callee.mem a = m.mem a)
+    (htf : totalFrame fd ≤ 2000)
+    (hfs8 : fd.frameSize % 8 = 0)
+    (hsp0align : sp0.toNat % 8 = 0)
+    (hsp0ge : totalFrame fd ≤ sp0.toNat)
+    (hseg : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
+    (hbdc : L.codeBase.toNat + L.blobLen ≤ callee.sp.toNat
+              ∨ callee.sp.toNat + userOff fd ≤ L.codeBase.toNat)
+    (hholes_ord : ∀ h ∈ holes, sp0.toNat ≤ (h.1 : Word).toNat)
+    (hholes_nw : ∀ h ∈ holes, (h.1 : Word).toNat + h.2 ≤ 2 ^ 64) :
+    ∃ k, StInv L fd ((callee.sp, userOff fd) :: holes) callee (stepN k m)
+       ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (p + 4 * prologueSize fd)
+       ∧ (stepN k m).loadWord callee.sp = ra
+       ∧ (∀ a : Word, ¬ memRange a callee.sp (userOff fd) → (stepN k m).mem a = m.mem a) := by
+  -- ==== numeric helpers ====
+  have hsp0lt : sp0.toNat < 2 ^ 64 := sp0.isLt
+  have huser : userOff fd ≤ 2000 := by unfold totalFrame at htf; omega
+  have huser16 : 16 ≤ userOff fd := by unfold userOff; omega
+  have htf_eq : totalFrame fd = userOff fd + fd.frameSize := rfl
+  have hcspN : callee.sp.toNat = sp0.toNat - totalFrame fd := by rw [hcsp]; bv_omega
+  have hnwc : callee.sp.toNat + userOff fd ≤ 2 ^ 64 := by omega
+  have hcsp8 : callee.sp.toNat % 8 = 0 := by
+    have h1 : userOff fd % 8 = 0 := by unfold userOff; omega
+    omega
+  have hfb : callee.sp + BitVec.ofNat 64 (userOff fd) = sp0 - BitVec.ofNat 64 fd.frameSize := by
+    rw [hcsp, htf_eq, ← BitVec.ofNat_add_ofNat]; bv_omega
+  -- ==== peel the four prologue segments ====
+  simp only [prologueI] at hem
+  have hemG0 : Emitted L p [Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))),
+                            Instr.sd SP RA 0] :=
+    Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hem))
+  have hemG0p : Emitted L p ([Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))),
+                              Instr.sd SP RA 0]
+                            ++ fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)) :=
+    Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hem)
+  have hempseg : Emitted L (p + 8)
+      (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)) := by
+    have h := Emitted_append_right L p
+      [Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))), Instr.sd SP RA 0] _ hemG0p
+    simpa using h
+  -- ==== G0.1: addi SP SP (-totalFrame) → sp := callee.sp ====
+  have hval0 : sp0 + (BitVec.ofInt 12 (-(totalFrame fd : Int))).signExtend 64 = callee.sp := by
+    rw [signExtend_ofInt_12 _ (by omega) (by omega), hcsp,
+        show BitVec.ofInt 64 (-(totalFrame fd : Int)) = -(BitVec.ofNat 64 (totalFrame fd)) from by
+          rw [BitVec.ofInt_neg, BitVec.ofInt_natCast]]
+    bv_omega
+  have hdA0 : decode (fetch32 m)
+      = Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))) := by
+    have h := decode_at L m m p _ hemG0 hinst 0 (by simp) (by simpa using hpc) rfl
+    simpa using h
+  have hstep0 : step m = (m.rset SP callee.sp).setPc (m.pc + 4) := by
+    rw [step_addi m SP SP _ hdA0, hsp0, hval0]
+  have hm1sp : (step m).rget SP = callee.sp := by
+    rw [hstep0, rget_setPc, rget_rset_self m SP callee.sp (by decide)]
+  have hm1ra : (step m).rget RA = ra := by
+    rw [hstep0, rget_setPc, rget_rset_ne m SP RA callee.sp (by decide), hra]
+  have hm1mem : (step m).mem = m.mem := by rw [hstep0, mem_setPc, mem_rset]
+  have hm1inst : Installed L (step m) := by
+    rw [hstep0]
+    exact Installed_setPc L _ _ (Installed_congr L m _ (by rw [mem_rset]) hinst)
+  have hm1pc : (step m).pc = L.codeBase + BitVec.ofNat 64 (p + 4) := by
+    rw [hstep0, pc_setPc, hpc, pc_add4]
+  have hm1Areg : ∀ i, (step m).rget (A i) = m.rget (A i) := by
+    intro i; rw [hstep0, rget_setPc, rget_rset_ne m SP (A i) callee.sp (by show 10 + i ≠ 2; omega)]
+  -- ==== G0.2: sd SP RA 0 → store ra at [callee.sp, +8) ====
+  have hdA1 : decode (fetch32 (step m)) = Instr.sd SP RA 0 := by
+    have h := decode_at L m (step m) p _ hemG0 hinst 1 (by simp) (by rw [hm1pc]) hm1mem
+    simpa using h
+  have haddr02 : (step m).rget SP + ((0 : BitVec 12).signExtend 64) = callee.sp := by
+    rw [hm1sp, show ((0 : BitVec 12).signExtend 64) = (0 : BitVec 64) from by decide]; simp
+  have hstep1 : step (step m)
+      = ((step m).storeWord callee.sp ra).setPc ((step m).pc + 4) := by
+    rw [step_sd (step m) SP RA _ hdA1, hm1ra, haddr02]
+  -- m2 := step (step m)
+  have hSN2 : stepN 2 m = step (step m) := rfl
+  have hm2sp : (step (step m)).rget SP = callee.sp := by
+    rw [hstep1, rget_setPc, State_storeWord_rget]; exact hm1sp
+  have hm2mem_ra : (step (step m)).loadWord callee.sp = ra := by
+    rw [hstep1, loadWord_setPc, Rv64i.loadWord_storeWord_same]
+  have hm2inst : Installed L (step (step m)) := by
+    rw [hstep1]
+    refine Installed_setPc L _ _ (Installed_storeWord_off_blob L (step m) callee.sp ra hm1inst hseg hblob
+      (by omega) ?_)
+    rcases hbdc with h | h
+    · exact Or.inl (by omega)
+    · exact Or.inr (by omega)
+  have hm2pc : (step (step m)).pc = L.codeBase + BitVec.ofNat 64 (p + 8) := by
+    rw [hstep1, pc_setPc, hm1pc, pc_add4]
+  have hm2Areg : ∀ i, (step (step m)).rget (A i) = m.rget (A i) := by
+    intro i; rw [hstep1, rget_setPc, State_storeWord_rget]; exact hm1Areg i
+  have hm2mem_off : ∀ a : Word, ¬ memRange a callee.sp (userOff fd) →
+      (step (step m)).mem a = m.mem a := by
+    intro a hna
+    rw [hstep1, mem_setPc]
+    rw [Rv64i.storeWord_mem_outside (step m) callee.sp ra a (by omega) ?_, hm1mem]
+    rcases Nat.lt_or_ge a.toNat callee.sp.toNat with hlt | hge
+    · exact Or.inl (by omega)
+    · exact Or.inr (by
+        have : ¬ a.toNat < callee.sp.toNat + userOff fd := fun hh => hna ⟨hge, hh⟩
+        omega)
+  -- ==== G1: park params ====
+  obtain ⟨kP, hPsp, hPpc, hPreg, hPinst, hPmem, hPslot, hPra⟩ :=
+    run_parkParams L fd callee.sp huser hnwc hseg hblob hbdc
+      fd.params.toList argVals 0 (p + 8) (step (step m)) hm2sp hm2pc hempseg hm2inst hparb hlen
+      (fun i hi => by rw [Nat.zero_add, hm2Areg]; exact hargs i hi)
+  -- ==== G2: zero-init the remaining slots ====
+  have hemzseg : Emitted L ((p + 8) + 4 * (fd.params.toList.zipIdx.flatMap fun pi =>
+        storeSlotI pi.1 (A pi.2)).length)
+      (((List.range (maxRegF fd + 1)).filter
+        (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).map
+        (fun r => Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r)))) := by
+    have h := Emitted_append_right L p
+      ([Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))), Instr.sd SP RA 0]
+        ++ (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)))
+      _ (Emitted_append_left _ _ _ _ hem)
+    rw [show p + 4 * ([Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))), Instr.sd SP RA 0]
+          ++ (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2))).length
+        = (p + 8) + 4 * (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+        from by simp only [List.length_append, List.length_cons, List.length_nil]; omega] at h
+    exact h
+  have hzbounds : ∀ r ∈ ((List.range (maxRegF fd + 1)).filter
+        (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)),
+      1 ≤ r ∧ r ≤ maxRegF fd := by
+    intro r hr
+    rw [List.mem_filter, List.mem_range] at hr
+    have h := hr.2
+    simp only [Bool.and_eq_true, bne_iff_ne] at h
+    exact ⟨Nat.pos_of_ne_zero h.1.1, Nat.le_of_lt_succ hr.1⟩
+  obtain ⟨kZ, hZsp, hZpc, hZreg, hZinst, hZmem, hZzero, hZpres, hZra⟩ :=
+    run_zeroSlots L fd callee.sp huser hnwc hseg hblob hbdc _ _ (stepN kP (step (step m)))
+      hPsp hPpc hemzseg hPinst hzbounds
+  -- membership characterization for the filtered zero-init set
+  have hz_iff : ∀ r : Nat, r ∈ (List.range (maxRegF fd + 1)).filter
+        (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)
+      ↔ (r ≤ maxRegF fd ∧ r ≠ 0 ∧ r ∉ fd.params.toList ∧ r ≠ fd.frameReg) := by
+    intro r
+    rw [List.mem_filter, List.mem_range]
+    simp only [Bool.and_eq_true, bne_iff_ne, Bool.not_eq_true', List.contains_eq_mem,
+               decide_eq_false_iff_not]
+    constructor
+    · rintro ⟨h1, ⟨⟨h2, h3⟩, h4⟩⟩; exact ⟨by omega, h2, h3, h4⟩
+    · rintro ⟨h1, h2, h3, h4⟩; exact ⟨by omega, ⟨⟨h2, h3⟩, h4⟩⟩
+  -- ==== G3: frameReg slot (or nothing) ====
+  obtain ⟨kF, hFsp, hFpc, hFinst, hFmem, hFslot, hFra⟩ :
+      ∃ kF, (stepN kF (stepN kZ (stepN kP (step (step m))))).rget SP = callee.sp
+          ∧ (stepN kF (stepN kZ (stepN kP (step (step m))))).pc
+              = L.codeBase + BitVec.ofNat 64 (p + 4 * prologueSize fd)
+          ∧ Installed L (stepN kF (stepN kZ (stepN kP (step (step m)))))
+          ∧ (∀ a : Word, ¬ memRange a callee.sp (userOff fd) →
+               (stepN kF (stepN kZ (stepN kP (step (step m))))).mem a
+                 = (stepN kZ (stepN kP (step (step m)))).mem a)
+          ∧ (∀ r, 1 ≤ r → r ≤ maxRegF fd →
+               (stepN kF (stepN kZ (stepN kP (step (step m))))).loadWord
+                   (callee.sp + BitVec.ofNat 64 (slotOff r))
+                 = if r = fd.frameReg then sp0 - BitVec.ofNat 64 fd.frameSize
+                   else (stepN kZ (stepN kP (step (step m)))).loadWord
+                     (callee.sp + BitVec.ofNat 64 (slotOff r)))
+          ∧ (stepN kF (stepN kZ (stepN kP (step (step m))))).loadWord callee.sp
+              = (stepN kZ (stepN kP (step (step m)))).loadWord callee.sp := by
+    -- prologueSize = 2 + |pseg| + |zseg| + |fseg|
+    have hpsz : prologueSize fd
+        = 2 + (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+          + ((List.range (maxRegF fd + 1)).filter
+              (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length
+          + (if fd.frameReg = 0 then 0 else 2) := by
+      by_cases hfr : fd.frameReg = 0
+      · simp only [prologueSize, prologueI, if_pos hfr, storeSlotI, List.length_append,
+                   List.length_cons, List.length_nil, List.length_map]
+      · simp only [prologueSize, prologueI, if_neg hfr, storeSlotI, List.length_append,
+                   List.length_cons, List.length_nil, List.length_map, List.length_singleton]
+    by_cases hfr0 : fd.frameReg = 0
+    · refine ⟨0, by rw [stepN_zero]; exact hZsp, ?_, by rw [stepN_zero]; exact hZinst,
+              fun a _ => by rw [stepN_zero], fun r hr1 hrm => ?_, by rw [stepN_zero]⟩
+      · rw [stepN_zero, hZpc]; apply pc_congr
+        rw [hpsz, show (if fd.frameReg = 0 then (0 : Nat) else 2) = 0 from if_pos hfr0]
+        generalize (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length = X
+        generalize ((List.range (maxRegF fd + 1)).filter
+          (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length = Y
+        omega
+      · rw [stepN_zero, if_neg (fun h => by rw [h, hfr0] at hr1; omega)]
+    · -- fseg = [addi T0 SP userOff, sd SP T0 (slotOff frameReg)]
+      have hfr1 : 1 ≤ fd.frameReg := Nat.pos_of_ne_zero hfr0
+      have hZpc' : (stepN kZ (stepN kP (step (step m)))).pc
+          = L.codeBase + BitVec.ofNat 64
+            ((p + 8) + 4 * (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+              + 4 * ((List.range (maxRegF fd + 1)).filter
+                (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length) :=
+        hZpc
+      have hemfseg : Emitted L
+          ((p + 8) + 4 * (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+            + 4 * ((List.range (maxRegF fd + 1)).filter
+              (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length)
+          ([Instr.addi T0 SP (BitVec.ofNat 12 (userOff fd))]
+            ++ storeSlotI fd.frameReg T0) := by
+        have h := Emitted_append_right L p _ _ hem
+        rw [show p + 4 * (([Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))),
+              Instr.sd SP RA 0]
+              ++ (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)))
+              ++ ((List.range (maxRegF fd + 1)).filter
+                  (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).map
+                  (fun r => Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r)))).length
+            = (p + 8)
+              + 4 * (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+              + 4 * ((List.range (maxRegF fd + 1)).filter
+                (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length
+            from by simp only [List.length_append, List.length_cons, List.length_nil,
+                               List.length_map]; omega] at h
+        rw [if_neg hfr0] at h; exact h
+      -- addi T0 SP userOff
+      have hdG3a : decode (fetch32 (stepN kZ (stepN kP (step (step m)))))
+          = Instr.addi T0 SP (BitVec.ofNat 12 (userOff fd)) := by
+        have h := decode_at L (stepN kZ (stepN kP (step (step m))))
+          (stepN kZ (stepN kP (step (step m)))) _ _ (Emitted_append_left _ _ _ _ hemfseg) hZinst 0
+          (by simp) (by rw [hZpc']; apply pc_congr; omega) rfl
+        simpa using h
+      have hstepG3a : step (stepN kZ (stepN kP (step (step m))))
+          = ((stepN kZ (stepN kP (step (step m)))).rset T0
+              (callee.sp + BitVec.ofNat 64 (userOff fd))).setPc
+            ((stepN kZ (stepN kP (step (step m)))).pc + 4) := by
+        rw [step_addi _ T0 SP _ hdG3a, hZsp, signExtend_ofNat_lt (userOff fd) (by omega)]
+      -- run the frameReg store from the post-addi state
+      have hT0v : (step (stepN kZ (stepN kP (step (step m))))).rget T0
+          = callee.sp + BitVec.ofNat 64 (userOff fd) := by
+        rw [hstepG3a, rget_setPc, rget_rset_self _ T0 _ (by decide)]
+      have hStSp : (step (stepN kZ (stepN kP (step (step m))))).rget SP = callee.sp := by
+        rw [hstepG3a, rget_setPc, rget_rset_ne _ T0 SP _ (by decide), hZsp]
+      have hStPc : (step (stepN kZ (stepN kP (step (step m))))).pc
+          = L.codeBase + BitVec.ofNat 64
+            ((p + 8) + 4 * (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+              + 4 * ((List.range (maxRegF fd + 1)).filter
+                (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length + 4) := by
+        rw [hstepG3a, pc_setPc, hZpc', pc_add4]
+      have hStInst : Installed L (step (stepN kZ (stepN kP (step (step m))))) := by
+        rw [hstepG3a]; exact Installed_setPc L _ _ (Installed_congr L _ _ (by rw [mem_rset]) hZinst)
+      have hStMem : (step (stepN kZ (stepN kP (step (step m))))).mem
+          = (stepN kZ (stepN kP (step (step m)))).mem := by rw [hstepG3a, mem_setPc, mem_rset]
+      have hemsd : Emitted L
+          ((p + 8) + 4 * (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+            + 4 * ((List.range (maxRegF fd + 1)).filter
+              (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length + 4)
+          [Instr.sd SP T0 (BitVec.ofNat 12 (slotOff fd.frameReg))] := by
+        have h := Emitted_append_right L _ [Instr.addi T0 SP (BitVec.ofNat 12 (userOff fd))] _ hemfseg
+        rw [List.length_singleton, Nat.mul_one, storeSlotI, if_neg hfr0] at h; exact h
+      obtain ⟨hSDpc, hSDreg, hSDinst, hSDmem, hSDslot, hSDslotne, hSDra⟩ :=
+        run_slotStore L fd (step (stepN kZ (stepN kP (step (step m))))) callee.sp
+          fd.frameReg T0 _ hfr1 hfrb hStSp hStPc hStInst hemsd huser hnwc hseg hblob hbdc
+      have hSN2Z : stepN 2 (stepN kZ (stepN kP (step (step m))))
+          = step (step (stepN kZ (stepN kP (step (step m))))) := rfl
+      have hmemA : (step (stepN kZ (stepN kP (step (step m))))).mem
+          = (stepN kZ (stepN kP (step (step m)))).mem := hStMem
+      refine ⟨2, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      · rw [hSN2Z, hSDreg SP]; exact hStSp
+      · rw [hSN2Z, hSDpc]; apply pc_congr; rw [hpsz, if_neg hfr0]; omega
+      · rw [hSN2Z]; exact hSDinst
+      · intro a ha; rw [hSN2Z, hSDmem a ha, hStMem]
+      · intro r hr1 hrm
+        rw [hSN2Z]
+        by_cases hrf : r = fd.frameReg
+        · subst hrf; rw [hSDslot, hT0v, hfb, if_pos rfl]
+        · rw [hSDslotne r hrf hr1 hrm, if_neg hrf]
+          exact loadWord_mem_congr _ _ _ hmemA
+      · rw [hSN2Z, hSDra]; exact loadWord_mem_congr _ _ _ hmemA
+  -- ==== final: assemble the callee StInv ====
+  have hfinal : stepN (2 + kP + kZ + kF) m
+      = stepN kF (stepN kZ (stepN kP (step (step m)))) := by
+    rw [show 2 + kP + kZ + kF = 2 + kP + kZ + kF from rfl, stepN_add, stepN_add, stepN_add, hSN2]
+  have hkeys : (fd.params.toList.zip argVals).map Prod.fst = fd.params.toList :=
+    List.map_fst_zip (by omega)
+  have hcalleeHole : ∀ a : Word, OffPriv L ((callee.sp, userOff fd) :: holes) callee.sp a →
+      ¬ memRange a callee.sp (userOff fd) := by
+    intro a ha hmr
+    exact ha.1 (Or.inr ⟨(callee.sp, userOff fd), List.mem_cons_self, hmr⟩)
+  -- the full off-frame memory agreement from entry through all segments
+  have hFmem_m : ∀ a : Word, ¬ memRange a callee.sp (userOff fd) →
+      (stepN (2 + kP + kZ + kF) m).mem a = m.mem a := by
+    intro a ha
+    rw [hfinal, hFmem a ha, hZmem a ha, hPmem a ha, hm2mem_off a ha]
+  refine ⟨2 + kP + kZ + kF, ?_, ?_, ?_, ?_⟩
+  · -- StInv
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · rw [hfinal]; exact hFsp
+    · intro r hr1 hrm
+      rw [hfinal, hFslot r hr1 hrm]
+      by_cases hrf : r = fd.frameReg
+      · subst hrf; rw [if_pos rfl, hcrg _ hr1, if_pos rfl]
+      · rw [if_neg hrf, hcrg _ hr1, if_neg hrf]
+        by_cases hrp : r ∈ fd.params.toList
+        · -- param: zeros preserve, park realises `withParams` (base-independent at a key)
+          rw [hZpres r hr1 hrm (by rw [hz_iff r]; rintro ⟨_, _, hc, _⟩; exact hc hrp),
+              hPslot r hr1 hrm]
+          exact parkFold_mem_indep r _ _ _ (by rw [hkeys]; exact hrp)
+        · -- non-param, non-frameReg: zeroed, and `withParams r = 0`
+          rw [hZzero r (by rw [hz_iff r]; exact ⟨hrm, by omega, hrp, hrf⟩)]
+          exact parkFold_not_mem r _ _ (by rw [hkeys]; exact hrp)
+    · rw [hfinal]; exact hFinst
+    · intro a ha
+      rw [hFmem_m a (hcalleeHole a ha)]; exact hmemF a ha
+    · rfl
+    · exact hcsp8
+    · intro h hh
+      rcases List.mem_cons.mp hh with rfl | hh'
+      · exact Nat.le_refl _
+      · exact Nat.le_trans (by omega) (hholes_ord h hh')
+    · intro h hh
+      rcases List.mem_cons.mp hh with rfl | hh'
+      · exact hnwc
+      · exact hholes_nw h hh'
+  · rw [hfinal]; exact hFpc
+  · rw [hfinal, hFra, hZra, hPra, hm2mem_ra]
+  · exact hFmem_m
 
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
