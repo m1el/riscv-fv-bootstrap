@@ -2,7 +2,10 @@
 """Extract core+input bytes/addresses from bare/hex0.elf and emit the Lean and
 Coq image modules used by the validation harnesses. Auto-generated outputs; do
 not edit them by hand."""
-data = open('/var/data/bootstrap/bare/hex0.bin', 'rb').read()
+import os
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+data = open(os.path.join(ROOT, 'bare', 'hex0.bin'), 'rb').read()
 base = 0x80000000
 core_addr, core_len = 0x80000088, 0x144
 in_addr, in_end = 0x800001cc, 0x8000021c
@@ -27,7 +30,7 @@ def coreBytes  : List Nat := {lst(core)}
 def inputBytes : List Nat := {lst(inp)}
 end Rv64i.Image
 '''
-open('/var/data/bootstrap/lean/Hex0/Image.lean', 'w').write(lean)
+open(os.path.join(ROOT, 'lean', 'Hex0', 'Image.lean'), 'w').write(lean)
 
 # ---- Coq ----
 coq = f'''(* AUTO-GENERATED from bare/hex0.elf by tools/gen_image.py. Do not edit. *)
@@ -40,6 +43,6 @@ Definition outAddr   : Z := {out_addr}.
 Definition coreBytes  : list Z := {zlst(core)}.
 Definition inputBytes : list Z := {zlst(inp)}.
 '''
-open('/var/data/bootstrap/coq/Image.v', 'w').write(coq)
+open(os.path.join(ROOT, 'coq', 'Image.v'), 'w').write(coq)
 
 print(f"core_len={len(core)} input_len={len(inp)} input={inp!r}")

@@ -3,10 +3,12 @@
 Coq image modules used by the hex1 validation harnesses. Addresses are read
 from the ELF symbol table (objdump -t). Auto-generated outputs; do not edit
 them by hand."""
+import os
 import subprocess
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = 0x80000000
-ELF = '/var/data/bootstrap/bare/hex1.elf'
+ELF = os.path.join(ROOT, 'bare', 'hex1.elf')
 
 syms = {}
 for line in subprocess.run(['riscv64-linux-gnu-objdump', '-t', ELF],
@@ -29,7 +31,7 @@ for line in sections.splitlines():
         text_end = int(parts[3], 16) + int(parts[2], 16)
 core_len = text_end - core_addr
 
-data = open('/var/data/bootstrap/bare/hex1.bin', 'rb').read()
+data = open(os.path.join(ROOT, 'bare', 'hex1.bin'), 'rb').read()
 core = data[core_addr - BASE: core_addr - BASE + core_len]
 inp = data[in_addr - BASE: in_end - BASE]
 
@@ -53,7 +55,7 @@ def coreBytes  : List Nat := {lst(core)}
 def inputBytes : List Nat := {lst(inp)}
 end Rv64i.Image1
 '''
-open('/var/data/bootstrap/lean/Hex1/Image.lean', 'w').write(lean)
+open(os.path.join(ROOT, 'lean', 'Hex1', 'Image.lean'), 'w').write(lean)
 
 coq = f'''(* AUTO-GENERATED from bare/hex1.elf by tools/gen_image1.py. Do not edit. *)
 From Coq Require Import ZArith List. Import ListNotations.
@@ -66,7 +68,7 @@ Definition lblAddr   : Z := {lbl_addr}.
 Definition coreBytes  : list Z := {zlst(core)}.
 Definition inputBytes : list Z := {zlst(inp)}.
 '''
-open('/var/data/bootstrap/coq/Image1.v', 'w').write(coq)
+open(os.path.join(ROOT, 'coq', 'Image1.v'), 'w').write(coq)
 
 print(f"core1: addr={core_addr:#x} len={len(core)} "
       f"input: addr={in_addr:#x} len={len(inp)} out={out_addr:#x} lbl={lbl_addr:#x}")

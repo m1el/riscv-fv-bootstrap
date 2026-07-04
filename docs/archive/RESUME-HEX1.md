@@ -141,8 +141,8 @@ the offset/lemma notes they contain). Tasks #5/#6 (Lean Refine1) CLOSED.
 
 1. Write each chunk as a python append-script via the Write tool to
    /tmp/apply_chunkN.py (heredocs in Bash LOSE cwd — the shell resets to
-   /var/data/bootstrap between calls; scripts use the absolute path).
-2. `cd /var/data/bootstrap/lean && python3 /tmp/apply_chunkN.py && lake env
+   the repo root between calls; scripts use the absolute path).
+2. `cd lean && python3 /tmp/apply_chunkN.py && lake env
    lean Hex1/Refine.lean ...` — compile, iterate with small patch scripts.
 3. Commit per green chunk (user explicitly wants intermediate checkpoints).
 4. Port hex0 idioms VERBATIM where a corresponding lemma exists

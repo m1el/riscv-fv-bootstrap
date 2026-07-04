@@ -7,7 +7,7 @@ worker agent must never see it (it names the original artifacts and the
 steering policy). It doubles as a template for driving any long proof campaign
 in an agent.
 
-Live experiment: `/var/data/hex0-repro/` (started 2026-06-06).
+Live experiment: the `hex0-repro/` workspace (started 2026-06-06).
 
 ## 1. The experiment
 
@@ -23,7 +23,7 @@ spec?
   subset hint, no memory layout hint) and `hex0.c` (the reference decoder).
 - The worker runs inside a docker container; only the clean workspace
   (`work/` → `/work`) and its own codex home are mounted. The original repo
-  (`/var/data/bootstrap`) is not reachable from inside.
+  (this repo) is not reachable from inside.
 - Every piece of supervisor help is recorded (§5). The final claim is only as
   strong as the steering log is clean.
 
@@ -34,7 +34,7 @@ hex1 campaign cost $742.90 / 47h of Claude sessions (`sessions/`).
 ## 2. Harness layout
 
 ```
-/var/data/hex0-repro/
+hex0-repro/
   Dockerfile            ubuntu 24.04 + riscv64-linux-gnu-gcc + qemu-system-riscv64
                         + elan/Lean v4.30.0 (baked) + static codex binary
   codex-home/           mounted at /root/.codex (config: openrouter + ds4-pro,

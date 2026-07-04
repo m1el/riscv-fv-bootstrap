@@ -220,7 +220,7 @@ refinement and step/transport theorems is functional extensionality.
 ```text
 cd coq
 make -j2
-coqc -q -R /var/data/bootstrap/coq Hex0Coq /tmp/Hex0CoqAssumptions.v
+coqc -q -R <repo>/coq Hex0Coq /tmp/Hex0CoqAssumptions.v
 rg -n "^\s*(Admitted|admit|Axiom|Parameter|Variable)\b" coq --glob '*.v'
 ```
 

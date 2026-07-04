@@ -1,6 +1,6 @@
 # Project documentation index
 
-Documentation for the verified bootstrap tower (`/var/data/bootstrap`).
+Documentation for the verified bootstrap tower (this repository).
 New docs go in this directory; add a line for each new doc below.
 Outdated/inactive docs (completed handoffs, superseded plans, frozen status
 snapshots) move to [archive/](archive/README.md) — see the archive index there.

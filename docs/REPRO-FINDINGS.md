@@ -5,7 +5,7 @@ spec, the verified-hex0 artifact — a bare-metal RV64 decoder on `qemu virt`
 **plus a sorry-free, axiom-clean, universally-quantified Lean 4 proof that the
 running bytes implement the spec**? Method and steering policy: [archive/REPRO-SUPERVISOR.md](archive/REPRO-SUPERVISOR.md).
 
-Run across 2026-06-06 → 06-15 at `/var/data/hex0-repro/` (per-arm `work-*/`,
+Run across 2026-06-06 → 06-15 in the `hex0-repro/` workspace (per-arm `work-*/`,
 ledgers `runs/*ledger.csv`, archives `archive/<arm>/` with git bundles + session
 logs + per-arm READMEs). Total spend ≈ **$148** across all arms (vs the original
 Claude campaign yardstick: the *whole* project was $742.90 / 47h; hex0's Lean

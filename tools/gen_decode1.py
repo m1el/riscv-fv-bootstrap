@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Generate lean/Hex1/DecodeFacts.lean: one kernel-checked decode fact per
 core1 instruction, parsed from objdump. Auto-generated; do not edit output."""
+import os
 import re
 import subprocess
 
-ELF = '/var/data/bootstrap/bare/hex1.elf'
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ELF = os.path.join(ROOT, 'bare', 'hex1.elf')
 CORE_ADDR = None
 
 out = subprocess.run(
@@ -93,6 +95,6 @@ for off, word, mnem, ops, term in insns:
     lines.append(f"theorem dec_{off} : Rv64i.decode (wordAt1 {off}) = {term} := by decide")
 lines.append("")
 lines.append("end Hex1.Refine")
-open('/var/data/bootstrap/lean/Hex1/DecodeFacts.lean', 'w').write("\n".join(lines) + "\n")
+open(os.path.join(ROOT, 'lean', 'Hex1', 'DecodeFacts.lean'), 'w').write("\n".join(lines) + "\n")
 print(f"core1 at {CORE_ADDR:#x}: {len(insns)} instructions, "
       f"{len(insns)*4} bytes")
