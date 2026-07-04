@@ -200,7 +200,10 @@ Concretely (older entries retained below):
      `(dat, dpos)` context + real clen/cref arms, validated against `resolveOne`;
      `run_synth`/`run_cref` are the axiom-clean simulators; the flat `hdat`/`hdbase`/
      `hdpos` hypotheses are the Phase-2 layout obligations.
-  3. **`lower_sim_cf` `call` (Phase 5) is the last statement-level `sorry`.** Then
+  3. **`lower_sim_cf` `call` (Phase 5) is the last statement-level `sorry`.**
+     Detailed worked plan (2026-07-04): [RESUME-CALL.md](RESUME-CALL.md) — the
+     fuel-IH-on-the-callee-body design, the dead-hole `StInv` repair, and the
+     commit-ordered step list. Start there. Then
      Phases 1/2 (encode/decode; AsmFacts —
      `Emitted L pos (emit stmt)` from the real pipeline, today only `#guard`-
      validated), then 6 (**prog_sim**).
