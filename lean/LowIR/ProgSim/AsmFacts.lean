@@ -17,6 +17,8 @@ at `codeBase` (given every emitted instruction is `WF`).
 -/
 
 open LowIR Rv64i
+open LowIR.Prog (dataSegment Env FunDef Name)
+open LowIR.Compile (userOff)
 
 namespace LowIR.ProgSim.AsmFacts
 
@@ -139,5 +141,27 @@ theorem installed_code_of_mem (L : Layout) (m : State)
         (by have := byteEq 3 (by omega)
             rw [show (3 : Word) = BitVec.ofNat 64 3 from rfl, hbase 3]; simpa using this)]
   exact decode_encode _ (hwf _ (List.getElem_mem hj))
+
+/-- **`Installed` from a memory holding the blob.** Decoupled into the code and
+    data byte hypotheses a `loadMem`-style memory supplies directly: `hcode` for
+    `asmBytes L.instrs` at `codeBase`, `hdata` for `dataSegment L.data` at
+    `codeBase + segStart`. -/
+theorem installed_of_mem (L : Layout) (m : State)
+    (hwf : ∀ i, i ∈ L.instrs → WF i)
+    (hcode : ∀ n, n < (asmBytes L.instrs).length →
+               m.mem (L.codeBase + BitVec.ofNat 64 n) = (asmBytes L.instrs).getD n 0)
+    (hdata : ∀ i, i < (dataSegment L.data).length →
+               m.mem (L.codeBase + BitVec.ofNat 64 (L.segStart + i))
+                 = (dataSegment L.data).getD i 0) :
+    Installed L m := by
+  refine ⟨fun j hj => installed_code_of_mem L m hwf hcode j hj, fun i hi => ?_⟩
+  rw [hdata i hi]; exact (List.getElem_eq_getD 0).symm
+
+/-! ## §4 A trivial flat obligation: `pad = userPad` satisfies `hpad`. -/
+
+/-- `userPad` (prog_sim's `pad`) satisfies the `call` case's `hpad` obligation. -/
+theorem userPad_eq (env : Env) (g : Name) (gd : FunDef)
+    (h : List.lookup g env = some gd) : userPad env g = userOff gd := by
+  simp only [userPad, h, Option.elim]
 
 end LowIR.ProgSim.AsmFacts
