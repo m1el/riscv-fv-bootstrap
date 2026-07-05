@@ -1445,7 +1445,7 @@ theorem mem_le_foldl_max (x : Nat) : ∀ (l : List Nat) (a : Nat), x ∈ l → x
       · exact Nat.le_trans (Nat.le_max_right a x) (foldl_max_ge_acc ys (max a x))
       · exact mem_le_foldl_max x ys (max a y) h
 
-set_option maxHeartbeats 1600000 in
+set_option maxHeartbeats 400000 in
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat} {dpos fnPos : Name → Nat}
