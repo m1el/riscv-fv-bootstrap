@@ -58,6 +58,26 @@ write-footprint-so-far on the frame). It is the interesting memory-safety
 statement anyway. **Not blocking Phase 5; owed as a follow-up.** See
 PROOF-COMPLEXITY §3 ladder — slot it there when the borrow/`Wf` layer lands.
 
+**STATUS (2026-07-05) — zero-init IMPLEMENTED + green (commits `ec60b1a`, `53948c9`).**
+IL `frameEnter` zeroes the frame (`zeroRange`); `Compile.prologue` emits the
+zero-frame segment; `prologueI = prologuePreI ++ frameZeroI`. New sorry-free
+atoms: `storeWord_zero_mem_inside` (WordMem), `run_zeroFrame` (CtrlSim).
+`prologue_sim` reworked — its interface CHANGED, so seg-3 (below) must adapt:
+- `hmemF` WEAKENED to `∀ a, OffPriv … → ¬ memRange a (callee.sp + userOff) frameSize
+  → callee.mem a = m.mem a` (agreement OFF the user frame only). Discharge it from
+  the caller's c4: off the frame ⇒ `a ≥ s.sp` region ⇒ caller `OffPriv` (needs
+  `callee.mem = zeroRange s.mem …` so `callee.mem a = s.mem a` off the frame).
+- NEW `hcmemZ : ∀ a, memRange a (callee.sp + userOff) frameSize → callee.mem a = 0`
+  — the frame-is-zero fact; derive from `hfe` (`frameEnter`'s `zeroRange`, unfold
+  `zeroRange` + the `memRange`↔`frameBase` arithmetic; `frameBase = callee.sp +
+  userOff` under P1).
+- NEW `hbdcF : … ∨ callee.sp + totalFrame fd ≤ codeBase` (whole-frame off-blob, for
+  the frame stores) — from the caller's `hbd` disjunct-2 (`s.sp = callee.sp +
+  totalFrame ≤ codeBase`) or disjunct-1 (`codeBase+blob ≤ stackLo ≤ callee.sp`).
+- 4th conclusion now preserves off `[callee.sp, totalFrame)` (was `userOff`).
+Everything else in the §6 seg-3 recipe stands. **Segs 3–6 remain** (the lone
+`sorry`, `CtrlSim.lean` `case call`).
+
 ## 0. Mission
 
 Close `lower_sim_cf`'s `call` case. After it: no statement-level `sorry`
