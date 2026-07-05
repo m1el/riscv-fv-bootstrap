@@ -221,16 +221,18 @@ def compile : Stmt → List Instr
     reads back. We assemble each instruction with `encode` and assert
     `decode (encode i) = i` (round-trip) as a checked theorem. -/
 
-private def w32 (parts : List Nat) : BitVec 32 := BitVec.ofNat 32 (parts.foldl (· ||| ·) 0)
+-- (non-`private` so the Phase-1 `decode ∘ encode` round-trip proof in
+-- `LowIR.ProgSim.EncodeFacts` can unfold them by name; semantics unchanged).
+def w32 (parts : List Nat) : BitVec 32 := BitVec.ofNat 32 (parts.foldl (· ||| ·) 0)
 
 /-- B-type immediate scatter (matches `decode`'s `immB`). -/
-private def encB (imm : BitVec 13) : List Nat :=
+def encB (imm : BitVec 13) : List Nat :=
   let o := imm.toNat
   [ ((o >>> 12) &&& 1) <<< 31, ((o >>> 11) &&& 1) <<< 7,
     ((o >>> 5) &&& 0x3F) <<< 25, ((o >>> 1) &&& 0xF) <<< 8 ]
 
 /-- J-type immediate scatter (matches `decode`'s `immJ`). -/
-private def encJ (imm : BitVec 21) : List Nat :=
+def encJ (imm : BitVec 21) : List Nat :=
   let o := imm.toNat
   [ ((o >>> 20) &&& 1) <<< 31, ((o >>> 12) &&& 0xFF) <<< 12,
     ((o >>> 11) &&& 1) <<< 20, ((o >>> 1) &&& 0x3FF) <<< 21 ]

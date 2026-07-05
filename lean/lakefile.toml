@@ -56,7 +56,7 @@ roots = ["LowIR.CompileTests"]
 
 [[lean_lib]]
 name = "LowIRProgSim"               # the compile_sim-for-Prog proof campaign
-roots = ["LowIR.ProgSim.Defs", "LowIR.ProgSim.SlotFacts", "LowIR.ProgSim.MemFacts", "LowIR.ProgSim.StmtSim", "LowIR.ProgSim.CtrlSim"]
+roots = ["LowIR.ProgSim.Defs", "LowIR.ProgSim.SlotFacts", "LowIR.ProgSim.MemFacts", "LowIR.ProgSim.StmtSim", "LowIR.ProgSim.CtrlSim", "LowIR.ProgSim.EncodeFacts"]
 
 [[lean_lib]]
 name = "LowIRSSA"                   # the SSA experiment rung
