@@ -126,6 +126,15 @@ def St.storeWord (s : St) (a : Word) (v : Word) : St :=
     ).storeByte (a + 6) ((v >>> 48).setWidth 8)
     ).storeByte (a + 7) ((v >>> 56).setWidth 8)
 
+/-- Zero out `[base, base+len)` in a byte map — fresh-frame initialization, so a
+    callee reads `0` (not a returned sibling's leftover slot-bytes) for any
+    not-yet-written frame byte. This is the IL half of the zero-init decision
+    (RESUME-CALL ★); the machine prologue's zero-frame segment is the other half.
+    Without it the callee's entry `StInv` memory agreement is FALSE on the user
+    frame (a sibling's dead `[ra][slots]` can land inside a later, larger frame). -/
+def zeroRange (mem : Word → Byte) (base : Word) (len : Nat) : Word → Byte :=
+  fun a => if base.toNat ≤ a.toNat ∧ a.toNat < base.toNat + len then 0 else mem a
+
 /-- Build the callee's entry state (D7/D8): check stack overflow against
     `stackLo`, fresh zero registers with params bound to the argument VALUES,
     frame base in `frameReg` (binds after params — `wf` keeps them disjoint),
@@ -150,7 +159,7 @@ def frameEnter (stackLo : Word) (fd : FunDef) (pad : Nat) (argVals : List Word)
       (fd.params.toList.zip argVals).foldl
         (fun rf pv => fun r => if r = pv.1 then pv.2 else rf r) (fun _ => 0)
     some { regs := fun r => if r = fd.frameReg then frameBase else withParams r
-           mem  := mem
+           mem  := zeroRange mem frameBase fd.frameSize
            sp   := newSp }
 
 /-- Clocked big-step semantics with outcomes. Ctrl's equations verbatim for the

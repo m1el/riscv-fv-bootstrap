@@ -7,6 +7,57 @@ Phase 5 sketch, §6 discipline); this doc supersedes that Phase-5 sketch with a
 worked design. Everything below is grounded in the code as of commit `5a88ef2`;
 line numbers refer to that state.
 
+## ★ ZERO-INIT DECISION (2026-07-05) — resolves the seg-3 `hmemF` blocker
+
+**The blocker (found while assembling seg 3).** `prologue_sim`'s `hmemF`
+requires IL↔machine memory agreement over the callee's `OffPriv` domain, which
+INCLUDES the callee's user frame `[s.sp−frameSize, s.sp)`. The committed C2
+design (`OffPriv` = off-holes ∧ off free-stack-below-sp, `Defs.lean:377`)
+CANNOT supply it, and it is not merely unproven — it is **false**. Minimal
+counterexample: `main` calls `foo()` (tiny frame) then `bar()` (64-byte
+buffer). `foo`'s prologue writes `foo`'s return address into `[s.sp−16, s.sp)`
+on the MACHINE; IL's `frameEnter` writes nothing there. After `foo` returns,
+that region is a dead slot-hole holding `foo`'s RA (machine) vs `0` (IL). When
+`bar` is entered, `bar`'s user frame `[s.sp−64, s.sp)` CONTAINS `[s.sp−16,
+s.sp)`, and `bar`'s prologue zeroes only its slots — so `foo`'s stale RA
+survives. `hmemF` demands `machine = IL` there. `foo`'s RA ≠ 0. **False.**
+
+The disagreement is stale slot-bytes from a returned sibling landing inside a
+later, larger sibling's frame. It exists whether or not `bar` reads it — so
+"functions never read uninit" (a semantic stance we DO adopt) does not make
+the two memories equal; it only makes the divergence unobserved. To make c4 a
+TRUE proposition on the frame there are exactly two moves: (a) make the bytes
+equal — **zero-init**; or (b) exclude them from c4 until written —
+write-tracked agreement (a W2-scale core-invariant retrofit + a permanent
+per-program obligation). We chose (a): cheaper (~300 mechanical lines vs
+~500–700 invariant surgery), lower risk, and it leaves the plain-equality
+`StInv` that made W2–W6 tractable UNTOUCHED.
+
+Exit stack state is NOT observed (`prog_sim` agrees only off `[stackLo, sp0)`,
+`Defs.lean:466`; the caller's restored c4 excludes `[stackLo, s.sp)`), so no
+dead-hole *history* tracking (the rejected "ghost hole-list / CallChain"
+option) is needed — that was over-engineering for an unobserved region.
+
+**What zero-init is:** IL `frameEnter` zeroes `[frameBase, frameBase+frameSize)`
+in `callee.mem`; the machine prologue gains a zero-frame segment (`sd SP x0` at
+offsets `[userOff, totalFrame)`). Then at the callee body both sides read `0`
+for any not-yet-written frame byte, agreement holds by construction, and
+`prologue_sim`'s `hmemF` weakens to the caller-c4 form (agreement off the whole
+callee frame `[callee.sp, s.sp)`, i.e. only `≥ s.sp` — directly the caller's
+c4). `pad = fun _ => 0` still reproduces pre-P1 behavior; the differential
+oracles are re-validated.
+
+**⚠ STILL OWED — a real `no-read-uninit` proof (deferred, tracked).** Zero-init
+DISCHARGES the correctness concern by construction (uninit reads are defined as
+`0` on both sides), so it is not a soundness gap. But "functions never read
+uninitialized frame memory" remains a genuine memory-safety property we want as
+an EXPLICIT theorem/well-formedness obligation, per-program (hex0/hex1/…),
+sitting alongside the §3.4 store-footprint machinery in RESUME-PROGSIM (the
+`execT` instrumented semantics extended to READS: a run's read-footprint ⊆ its
+write-footprint-so-far on the frame). It is the interesting memory-safety
+statement anyway. **Not blocking Phase 5; owed as a follow-up.** See
+PROOF-COMPLEXITY §3 ladder — slot it there when the borrow/`Wf` layer lands.
+
 ## 0. Mission
 
 Close `lower_sim_cf`'s `call` case. After it: no statement-level `sorry`
