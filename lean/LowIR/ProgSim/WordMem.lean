@@ -141,5 +141,45 @@ theorem loadWord_storeWord_disjoint (s : State) (a a' v : Word)
     simp only [BitVec.toNat_add, BitVec.reduceToNat, Nat.reducePow]
     omega)
 
+/-- **Zero-store, byte view**: `storeWord a 0` sets every byte in its window
+    `[a, a+8)` to `0`. This is the machine half of the frame-zeroing agreement —
+    the IL `zeroRange` sets those same bytes to `0`, so `callee.mem = m.mem`
+    there by construction. (No-wrap `hwa`; `x` pinned to one of the eight stored
+    offsets, whose value is `(0 >>> k).setWidth 8 = 0`.) -/
+theorem storeWord_zero_mem_inside (s : State) (a x : Word)
+    (_hwa : a.toNat + 8 ≤ 2 ^ 64) (hlo : a.toNat ≤ x.toNat) (hhi : x.toNat < a.toNat + 8) :
+    (s.storeWord a (0 : Word)).mem x = 0 := by
+  have hxe : x = a + BitVec.ofNat 64 (x.toNat - a.toNat) := by
+    apply BitVec.eq_of_toNat_eq
+    rw [BitVec.toNat_add, BitVec.toNat_ofNat,
+        Nat.mod_eq_of_lt (show x.toNat - a.toNat < 2 ^ 64 by omega)]
+    rw [show a.toNat + (x.toNat - a.toNat) = x.toNat from by omega, Nat.mod_eq_of_lt x.isLt]
+  have hd : x.toNat - a.toNat < 8 := by omega
+  -- pin the offset to a concrete literal, then `simp` decides the eight equalities
+  -- `a + ofNat L = a + k` and reduces every stored byte `(0 >>> k).setWidth 8` to 0.
+  rcases Nat.lt_or_ge (x.toNat - a.toNat) 4 with h4 | h4
+  · rcases Nat.lt_or_ge (x.toNat - a.toNat) 2 with h2 | h2
+    · rcases Nat.lt_or_ge (x.toNat - a.toNat) 1 with h1 | h1
+      · rw [show x.toNat - a.toNat = 0 from by omega] at hxe
+        subst hxe; simp [State.storeWord, State.storeByte]
+      · rw [show x.toNat - a.toNat = 1 from by omega] at hxe
+        subst hxe; simp [State.storeWord, State.storeByte]
+    · rcases Nat.lt_or_ge (x.toNat - a.toNat) 3 with h3 | h3
+      · rw [show x.toNat - a.toNat = 2 from by omega] at hxe
+        subst hxe; simp [State.storeWord, State.storeByte]
+      · rw [show x.toNat - a.toNat = 3 from by omega] at hxe
+        subst hxe; simp [State.storeWord, State.storeByte]
+  · rcases Nat.lt_or_ge (x.toNat - a.toNat) 6 with h6 | h6
+    · rcases Nat.lt_or_ge (x.toNat - a.toNat) 5 with h5 | h5
+      · rw [show x.toNat - a.toNat = 4 from by omega] at hxe
+        subst hxe; simp [State.storeWord, State.storeByte]
+      · rw [show x.toNat - a.toNat = 5 from by omega] at hxe
+        subst hxe; simp [State.storeWord, State.storeByte]
+    · rcases Nat.lt_or_ge (x.toNat - a.toNat) 7 with h7 | h7
+      · rw [show x.toNat - a.toNat = 6 from by omega] at hxe
+        subst hxe; simp [State.storeWord, State.storeByte]
+      · rw [show x.toNat - a.toNat = 7 from by omega] at hxe
+        subst hxe; simp [State.storeWord, State.storeByte]
+
 end Rv64i
 

@@ -215,10 +215,11 @@ def matchesReal (dat : Data) (dats : List (Name × Nat)) (body : PStmt) : Bool :
     proof leans on it. -/
 open LowIR.Compile (compileProgT)
 
-/-- The RESOLVED (label-free) prologue — a direct transcription of
-    `Compile.prologue` with `.ins` unwrapped and `storeSlot` → `storeSlotI`
-    (`Compile.SP`/`RA`/`A`/`T0` are physical registers, position-independent). -/
-def prologueI (fd : FunDef) : List Instr :=
+/-- The pre-frame part of the resolved prologue (a direct transcription of
+    `Compile.prologue` with `.ins` unwrapped and `storeSlot` → `storeSlotI`,
+    minus the zero-frame segment): drop sp, save ra, park params, zero slots,
+    materialize frameReg. -/
+def prologuePreI (fd : FunDef) : List Instr :=
   let params := fd.params.toList
   [Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))), Instr.sd SP RA 0]
   ++ params.zipIdx.flatMap (fun pi => storeSlotI pi.1 (A pi.2))
@@ -227,6 +228,14 @@ def prologueI (fd : FunDef) : List Instr :=
        (fun r => Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r)))
   ++ (if fd.frameReg = 0 then [] else
         [Instr.addi T0 SP (BitVec.ofNat 12 (userOff fd))] ++ storeSlotI fd.frameReg T0)
+
+/-- The zero-frame segment (`sd SP 0` at each user-frame word offset) — the
+    machine half of the zero-init frame agreement (RESUME-CALL ★). -/
+def frameZeroI (fd : FunDef) : List Instr :=
+  (List.range (fd.frameSize / 8)).map
+    (fun i => Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i)))
+
+def prologueI (fd : FunDef) : List Instr := prologuePreI fd ++ frameZeroI fd
 
 /-- The RESOLVED epilogue: rets → `a0..`, restore ra + sp, `jalr x0 ra 0`. -/
 def epilogueI (fd : FunDef) : List Instr :=
@@ -834,6 +843,111 @@ theorem run_zeroSlots (L : Layout) (fd : FunDef) (sp : Word)
         rw [stepN_add, hstep1, hpresK target ht1 htm htni.2, hslotne target htni.1 ht1 htm]
       · rw [stepN_add, hstep1, hraK, hra1]
 
+/-- Run the prologue's zero-frame segment (`sd SP 0 (userOff + 8·i)` for
+    `i ∈ range N`): zeroes the user-frame bytes `[sp+userOff, sp+userOff+8N)`
+    (matching the IL `frameEnter`'s `zeroRange`), and preserves every register,
+    `Installed`, and all memory OUTSIDE that window (the slots + saved ra below,
+    anything at/above). The machine half of the zero-init frame agreement. -/
+theorem run_zeroFrame (L : Layout) (fd : FunDef) (sp : Word)
+    (hfrO : userOff fd + fd.frameSize ≤ 2000)
+    (hnwf : sp.toNat + (userOff fd + fd.frameSize) ≤ 2 ^ 64)
+    (hseg : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
+    (hbd : L.codeBase.toNat + L.blobLen ≤ sp.toNat
+             ∨ sp.toNat + (userOff fd + fd.frameSize) ≤ L.codeBase.toNat) :
+    ∀ (N q : Nat) (m : State),
+      8 * N ≤ fd.frameSize →
+      m.rget SP = sp →
+      m.pc = L.codeBase + BitVec.ofNat 64 q →
+      Emitted L q ((List.range N).map
+        (fun i => Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i)))) →
+      Installed L m →
+      ∃ k, (stepN k m).rget SP = sp
+         ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (q + 4 * N)
+         ∧ (∀ t, (stepN k m).rget t = m.rget t)
+         ∧ Installed L (stepN k m)
+         ∧ (∀ a : Word, memRange a (sp + BitVec.ofNat 64 (userOff fd)) (8 * N)
+              → (stepN k m).mem a = 0)
+         ∧ (∀ a : Word, ¬ memRange a (sp + BitVec.ofNat 64 (userOff fd)) (8 * N)
+              → (stepN k m).mem a = m.mem a)
+         ∧ (∀ a : Word, a.toNat + 8 ≤ sp.toNat + userOff fd
+              → (stepN k m).loadWord a = m.loadWord a) := by
+  intro N
+  induction N with
+  | zero =>
+      intro q m _ hsp hpc _ hinst
+      refine ⟨0, by simpa using hsp, ?_, fun t => by rw [stepN_zero], by simpa using hinst,
+              ?_, fun a _ => by rw [stepN_zero], fun a _ => by rw [stepN_zero]⟩
+      · simp only [stepN_zero, Nat.mul_zero, Nat.add_zero]; exact hpc
+      · intro a ha; exact absurd ha (by unfold memRange; omega)
+  | succ N ih =>
+      intro q m hN hsp hpc hem hinst
+      rw [List.range_succ, List.map_append] at hem
+      have hemFirst : Emitted L q ((List.range N).map
+          (fun i => Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i)))) :=
+        Emitted_append_left _ _ _ _ hem
+      have hemLast : Emitted L (q + 4 * N)
+          [Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * N))] := by
+        have h := Emitted_append_right L q ((List.range N).map
+          (fun i => Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i)))) _ hem
+        rwa [List.length_map, List.length_range] at h
+      obtain ⟨kn, hspN, hpcN, hregN, hinstN, hzeroN, hpresN, hloadN⟩ :=
+        ih q m (by omega) hsp hpc hemFirst hinst
+      have hoff : userOff fd + 8 * N < 2 ^ 11 := by omega
+      have haddr : (sp + BitVec.ofNat 64 (userOff fd + 8 * N)).toNat
+          = sp.toNat + (userOff fd + 8 * N) := by
+        rw [BitVec.toNat_add, BitVec.toNat_ofNat,
+            Nat.mod_eq_of_lt (show userOff fd + 8 * N < 2 ^ 64 by omega),
+            Nat.mod_eq_of_lt (by omega)]
+      have hbaseN : (sp + BitVec.ofNat 64 (userOff fd)).toNat = sp.toNat + userOff fd := by
+        rw [BitVec.toNat_add, BitVec.toNat_ofNat,
+            Nat.mod_eq_of_lt (show userOff fd < 2 ^ 64 by omega), Nat.mod_eq_of_lt (by omega)]
+      have hwa : (sp + BitVec.ofNat 64 (userOff fd + 8 * N)).toNat + 8 ≤ 2 ^ 64 := by
+        rw [haddr]; omega
+      have hd : decode (fetch32 (stepN kn m))
+          = Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * N)) := by
+        have h := decode_at L (stepN kn m) (stepN kn m) (q + 4 * N) _ hemLast hinstN 0 (by simp)
+          (by rw [hpcN]; apply pc_congr; omega) rfl
+        simpa using h
+      have hr0 : (stepN kn m).rget 0 = 0 := rfl
+      have hstep : step (stepN kn m)
+          = ((stepN kn m).storeWord (sp + BitVec.ofNat 64 (userOff fd + 8 * N)) 0).setPc
+              ((stepN kn m).pc + 4) := by
+        rw [step_sd (stepN kn m) SP 0 _ hd, hspN, signExtend_ofNat_lt _ hoff, hr0]
+      have hstep1 : stepN (kn + 1) m = step (stepN kn m) := by rw [stepN_add]; rfl
+      have hInstStore : Installed L
+          ((stepN kn m).storeWord (sp + BitVec.ofNat 64 (userOff fd + 8 * N)) 0) := by
+        apply Installed_storeWord_off_blob L (stepN kn m) _ _ hinstN hseg hblob hwa
+        rw [haddr]; rcases hbd with hbd | hbd
+        · exact Or.inl (by omega)
+        · exact Or.inr (by omega)
+      refine ⟨kn + 1, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      · rw [hstep1, hstep, rget_setPc, State_storeWord_rget]; exact hspN
+      · rw [hstep1, hstep, pc_setPc, hpcN, pc_add4]; apply pc_congr; omega
+      · intro t; rw [hstep1, hstep, rget_setPc, State_storeWord_rget]; exact hregN t
+      · rw [hstep1, hstep]; exact Installed_setPc L _ _ hInstStore
+      · intro a ha
+        rw [hstep1, hstep, mem_setPc]
+        simp only [memRange, hbaseN] at ha
+        rcases Nat.lt_or_ge a.toNat (sp.toNat + userOff fd + 8 * N) with hin | hin
+        · rw [Rv64i.storeWord_mem_outside (stepN kn m) _ 0 a hwa (Or.inl (by rw [haddr]; omega))]
+          exact hzeroN a (by simp only [memRange, hbaseN]; refine ⟨?_, ?_⟩ <;> omega)
+        · exact Rv64i.storeWord_zero_mem_inside (stepN kn m) _ a hwa
+            (by rw [haddr]; omega) (by rw [haddr]; omega)
+      · intro a ha
+        rw [hstep1, hstep, mem_setPc]
+        simp only [memRange, hbaseN] at ha
+        rcases Nat.lt_or_ge a.toNat (sp.toNat + userOff fd) with hlt | hge
+        · rw [Rv64i.storeWord_mem_outside (stepN kn m) _ 0 a hwa (Or.inl (by rw [haddr]; omega))]
+          exact hpresN a (by simp only [memRange, hbaseN]; rintro ⟨_, _⟩; omega)
+        · rw [Rv64i.storeWord_mem_outside (stepN kn m) _ 0 a hwa (Or.inr (by rw [haddr]; omega))]
+          exact hpresN a (by simp only [memRange, hbaseN]; rintro ⟨_, _⟩; omega)
+      · intro a ha
+        rw [hstep1, hstep, loadWord_setPc,
+            Rv64i.loadWord_storeWord_disjoint (stepN kn m) _ a 0 hwa (by omega)
+              (Or.inr (by rw [haddr]; omega))]
+        exact hloadN a ha
+
 /-- **`prologue_sim` (RESUME-CALL W5).** Running `prologueI fd` from a call-entry
     machine state establishes the callee's `StInv` against `frameEnter`'s IL state
     (given the P1 pad `= userOff fd`, packaged as `hcsp`/`hcrg`): x2 drops to the
@@ -858,7 +972,11 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
     (hcrg : ∀ r, 1 ≤ r → callee.rget r
               = if r = fd.frameReg then sp0 - BitVec.ofNat 64 fd.frameSize
                 else parkFold (fun _ => 0) (fd.params.toList.zip argVals) r)
-    (hmemF : ∀ a, OffPriv L ((callee.sp, userOff fd) :: holes) callee.sp a → callee.mem a = m.mem a)
+    (hmemF : ∀ a, OffPriv L ((callee.sp, userOff fd) :: holes) callee.sp a →
+               ¬ memRange a (callee.sp + BitVec.ofNat 64 (userOff fd)) fd.frameSize →
+               callee.mem a = m.mem a)
+    (hcmemZ : ∀ a, memRange a (callee.sp + BitVec.ofNat 64 (userOff fd)) fd.frameSize →
+               callee.mem a = 0)
     (htf : totalFrame fd ≤ 2000)
     (hfs8 : fd.frameSize % 8 = 0)
     (hsp0align : sp0.toNat % 8 = 0)
@@ -867,12 +985,14 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
     (hbdc : L.codeBase.toNat + L.blobLen ≤ callee.sp.toNat
               ∨ callee.sp.toNat + userOff fd ≤ L.codeBase.toNat)
+    (hbdcF : L.codeBase.toNat + L.blobLen ≤ callee.sp.toNat
+              ∨ callee.sp.toNat + totalFrame fd ≤ L.codeBase.toNat)
     (hholes_ord : ∀ h ∈ holes, sp0.toNat ≤ (h.1 : Word).toNat)
     (hholes_nw : ∀ h ∈ holes, (h.1 : Word).toNat + h.2 ≤ 2 ^ 64) :
     ∃ k, StInv L fd ((callee.sp, userOff fd) :: holes) callee (stepN k m)
        ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (p + 4 * prologueSize fd)
        ∧ (stepN k m).loadWord callee.sp = ra
-       ∧ (∀ a : Word, ¬ memRange a callee.sp (userOff fd) → (stepN k m).mem a = m.mem a) := by
+       ∧ (∀ a : Word, ¬ memRange a callee.sp (totalFrame fd) → (stepN k m).mem a = m.mem a) := by
   -- ==== numeric helpers ====
   have hsp0lt : sp0.toNat < 2 ^ 64 := sp0.isLt
   have huser : userOff fd ≤ 2000 := by unfold totalFrame at htf; omega
@@ -885,8 +1005,12 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
     omega
   have hfb : callee.sp + BitVec.ofNat 64 (userOff fd) = sp0 - BitVec.ofNat 64 fd.frameSize := by
     rw [hcsp, htf_eq, ← BitVec.ofNat_add_ofNat]; bv_omega
-  -- ==== peel the four prologue segments ====
+  -- ==== split off the zero-frame segment, then peel the four pre-frame segments ====
   simp only [prologueI] at hem
+  have hemFZ : Emitted L (p + 4 * (prologuePreI fd).length) (frameZeroI fd) :=
+    Emitted_append_right _ _ _ _ hem
+  replace hem := (Emitted_append_left _ _ _ _ hem : Emitted L p (prologuePreI fd))
+  simp only [prologuePreI] at hem
   have hemG0 : Emitted L p [Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))),
                             Instr.sd SP RA 0] :=
     Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hem))
@@ -1005,7 +1129,7 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
   obtain ⟨kF, hFsp, hFpc, hFinst, hFmem, hFslot, hFra⟩ :
       ∃ kF, (stepN kF (stepN kZ (stepN kP (step (step m))))).rget SP = callee.sp
           ∧ (stepN kF (stepN kZ (stepN kP (step (step m))))).pc
-              = L.codeBase + BitVec.ofNat 64 (p + 4 * prologueSize fd)
+              = L.codeBase + BitVec.ofNat 64 (p + 4 * (prologuePreI fd).length)
           ∧ Installed L (stepN kF (stepN kZ (stepN kP (step (step m)))))
           ∧ (∀ a : Word, ¬ memRange a callee.sp (userOff fd) →
                (stepN kF (stepN kZ (stepN kP (step (step m))))).mem a
@@ -1019,15 +1143,15 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
           ∧ (stepN kF (stepN kZ (stepN kP (step (step m))))).loadWord callee.sp
               = (stepN kZ (stepN kP (step (step m)))).loadWord callee.sp := by
     -- prologueSize = 2 + |pseg| + |zseg| + |fseg|
-    have hpsz : prologueSize fd
+    have hpsz : (prologuePreI fd).length
         = 2 + (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
           + ((List.range (maxRegF fd + 1)).filter
               (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length
           + (if fd.frameReg = 0 then 0 else 2) := by
       by_cases hfr : fd.frameReg = 0
-      · simp only [prologueSize, prologueI, if_pos hfr, storeSlotI, List.length_append,
+      · simp only [prologuePreI, if_pos hfr, storeSlotI, List.length_append,
                    List.length_cons, List.length_nil, List.length_map]
-      · simp only [prologueSize, prologueI, if_neg hfr, storeSlotI, List.length_append,
+      · simp only [prologuePreI, if_neg hfr, storeSlotI, List.length_append,
                    List.length_cons, List.length_nil, List.length_map, List.length_singleton]
     by_cases hfr0 : fd.frameReg = 0
     · refine ⟨0, by rw [stepN_zero]; exact hZsp, ?_, by rw [stepN_zero]; exact hZinst,
@@ -1121,41 +1245,68 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
         · rw [hSDslotne r hrf hr1 hrm, if_neg hrf]
           exact loadWord_mem_congr _ _ _ hmemA
       · rw [hSN2Z, hSDra]; exact loadWord_mem_congr _ _ _ hmemA
+  -- ==== G4: zero the user frame ====
+  have hPS : prologueSize fd = (prologuePreI fd).length + fd.frameSize / 8 := by
+    simp only [prologueSize, prologueI, frameZeroI, List.length_append, List.length_map,
+               List.length_range]
+  have hfsN : 8 * (fd.frameSize / 8) = fd.frameSize := by omega
+  obtain ⟨kG, hGsp, hGpc, hGreg, hGinst, hGzero, hGpres, hGload⟩ :=
+    run_zeroFrame L fd callee.sp (htf_eq ▸ htf) (by omega) hseg hblob hbdcF
+      (fd.frameSize / 8) (p + 4 * (prologuePreI fd).length)
+      (stepN kF (stepN kZ (stepN kP (step (step m))))) (by omega) hFsp hFpc hemFZ hFinst
+  rw [hfsN] at hGzero hGpres
   -- ==== final: assemble the callee StInv ====
-  have hfinal : stepN (2 + kP + kZ + kF) m
+  have hfinalPre : stepN (2 + kP + kZ + kF) m
       = stepN kF (stepN kZ (stepN kP (step (step m)))) := by
     rw [show 2 + kP + kZ + kF = 2 + kP + kZ + kF from rfl, stepN_add, stepN_add, stepN_add, hSN2]
+  have hfinal : stepN (2 + kP + kZ + kF + kG) m
+      = stepN kG (stepN kF (stepN kZ (stepN kP (step (step m))))) := by
+    rw [show 2 + kP + kZ + kF + kG = (2 + kP + kZ + kF) + kG from rfl, stepN_add, hfinalPre]
   have hkeys : (fd.params.toList.zip argVals).map Prod.fst = fd.params.toList :=
     List.map_fst_zip (by omega)
   have hcalleeHole : ∀ a : Word, OffPriv L ((callee.sp, userOff fd) :: holes) callee.sp a →
       ¬ memRange a callee.sp (userOff fd) := by
     intro a ha hmr
     exact ha.1 (Or.inr ⟨(callee.sp, userOff fd), List.mem_cons_self, hmr⟩)
-  -- the full off-frame memory agreement from entry through all segments
-  have hFmem_m : ∀ a : Word, ¬ memRange a callee.sp (userOff fd) →
-      (stepN (2 + kP + kZ + kF) m).mem a = m.mem a := by
-    intro a ha
-    rw [hfinal, hFmem a ha, hZmem a ha, hPmem a ha, hm2mem_off a ha]
-  refine ⟨2 + kP + kZ + kF, ?_, ?_, ?_, ?_⟩
+  have hcspN' : (callee.sp + BitVec.ofNat 64 (userOff fd)).toNat = callee.sp.toNat + userOff fd := by
+    rw [BitVec.toNat_add, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (show userOff fd < 2 ^ 64 by omega),
+        Nat.mod_eq_of_lt (by omega)]
+  -- the frame window `[callee.sp+userOff, +frameSize)` ⊆ the callee frame `[callee.sp, +totalFrame)`
+  have hFrameSub : ∀ a : Word, memRange a (callee.sp + BitVec.ofNat 64 (userOff fd)) fd.frameSize →
+      memRange a callee.sp (totalFrame fd) := by
+    intro a hc; simp only [memRange] at hc ⊢; rw [hcspN'] at hc; rw [htf_eq]
+    refine ⟨?_, ?_⟩ <;> omega
+  have hHoleSub : ∀ a : Word, memRange a callee.sp (userOff fd) → memRange a callee.sp (totalFrame fd) := by
+    intro a hc; simp only [memRange] at hc ⊢; rw [htf_eq]; refine ⟨?_, ?_⟩ <;> omega
+  -- off-hole agreement across the pre-frame segments (G0-G3 write only the hole)
+  have hPreMem : ∀ a : Word, ¬ memRange a callee.sp (userOff fd) →
+      (stepN kF (stepN kZ (stepN kP (step (step m))))).mem a = m.mem a := by
+    intro a ha; rw [hFmem a ha, hZmem a ha, hPmem a ha, hm2mem_off a ha]
+  refine ⟨2 + kP + kZ + kF + kG, ?_, ?_, ?_, ?_⟩
   · -- StInv
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-    · rw [hfinal]; exact hFsp
+    · rw [hfinal]; exact hGsp
     · intro r hr1 hrm
-      rw [hfinal, hFslot r hr1 hrm]
+      have hslot8 : slotOff r + 8 ≤ userOff fd := slotOff_add8_le_userOff fd r hrm
+      rw [hfinal, hGload (callee.sp + BitVec.ofNat 64 (slotOff r))
+            (by rw [slotAddr_toNat callee.sp r (by omega)]; omega), hFslot r hr1 hrm]
       by_cases hrf : r = fd.frameReg
       · subst hrf; rw [if_pos rfl, hcrg _ hr1, if_pos rfl]
       · rw [if_neg hrf, hcrg _ hr1, if_neg hrf]
         by_cases hrp : r ∈ fd.params.toList
-        · -- param: zeros preserve, park realises `withParams` (base-independent at a key)
-          rw [hZpres r hr1 hrm (by rw [hz_iff r]; rintro ⟨_, _, hc, _⟩; exact hc hrp),
+        · rw [hZpres r hr1 hrm (by rw [hz_iff r]; rintro ⟨_, _, hc, _⟩; exact hc hrp),
               hPslot r hr1 hrm]
           exact parkFold_mem_indep r _ _ _ (by rw [hkeys]; exact hrp)
-        · -- non-param, non-frameReg: zeroed, and `withParams r = 0`
-          rw [hZzero r (by rw [hz_iff r]; exact ⟨hrm, by omega, hrp, hrf⟩)]
+        · rw [hZzero r (by rw [hz_iff r]; exact ⟨hrm, by omega, hrp, hrf⟩)]
           exact parkFold_not_mem r _ _ (by rw [hkeys]; exact hrp)
-    · rw [hfinal]; exact hFinst
+    · rw [hfinal]; exact hGinst
     · intro a ha
-      rw [hFmem_m a (hcalleeHole a ha)]; exact hmemF a ha
+      rw [hfinal]
+      by_cases hfr : memRange a (callee.sp + BitVec.ofNat 64 (userOff fd)) fd.frameSize
+      · -- in the user frame: both sides are 0 (IL `zeroRange`, machine G4)
+        rw [hcmemZ a hfr]; exact (hGzero a hfr).symm
+      · -- off the user frame: G4 preserves, `hmemF` gives entry agreement
+        rw [hGpres a hfr, hPreMem a (hcalleeHole a ha)]; exact hmemF a ha hfr
     · rfl
     · exact hcsp8
     · intro h hh
@@ -1166,9 +1317,11 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
       rcases List.mem_cons.mp hh with rfl | hh'
       · exact hnwc
       · exact hholes_nw h hh'
-  · rw [hfinal]; exact hFpc
-  · rw [hfinal, hFra, hZra, hPra, hm2mem_ra]
-  · exact hFmem_m
+  · rw [hfinal, hGpc]; apply pc_congr; rw [hPS]; omega
+  · rw [hfinal, hGload callee.sp (by omega), hFra, hZra, hPra, hm2mem_ra]
+  · intro a ha
+    rw [hfinal, hGpres a (fun hc => ha (hFrameSub a hc)),
+        hPreMem a (fun hc => ha (hHoleSub a hc))]
 
 /-- **W6 — the callee-exit simulator.** Running `epilogueI fd` from a state
     satisfying the callee's post-body `StInv` (with the saved return address `ra`

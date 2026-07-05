@@ -184,8 +184,10 @@ def fnOk (fd : FunDef) : Bool :=
   fd.argc ≤ 8 && fd.rvc ≤ 8 && totalFrame fd ≤ 2000
 
 /-- Prologue: drop sp, save ra, park params from a0.., `sd x0` every other
-    slot (matches IL zero-init EXACTLY), materialize the user-frame base into
-    frameReg's slot. -/
+    slot (matches IL register-file zeroing EXACTLY), materialize the user-frame
+    base into frameReg's slot, then zero the user frame `[sp+userOff, sp+totalFrame)`
+    word-by-word (matches IL `frameEnter`'s `zeroRange` — the machine half of the
+    zero-init decision; a callee reads 0, not a returned sibling's stale slots). -/
 def prologue (fd : FunDef) : List SymInstr :=
   let tf := totalFrame fd
   let params := fd.params.toList
@@ -197,6 +199,8 @@ def prologue (fd : FunDef) : List SymInstr :=
        (fun r => .ins (.sd SP 0 (BitVec.ofNat 12 (slotOff r))))
   ++ (if fd.frameReg = 0 then [] else
         [.ins (.addi T0 SP (BitVec.ofNat 12 (userOff fd)))] ++ storeSlot fd.frameReg T0)
+  ++ (List.range (fd.frameSize / 8)).map
+       (fun i => .ins (.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i))))
 
 /-- Epilogue (jumped to by `ret`, fallen into on `normal`): rets → a0..,
     restore ra + sp, return. -/
