@@ -173,8 +173,8 @@ theorem userPad_eq (env : Env) (g : Name) (gd : FunDef)
     compiler's own data guard alone: `hdat` (clen synth range), `hstackLo` (the
     stackLo field), and `hdbase` (the data-address correspondence). `hdpos`
     (needs a blob-size bound), `halign` (codeBase alignment — a `prog_sim`
-    hypothesis) and `hfn`/`hem` (the layout↔`Emitted` correspondence) are still
-    owed. -/
+    hypothesis) and `hfn`/`hem` (the layout↔`Emitted` correspondence — its
+    prologue/epilogue-resolve half is done in §6 below) are still owed. -/
 
 open LowIR.Prog (Program Data dataOffsetsFrom dbaseOf dataOffsetsFrom_shift)
 open LowIR.Compile (compileProgT)
@@ -262,5 +262,192 @@ theorem dbaseOf_dposOf (L : Layout) (d : Name) (a : Word)
     rw [hshift, ho]
     simp only [Option.map_some, Option.getD_some]
     rw [← h, BitVec.add_assoc, BitVec.ofNat_add_ofNat]
+
+/-! ## §6 `hfn`/`hem` foundation — the prologue/epilogue resolve correspondence.
+
+    `hfn`/`hem` state that the compiler's RESOLVED stream (`compileProgT`'s output,
+    = `L.instrs`), sliced at each function's byte position, equals
+    `prologueI gd ++ emitCF … gd.body ++ epilogueI gd` (RESUME-CALL §C4). The full
+    correspondence needs the `layout`-flatten structural arithmetic (which slice of
+    `L.instrs` a function occupies) AND the `lower`↔`emitCF` label-resolution
+    induction (the crux). This section closes the two SELF-CONTAINED halves that
+    need neither: the machine `resolveOne` over `Compile.prologue`/`epilogue`
+    (both all-`.ins`, position-independent) flattens to exactly `prologueI`/
+    `epilogueI`. These are the leaf inputs the per-function `hfn` assembly consumes.
+
+    ⚠ **STILL OWED for `hfn`/`hem` (the big one, next session):** (a) the
+    `layout`/`layoutItems` position arithmetic tying `fnPos g` to the slice of the
+    resolved stream, and (b) `resolveOne`-over-`lower dat [] [] epi gd.body`
+    = `emitCF P.data dpos fnPos [] [] epiPos bodyPos gd.body` — the label-resolution
+    induction (the `matchesRealProg` #guard is its decidable shadow). -/
+
+open LowIR.Compile (prologue epilogue layoutItems resolveOne symSize storeSlot loadSlot
+                    SymInstr A SP RA T0 T1 totalFrame maxRegF slotOff)
+
+/-- The instruction(s) a `.ins`/`.label` `SymInstr` resolves to (position-free):
+    `.ins i ↦ [i]`, everything else `↦ []` (only `.label`, in a well-formed
+    all-`.ins`/`.label` stream). -/
+def insUnwrap : SymInstr → List Instr
+  | .ins i => [i]
+  | _      => []
+
+/-- A `SymInstr` is a concrete instruction or a (0-byte) label marker — the two
+    cases `resolveOne` handles position-independently. -/
+def isInsOrLabel : SymInstr → Bool
+  | .ins _   => true
+  | .label _ => true
+  | _        => false
+
+/-- For a stream of only `.ins`/`.label` items, `resolveOne` is position-independent
+    and maps each item to its `insUnwrap`. -/
+theorem resolve_ins_mapM (lbls fns dats : List _) :
+    ∀ (items : List SymInstr) (pos : Nat),
+      items.all isInsOrLabel = true →
+      (layoutItems items pos).1.mapM (resolveOne lbls fns dats)
+        = some (items.map insUnwrap) := by
+  intro items
+  induction items with
+  | nil => intro pos _; rfl
+  | cons si rest ih =>
+    intro pos hall
+    simp only [List.all_cons, Bool.and_eq_true] at hall
+    obtain ⟨hsi, hrest⟩ := hall
+    cases si with
+    | label l =>
+      have hflat : (layoutItems (.label l :: rest) pos).1
+          = (pos, SymInstr.label l) :: (layoutItems rest pos).1 := by
+        simp only [layoutItems]
+      rw [hflat, List.mapM_cons]
+      simp only [show resolveOne lbls fns dats (pos, SymInstr.label l) = some [] from rfl,
+                 ih pos hrest, List.map_cons, insUnwrap]
+      rfl
+    | ins i =>
+      have hflat : (layoutItems (.ins i :: rest) pos).1
+          = (pos, SymInstr.ins i) :: (layoutItems rest (pos + symSize (.ins i))).1 := by
+        simp only [layoutItems]
+      rw [hflat, List.mapM_cons]
+      simp only [show resolveOne lbls fns dats (pos, SymInstr.ins i) = some [i] from rfl,
+                 ih _ hrest, List.map_cons, insUnwrap]
+      rfl
+    | br c a b l => exact absurd hsi (by simp [isInsOrLabel])
+    | jmp l => exact absurd hsi (by simp [isInsOrLabel])
+    | callf f => exact absurd hsi (by simp [isInsOrLabel])
+    | cref d => exact absurd hsi (by simp [isInsOrLabel])
+
+/-! ### Unwrap algebra: `flatMap insUnwrap` distributes over the emit builders. -/
+
+theorem insUnwrap_flatMap_append (l₁ l₂ : List SymInstr) :
+    (l₁ ++ l₂).flatMap insUnwrap = l₁.flatMap insUnwrap ++ l₂.flatMap insUnwrap := by
+  rw [List.flatMap_append]
+
+theorem insUnwrap_map_ins {α} (l : List α) (g : α → Instr) :
+    (l.map (fun x => SymInstr.ins (g x))).flatMap insUnwrap = l.map g := by
+  induction l with
+  | nil => rfl
+  | cons x t ih => simp only [List.map_cons, List.flatMap_cons, insUnwrap, ih, List.singleton_append]
+
+theorem storeSlot_unwrap (r t : Prog.Reg) : (storeSlot r t).flatMap insUnwrap = storeSlotI r t := by
+  unfold storeSlot storeSlotI
+  by_cases h : r = 0 <;> simp [h, insUnwrap]
+
+theorem loadSlot_unwrap (r t : Prog.Reg) : (loadSlot r t).flatMap insUnwrap = loadSlotI r t := by
+  unfold loadSlot loadSlotI
+  by_cases h : r = 0 <;> simp [h, insUnwrap]
+
+/-- Push `flatMap insUnwrap` through an outer `flatMap` when the inner builder
+    unwraps pointwise. -/
+theorem insUnwrap_flatMap_flatMap {α} (l : List α) (g : α → List SymInstr) (gi : α → List Instr)
+    (h : ∀ x, (g x).flatMap insUnwrap = gi x) :
+    (l.flatMap g).flatMap insUnwrap = l.flatMap gi := by
+  induction l with
+  | nil => rfl
+  | cons x t ih => rw [List.flatMap_cons, List.flatMap_cons, insUnwrap_flatMap_append, h, ih]
+
+/-! ### Prologue / epilogue unwrap: the symbolic builder ↦ the resolved list. -/
+
+theorem prologue_unwrap (fd : FunDef) :
+    (prologue fd).flatMap insUnwrap = prologueI fd := by
+  unfold prologue prologueI prologuePreI frameZeroI
+  simp only [insUnwrap_flatMap_append]
+  have hhead : ([SymInstr.ins (Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int)))),
+                 SymInstr.ins (Instr.sd SP RA 0)]).flatMap insUnwrap
+      = [Instr.addi SP SP (BitVec.ofInt 12 (-(totalFrame fd : Int))), Instr.sd SP RA 0] := by
+    simp [insUnwrap]
+  have hparams : ((fd.params.toList.zipIdx.flatMap (fun pi => storeSlot pi.1 (A pi.2)))).flatMap insUnwrap
+      = fd.params.toList.zipIdx.flatMap (fun pi => storeSlotI pi.1 (A pi.2)) :=
+    insUnwrap_flatMap_flatMap _ _ _ (fun pi => storeSlot_unwrap pi.1 (A pi.2))
+  have hzero : (((List.range (maxRegF fd + 1)).filter
+        (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).map
+       (fun r => SymInstr.ins (Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r))))).flatMap insUnwrap
+      = ((List.range (maxRegF fd + 1)).filter
+        (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).map
+       (fun r => Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r))) :=
+    insUnwrap_map_ins _ _
+  have hframeReg : (if fd.frameReg = 0 then [] else
+        [SymInstr.ins (Instr.addi T0 SP (BitVec.ofNat 12 (userOff fd)))]
+          ++ storeSlot fd.frameReg T0).flatMap insUnwrap
+      = (if fd.frameReg = 0 then [] else
+        [Instr.addi T0 SP (BitVec.ofNat 12 (userOff fd))] ++ storeSlotI fd.frameReg T0) := by
+    by_cases h : fd.frameReg = 0
+    · simp [h]
+    · simp only [if_neg h, storeSlot_unwrap, insUnwrap, List.flatMap_cons, List.singleton_append]
+  have hfz : ((List.range (fd.frameSize / 8)).map
+       (fun i => SymInstr.ins (Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i))))).flatMap insUnwrap
+      = (List.range (fd.frameSize / 8)).map
+       (fun i => Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i))) :=
+    insUnwrap_map_ins _ _
+  rw [hhead, hparams, hzero, hframeReg, hfz]
+
+theorem epilogue_unwrap (fd : FunDef) :
+    (epilogue fd).flatMap insUnwrap = epilogueI fd := by
+  unfold epilogue epilogueI
+  simp only [insUnwrap_flatMap_append]
+  have hrets : ((fd.rets.toList.zipIdx.flatMap (fun ri => loadSlot ri.1 (A ri.2)))).flatMap insUnwrap
+      = fd.rets.toList.zipIdx.flatMap (fun ri => loadSlotI ri.1 (A ri.2)) :=
+    insUnwrap_flatMap_flatMap _ _ _ (fun ri => loadSlot_unwrap ri.1 (A ri.2))
+  have htail : ([SymInstr.ins (Instr.ld RA SP 0),
+                 SymInstr.ins (Instr.addi SP SP (BitVec.ofNat 12 (totalFrame fd))),
+                 SymInstr.ins (Instr.jalr 0 RA 0)]).flatMap insUnwrap
+      = [Instr.ld RA SP 0, Instr.addi SP SP (BitVec.ofNat 12 (totalFrame fd)), Instr.jalr 0 RA 0] := by
+    simp [insUnwrap]
+  rw [hrets, htail]
+
+theorem storeSlot_all_ins (r t : Prog.Reg) : (storeSlot r t).all isInsOrLabel = true := by
+  unfold storeSlot; by_cases h : r = 0 <;> simp [h, isInsOrLabel]
+
+theorem loadSlot_all_ins (r t : Prog.Reg) : (loadSlot r t).all isInsOrLabel = true := by
+  unfold loadSlot; by_cases h : r = 0 <;> simp [h, isInsOrLabel]
+
+theorem prologue_all_ins (fd : FunDef) : (prologue fd).all isInsOrLabel = true := by
+  unfold prologue
+  simp only [List.all_append, Bool.and_eq_true]
+  refine ⟨⟨⟨⟨?_, ?_⟩, ?_⟩, ?_⟩, ?_⟩
+  · simp [isInsOrLabel]
+  · simp [List.all_flatMap, storeSlot_all_ins]
+  · simp [List.all_map, isInsOrLabel]
+  · by_cases h : fd.frameReg = 0 <;> simp [h, isInsOrLabel, storeSlot_all_ins]
+  · simp [List.all_map, isInsOrLabel]
+
+theorem epilogue_all_ins (fd : FunDef) : (epilogue fd).all isInsOrLabel = true := by
+  unfold epilogue
+  simp only [List.all_append, Bool.and_eq_true]
+  exact ⟨by simp [List.all_flatMap, loadSlot_all_ins], by simp [isInsOrLabel]⟩
+
+/-! ### The payoff: `resolveOne`-flatten of the prologue/epilogue = `prologueI`/`epilogueI`. -/
+
+/-- **prologue resolve correspondence.** Resolving the compiler's symbolic
+    prologue at any position, then flattening, yields exactly `prologueI fd`. -/
+theorem prologue_resolves (fd : FunDef) (lbls fns dats : List _) (pos : Nat) :
+    ((layoutItems (prologue fd) pos).1.mapM (resolveOne lbls fns dats)).map List.flatten
+      = some (prologueI fd) := by
+  rw [resolve_ins_mapM lbls fns dats _ pos (prologue_all_ins fd), Option.map_some,
+      ← List.flatMap_def, prologue_unwrap]
+
+/-- **epilogue resolve correspondence.** Likewise for the epilogue. -/
+theorem epilogue_resolves (fd : FunDef) (lbls fns dats : List _) (pos : Nat) :
+    ((layoutItems (epilogue fd) pos).1.mapM (resolveOne lbls fns dats)).map List.flatten
+      = some (epilogueI fd) := by
+  rw [resolve_ins_mapM lbls fns dats _ pos (epilogue_all_ins fd), Option.map_some,
+      ← List.flatMap_def, epilogue_unwrap]
 
 end LowIR.ProgSim.AsmFacts

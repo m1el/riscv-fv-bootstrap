@@ -1,5 +1,27 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-05 (compile_sim campaign) — Phase 2: prologue/epilogue resolve correspondence (`hfn` foundation)
+
+`AsmFacts.lean` §6 (new): the two SELF-CONTAINED halves of the `hfn`/`hem`
+layout↔`Emitted` correspondence that need neither the `layout`-flatten position
+arithmetic nor the `lower`↔`emitCF` label-resolution induction. The machine
+`resolveOne` over `Compile.prologue`/`epilogue` (both all-`.ins`,
+position-independent) flattens to exactly `prologueI`/`epilogueI`:
+- `resolve_ins_mapM` — for an all-`.ins`/`.label` stream, `resolveOne` is
+  position-independent and maps each item to its `insUnwrap` (labels → `[]`,
+  `.ins i → [i]`); the load-bearing structural lemma.
+- Unwrap algebra: `insUnwrap_flatMap_append`/`_map_ins`/`_flatMap_flatMap`,
+  `storeSlot_unwrap`/`loadSlot_unwrap` (the symbolic builder's `flatMap insUnwrap`
+  = the resolved `storeSlotI`/`loadSlotI`).
+- `prologue_unwrap`/`epilogue_unwrap` (segment-by-segment) + `*_all_ins`, giving
+  the payoffs **`prologue_resolves`** / **`epilogue_resolves`**, both axiom-clean
+  `[propext, Quot.sound]`.
+
+STILL OWED for the full `hfn`/`hem` (the big one, next session): (a) the
+`layout`/`layoutItems` position arithmetic tying `fnPos g` to the resolved-stream
+slice, and (b) `resolveOne`-over-`lower dat [] [] epi gd.body` = `emitCF … gd.body`
+— the label-resolution induction (`matchesRealProg` is its decidable shadow).
+
 ## 2026-07-05 (compile_sim campaign) — Phase 2: three flat obligations discharged + a real compiler-guard fix
 
 Progress on `AsmFacts.lean` (Phase 2, the assembler layer). Three of the flat
