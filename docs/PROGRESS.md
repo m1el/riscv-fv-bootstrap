@@ -1,5 +1,51 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-05 (compile_sim campaign) — Phase 5 COMPLETE: `lower_sim_cf` call case closed, axiom-clean
+
+The `call` case of `lower_sim_cf` (the last statement-level `sorry`) is proved.
+`lean/LowIR/ProgSim/CtrlSim.lean` now has **no `sorry`**, and `#print axioms
+lower_sim_cf = [propext, Quot.sound]` (no `sorryAx`, no `Classical.choice`). Plan
++ design record: [RESUME-CALL.md](RESUME-CALL.md) (W1–W8 all done).
+
+This session closed segs 3–6 of the six-segment call assembly on top of the
+committed segs 1–2:
+- **Seg 3 (prologue).** Instantiated `prologue_sim` at the call boundary. The
+  zero-init `hmemF` blocker (RESUME-CALL ★/§6) cleared: off the callee user
+  frame, IL↔machine agreement comes from the caller's c4, and the region
+  `[stackLo, s.sp)` is tiled by the free stack below the callee, the callee
+  hole, and the user frame — an entirely `L.stackLo` argument (no `stackLo`
+  link needed here). `hcmemZ` from `frameEnter`'s `zeroRange`.
+- **Seg 4 (body).** The fuel IH applied to the callee body — recursion for free,
+  both `.normal`/`.ret` land at `epiPos'`.
+- **Seg 5 (epilogue).** `epilogue_sim`; the saved return address transported
+  through the body via `hBodFr` + `State_loadWord_congr8` (`s1.sp = callee.sp`
+  from StInv c5), `ra'` evenness from `halign` + `hhere4`.
+- **Seg 6 + assembly.** `run_retStoresFrom` for the ret-stores (its over-strong
+  `∀ s` no-wrap hypothesis fixed to a threaded per-state bound); the caller
+  StInv rebuilt against the exit state (slots survive via an `m ↔ m_epi`
+  frame-agreement chain + `loadWord_congr_range`); six-segment clock
+  composition with `FramesPres` carried at the caller level.
+
+New statement hypothesis `hstackLo : stackLo = L.stackLo` (true by construction —
+`layoutOf` sets the field; needed only for the c4 callee-hole/free-stack
+reconciliation). New reusable atoms: `State_loadWord_congr8`/`loadWord_congr_range`
+(MemFacts), `not_memRange`/`memRange_or_not` (Defs). `set_option maxHeartbeats
+400000` for the call case's large defeqs.
+
+**Axiom hygiene.** Reaching `[propext, Quot.sound]` also required fixing
+**pre-existing** `Classical.choice` taint introduced by the zero-init rework
+(commits `ec60b1a`/`53948c9`): `storeWord_zero_mem_inside` (`simp` →
+`simp only [...]; rfl` over the concrete byte window), `run_zeroFrame` (an
+`omega` on a negated `memRange` conjunction — split via `not_memRange` — plus a
+base-case `simpa`), and `prologue_sim` (`by_cases` on `memRange`, which has no
+`Decidable` instance and fell back to `Classical` — replaced with the
+constructive `memRange_or_not`). Lesson reinforced: never hand `omega` a
+`¬(P ∧ Q)`, and never `by_cases` an instance-less `Prop`.
+
+Campaign frontier now: Phases 1/2 (encode/decode + AsmFacts discharging the flat
+layout obligations `hdat`/`hdbase`/`hdpos`/`hpad`/`hfn`/`halign`/`hstackLo`) and
+Phase 6 (`prog_sim`, the lone remaining `sorry`, in `Defs.lean`).
+
 ## 2026-07-02 (compile_sim campaign) — Phase 0.1: the P1 frame-padding oracle
 
 First step of the `compile_sim`-for-Prog campaign (docs/RESUME-PROGSIM.md).

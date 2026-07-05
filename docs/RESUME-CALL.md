@@ -1,5 +1,13 @@
 # RESUME-CALL — Phase 5: the `call` case of `lower_sim_cf`
 
+> **✅ COMPLETE (2026-07-05).** The `call` case is closed — `lower_sim_cf` has
+> **no statement-level `sorry`** and is **axiom-clean**: `#print axioms
+> lower_sim_cf = [propext, Quot.sound]`. All of W1–W8 done (see §5). What remains
+> of the campaign: Phases 1/2 (encode/decode + AsmFacts discharging the flat
+> layout hypotheses `hdat`/`hdbase`/`hdpos`/`hpad`/`hfn`/`halign`/`hstackLo`) and
+> Phase 6 (`prog_sim`, the lone remaining `sorry` in `Defs.lean`). This doc is now
+> a design record; the sections below describe the plan as executed.
+
 Plan written 2026-07-04, when `call` became the ONLY remaining statement-level
 `sorry` (`CtrlSim.lean:886`, in `lean/LowIR/ProgSim/`). Read with
 [RESUME-PROGSIM.md](RESUME-PROGSIM.md) (the campaign handoff — §2 P1, §4
@@ -545,8 +553,8 @@ before W4, several details deviate from the pre-implementation sketch below:
 | W4 | ✅ COMPLETE. Atoms: `step_jalr`+`run_storeFrom` (W4a `e0161c3`), `run_marshalFrom` (W4b `d7e0e69`), `run_retStoresFrom`+`run_storeFrom` reg-preservation (W4c `177504e`), `jalr_lands`+`word_and_not_one`+`testBit_pow_two_sub_one`+`getLsbD0_of_even` (W4d `0045c3c`). `park_lastwins` → W5; `halign` → W7. `run_loadTo` unneeded (`run_load` already generic over target `t`) | ~450 | done. **Reg-typed ≠ is invisible to omega**; **`~~~`/`not` lemmas are Classical-tainted** — see STATUS |
 | W5 | ✅ COMPLETE (`a71e29c`). `prologue_sim` standalone: G0 (sp drop + ra save) → G1 param park (`run_parkParams`/`parkFold`) → G2 zero-init (`run_zeroSlots`) → G3 frameReg (`run_slotStore`). Callee-frame mem obligation carried as entry hyp `hmemF` (W7 discharges). Axiom-clean `[propext, Quot.sound]`. `zipIdx`-atom omega gotcha → `generalize` | ~300 | done — the three-way per-slot walk landed via the segment-runner atoms + `parkFold_mem_indep`/`parkFold_not_mem` |
 | W6 | ✅ COMPLETE (`d1ee7dd`). `epilogue_sim` standalone: G1 ret-marshalling (`run_marshalFrom`) → G2 `ld ra` (slot-0 restore, hyp `hraslot`) → G3 `addi sp` (P1 dealloc) → G4 `jalr` (`jalr_lands`, `hraeven`). NO stores ⇒ mem untouched. Axiom-clean `[propext, Quot.sound]` | ~150 | done — the fixed ld/addi/jalr decode_at pc-side closes by rw-rfl (4·1,4·2 reduce) |
-| W7 | **IN PROGRESS.** ✅ `exec_call_inv` (`58583fd`), ✅ C6 MemAccOff call arm (`223c885`), ✅ C4 hyps `hpad`/`halign`/`hfn`/`hhere4` (`f538cbd`), ✅ assembly **segs 1–2** marshal+jal (`caff546`). **Remaining: segs 3–6** (see §6 below) | ~300 | segs 3/5 memory-agreement (C2 payoff) is the hard part — see §6 ⚠ |
-| W8 | `#print axioms lower_sim_cf` → target `[propext, Quot.sound]` (no `sorryAx` left at statement level); update RESUME-PROGSIM status + [PROGRESS.md](PROGRESS.md); record `hpad`/`hfn`/`halign` as Phase-2 obligations next to `hdat`/`hdbase`/`hdpos` | ~30 | — |
+| W7 | ✅ **COMPLETE (2026-07-05).** `exec_call_inv` (`58583fd`), C6 MemAccOff call arm (`223c885`), C4 hyps (`f538cbd`), segs 1–2 (`caff546`), **seg 3 prologue** (`0bb8008`), **segs 4–5 body-IH+epilogue** (`c45fe67`), **seg 6 + assembly** (this session). The zero-init `hmemF` blocker cleared: off-frame agreement from caller c4 + callee-hole/free-stack union, all in `L.stackLo`. **No statement-level `sorry` in `lower_sim_cf`.** Added `hstackLo : stackLo = L.stackLo` (needed only for c4). New atoms: `State_loadWord_congr8`/`loadWord_congr_range` (MemFacts), `not_memRange`/`memRange_or_not` (Defs). `set_option maxHeartbeats 400000` for the call case's large defeqs | ~600 | done — segs 3/5 C2 payoff landed as planned |
+| W8 | ✅ **DONE.** `#print axioms lower_sim_cf` = `[propext, Quot.sound]` (no `sorryAx`, no `Classical.choice`). Cleaning to target also fixed **pre-existing** Classical taint from the zero-init rework: `storeWord_zero_mem_inside` (`simp`→`simp only`+`rfl`), `run_zeroFrame` (negated-conjunction `omega` + base-case `simpa`), `prologue_sim` (`by_cases` on the instance-less `memRange` → `memRange_or_not`). Flat obligations now on the statement: `hpad`/`hfn`/`halign`/`hstackLo` (Phase-2 discharges alongside `hdat`/`hdbase`/`hdpos`) | ~200 | done |
 
 Total ≈ 2000 lines — consistent with RESUME-PROGSIM's Phase-5 estimate.
 Axiom discipline as always: split conjunction goals before `omega`
