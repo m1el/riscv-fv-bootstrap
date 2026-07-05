@@ -1,5 +1,85 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-05 (compile_sim campaign) — Phase 2: `LowerFacts` layers 1–2 (the `lower`↔`emitCF` infrastructure)
+
+New file `LowIR/ProgSim/LowerFacts.lean` (in the `LowIRProgSim` lake target),
+building toward the last big piece of `hfn`/`hem`: the correspondence between the
+compiler's RESOLVED per-function body stream (`resolveOne` over `layoutItems` of
+`lower dat [] [] epi gd.body`) and `emitCF P.data dpos fnPos [] [] epiPos bodyPos
+gd.body`. `matchesRealProg` (CtrlSim) is its decidable shadow. Everything
+`[propext, Quot.sound]`.
+
+- **Layer 1** — structural `layoutItems` algebra: `totalSymSize`, `layoutItems_pos`
+  (end position = pos + total size), `layoutItems_append` (flat/label lists
+  concatenate; the second stream starts where the first ends); plus the resolve
+  composition `mapM_append_inv` (a successful Option `mapM` over an append splits
+  into successful halves that concatenate) and `resolve_flatten_append`. These
+  let the correspondence induction split a `lower` output (built by `++`) into
+  positioned, resolved pieces.
+- **Layer 2** — `lower_{skip,annot,ret,brkB,contL,seq,block,ife,while,cref,clen}`
+  unfolding equations (all `rfl`; the `StateM Nat` fresh-label counter threading
+  is definitional, including the ife/while/block internal-label allocation order),
+  and `lower_totalSymSize`: `totalSymSize (lower … stmt) = 4·csize stmt` over all
+  22 constructors. This is the POSITION BRIDGE — every construct's lowering has
+  byte size `4·csize`, so (with `layoutItems_pos`/`_append`) each internal label's
+  layout byte position is pinned, letting the induction's compound cases match
+  `resolveOne`'s computed jump offsets to `emitCF`'s size-relative ones.
+
+**Layer 3 — the correspondence induction `lower_resolve` (STILL OWED; design fully
+worked out this session).** Statement (structural induction on `stmt`, threading a
+"resolution succeeds" hypothesis so range-checks are inherited from the global
+`compileProgT = some`, never re-proved):
+```
+theorem lower_resolve (dat) (dpos fnPos) (lbls fns dats) (htab : TabOk dpos fnPos fns dats) :
+  ∀ stmt bs cs epi cnt here bp cp ep r,
+    (layoutItems (lower dat bs cs epi stmt cnt).1 here).1.mapM (resolveOne lbls fns dats) = some r →
+    wf P bs.length cs.length stmt = true →                       -- brk/cont indices in range
+    LEnvOk lbls bs cs epi bp cp ep →                             -- enclosing labels ↦ positions
+    LblConsistent lbls (layoutItems (lower dat bs cs epi stmt cnt).1 here).2.1 →  -- internal labels
+    r.flatten = emitCF dat dpos fnPos bp cp ep here stmt
+```
+with the consistency predicates (to be added to LowerFacts):
+- `LEnvOk lbls bs cs epi bp cp ep` : `lbls.lookup epi = some ep`; `∀ k < bs.length,
+  lbls.lookup (bs.getD k 0) = some (bp.getD k 0)` (ditto conts); `bs.length =
+  bp.length`, `cs.length = cp.length`.
+- `LblConsistent lbls local` := `∀ l p, (l,p) ∈ local → lbls.lookup l = some p`.
+- `TabOk dpos fnPos fns dats` := `∀ d off, dats.lookup d = some off → off = dpos d`
+  and `∀ f p, fns.lookup f = some p → p = fnPos f` (for cref/callf).
+
+Per-case plan (all pieces exist):
+- **straight-line ops** (10) + **skip/annot**: `lower … op` is all-`.ins`; use
+  `AsmFacts.resolve_ins_mapM` (`r = sym.map insUnwrap`, so `r.flatten =
+  sym.flatMap insUnwrap`) + the `AsmFacts.{store,load}Slot_unwrap` lemmas to get
+  `emit op`; `emitCF … op = emit op` (rfl catch-all).
+- **seq**: `lower_seq` + `resolve_flatten_append`; two IHs; `emitCF seq = emitCF a
+  ++ emitCF b`. (Second half positioned at `here + 4·csize a` via
+  `lower_totalSymSize` = `totalSymSize (lower a)`.)
+- **ret/brkB/contL**: `lower_* = [.jmp x]`; singleton `mapM`; the resolve helper
+  `resolveOne_jmp_eq` (already drafted: given `lbls.lookup l = some tgt` and
+  success, the result is `[jal0 (tgt−pos)]`) with `tgt` from `LEnvOk`
+  (`epiOk`/`brkOk`/`contOk`; `wf` gives the index `< length`). Matches
+  `emitCF = [jal0 (ep−here)]` since the jmp sits at `pos = here`.
+- **cref/clen**: `lower_cref`/`lower_clen`; `.cref d` resolves (via `htab.datOk`)
+  to `crefI T0 T1 (dpos d − (here+4))` = `emitCF`'s crefI; `storeSlot`→`storeSlotI`;
+  `clen`'s `synthConst` is all-`.ins` = `synthI`.
+- **call**: marshal loads (all-`.ins`) + `.callf f` (resolve via `htab.fnOk` to
+  `jal RA (fnPos f − (here+4·argc))`) + ret stores (all-`.ins`).
+- **block/ife/while**: the position arithmetic. Decompose `lower_*` into `++`
+  pieces, resolve each via `resolve_flatten_append`, recurse with IHs on the
+  sub-statements. The internal `.label`s (lEnd / lT,lEnd / lTop,lBody,lEnd) sit at
+  positions computed from `layoutItems_pos` + `lower_totalSymSize` (e.g. ife's `lT`
+  = `here + 16 + 4·csize e`); `LblConsistent` turns those into `lbls.lookup`
+  values, and the emitted `.br`/`.jmp` offsets (`resolveOne_br_eq`/`_jmp_eq`) then
+  equal `emitCF`'s size-relative offsets by arithmetic. For while's body, build the
+  new `LEnvOk` with cont-head `cnt ↦ here` (from `LblConsistent` on the leading
+  `.label cnt`); for block, brk-head `cnt ↦ here + 4·csize body`.
+
+Then `hfn`/`hem` follows: instantiate `lower_resolve` at each function's body with
+`lbls`/`fns`/`dats` = the global `layout`/`fnTab`/`dataOffsets` tables, discharging
+`LEnvOk`/`LblConsistent` from `layout`'s construction + `fresh`-monotonicity label
+nodup (the remaining plumbing), and glue with §6's `prologue_resolves`/
+`epilogue_resolves`.
+
 ## 2026-07-05 (compile_sim campaign) — Phase 2: prologue/epilogue resolve correspondence (`hfn` foundation)
 
 `AsmFacts.lean` §6 (new): the two SELF-CONTAINED halves of the `hfn`/`hem`
