@@ -310,7 +310,12 @@ def compileProgT (P : Program) (entry : Name) :
     Option (List Instr × List (Name × Nat) × List (Name × Nat)) :=
   if !(wfProgram P && P.env.all (fun nf => fnOk nf.2)
        && (List.lookup entry P.env).isSome
-       && P.data.all (fun d => d.2.length < 2 ^ 23))    -- cref/clen synth range
+       && P.data.all (fun d => d.2.length < 2 ^ 22))    -- cref/clen synth range
+       -- NOTE: bound tightened 2^23 → 2^22 (2026-07-05). `clen` synthesizes the
+       -- data length via `synthConst` (no range check), whose hi immediate is
+       -- `synthHi len = ⌊(len+2048)/4096⌋`; that hits 2048 for `len ∈ [2^23−2048,
+       -- 2^23)`, overflowing `BitVec.ofInt 12` (wraps to −2048 ⇒ wrong length).
+       -- 2^22 sits well inside the synthesizable band; discharges ProgSim `hdat`.
   then none
   else
     let segs : List (Name × List SymInstr) :=

@@ -474,9 +474,21 @@ root). DONE, all axiom-clean: `Installed`-from-memory, both conjuncts —
 `asmBytes_getElem?`/`_getD`/`_length` (flatten byte-indexing) →
 `installed_code_of_mem` (code conjunct, composing Phase-1 `decode_encode`, needs
 `∀ i∈instrs, WF i`) → `installed_of_mem` (both conjuncts from decoupled code/data
-byte hypotheses). Plus `userPad_eq` discharging the `call` case's `hpad`. REMAINING:
-the layout↔`Emitted` correspondence (`hfn`/`hem`), the data-layout obligations
-(`hdbase`/`hdpos`/`hdat`), and trivial `halign`/`hstackLo` — itemised below.
+byte hypotheses). Plus `userPad_eq` discharging the `call` case's `hpad`.
+**§5 flat-obligation discharges DONE (2026-07-05), all axiom-clean:**
+- `layoutOf_stackLo` (`hstackLo` — the field is copied verbatim);
+- `clen_synthOk` (`hdat` — `-2048 ≤ synthHi(len) ≤ 2047`) + `lookup_len_lt`
+  (`BEq`-agnostic, no `LawfulBEq`) + `compileProgT_dataBound` (extracts the guard);
+- `dbaseOf_dposOf` (`hdbase` — IL `dbaseOf (codeBase+segStart)` lands each object
+  at `codeBase + dposOf d`, via `dataOffsetsFrom_shift`) + the `dposOf L` def.
+- ⚠ **COMPILER GUARD TIGHTENED `2^23 → 2^22`** (`Compile.lean:313`, 2026-07-05).
+  Phase-2 surfaced a real narrow soundness gap: `clen`'s `synthConst` (no range
+  check) needs `len < 2^23−2048` (`synthHi = ⌊(len+2048)/4096⌋` hits 2048,
+  overflowing `BitVec.ofInt 12` → wrong length) but the old guard was `< 2^23`.
+  User-chosen fix: round to `< 2^22`. All differential tests re-green (no real
+  program is near the bound); `clen_synthOk` now discharges from it.
+REMAINING: the layout↔`Emitted` correspondence (`hfn`/`hem` — the big one), `hdpos`
+(needs a blob-size bound), and `halign` (a `prog_sim` codeBase-alignment hyp) — below.
 - `symSize`-consistency: `(resolveOne … (pos,si)).length * 4 = symSize si`;
   `progBytes` indexing: instruction j's 4 bytes sit at its `layout` position
   (list-flatten arithmetic, same flavor as the already-proved

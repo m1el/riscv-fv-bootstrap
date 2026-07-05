@@ -1,5 +1,31 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-05 (compile_sim campaign) — Phase 2: three flat obligations discharged + a real compiler-guard fix
+
+Progress on `AsmFacts.lean` (Phase 2, the assembler layer). Three of the flat
+compile-time hypotheses that `lower_sim_cf`/`prog_sim` take are now discharged
+from the real `layoutOf`/compiler, all axiom-clean (`[propext]` or `[propext,
+Quot.sound]`):
+- `layoutOf_stackLo` → `hstackLo`;
+- `clen_synthOk` → `hdat` (with `lookup_len_lt`, `BEq`-agnostic; and
+  `compileProgT_dataBound` extracting the data guard);
+- `dbaseOf_dposOf` → `hdbase` (+ the `dposOf L` def), via `dataOffsetsFrom_shift`.
+
+**A genuine narrow soundness gap fixed.** Verifying `hdat` surfaced that
+`clen`'s constant synthesis (`synthConst`, unchecked) needs a data length
+`< 2^23−2048` — `synthHi = ⌊(len+2048)/4096⌋` reaches 2048 for `len ∈
+[2^23−2048, 2^23)`, overflowing the 12-bit signed hi immediate (`BitVec.ofInt
+12 2048` wraps to −2048 ⇒ the compiled `clen` loads a garbage length). The
+compiler's guard was `length < 2^23` (`Compile.lean:313`) — too loose by 2048.
+`cref` is safe (its `resolveOne` explicitly range-checks); only `clen` was
+exposed. Fixed by tightening the guard to `< 2^22` (user-chosen round bound,
+well inside the synthesizable band). All differential tests re-green — no real
+program is near 4 MB of const data.
+
+REMAINING in Phase 2: `hfn`/`hem` (the layout↔`Emitted` per-function
+correspondence — the big volume piece), `hdpos` (blob-size bound), `halign`
+(a `prog_sim` codeBase-alignment hypothesis). Then Phase 6 (`prog_sim`).
+
 ## 2026-07-05 (compile_sim campaign) — Phase 5 COMPLETE: `lower_sim_cf` call case closed, axiom-clean
 
 The `call` case of `lower_sim_cf` (the last statement-level `sorry`) is proved.
