@@ -1472,7 +1472,8 @@ theorem lower_sim_cf
           ∧ fnPos g + 4 * prologueSize gd + 4 * csize gd.body + 4 * epilogueSize gd < 2 ^ 20
           ∧ BranchOk gd.body
           ∧ totalFrame gd ≤ 2000
-          ∧ gd.frameSize % 8 = 0) :
+          ∧ gd.frameSize % 8 = 0
+          ∧ fnPos g % 4 = 0) :
     ∃ k, StInv L fd holes s' (stepN k m)
        ∧ (stepN k m).pc = L.codeBase
            + BitVec.ofNat 64 (landPos brkPos contPos epiPos (here + 4 * csize stmt) oc)
@@ -2148,7 +2149,7 @@ theorem lower_sim_cf
       subst hoc
       simp only [Bool.and_eq_true, beq_iff_eq] at harity
       obtain ⟨hgargc, hgrvc⟩ := harity
-      obtain ⟨hfnEm, hfnBnd, hfnBr, hfnTF, hfnFS8⟩ := hfn f gd hlk
+      obtain ⟨hfnEm, hfnBnd, hfnBr, hfnTF, hfnFS8, hfnAlign⟩ := hfn f gd hlk
       have hpadf : pad f = userOff gd := hpad f gd hlk
       -- caller register/slot bounds from `maxRegS`
       simp only [maxRegS] at hreg
@@ -2192,6 +2193,111 @@ theorem lower_sim_cf
         rw [hstepJal, rget_setPc, rget_rset_self _ RA _ (by decide), hMarPc, hAL]
       have hJalMem : (step (stepN kMar m)).mem = m.mem := by
         rw [hstepJal, mem_setPc, mem_rset, hMarMem]
+      -- ==== unfold frameEnter to expose the callee's fields ====
+      rw [hpadf] at hfe
+      simp only [LowIR.Prog.frameEnter] at hfe
+      split at hfe
+      · exact absurd hfe (by simp)
+      rename_i hof
+      rw [Option.some.injEq] at hfe
+      -- overflow negation ⇒ the frame fits below sp
+      have hofN : stackLo.toNat + gd.frameSize + userOff gd ≤ s.sp.toNat := by
+        simp only [Nat.not_lt] at hof; exact hof
+      have htf_eq : totalFrame gd = userOff gd + gd.frameSize := rfl
+      have hsp0ge : totalFrame gd ≤ s.sp.toNat := by omega
+      -- callee fields
+      have hcsp : callee.sp = s.sp - BitVec.ofNat 64 (totalFrame gd) := by
+        rw [← hfe]; simp only; rw [htf_eq, ← BitVec.ofNat_add_ofNat]; bv_omega
+      have hcspN : callee.sp.toNat = s.sp.toNat - totalFrame gd := by rw [hcsp]; bv_omega
+      have hcmem : callee.mem
+          = LowIR.Prog.zeroRange s.mem (s.sp - BitVec.ofNat 64 gd.frameSize) gd.frameSize := by
+        rw [← hfe]
+      have hfbEq : s.sp - BitVec.ofNat 64 gd.frameSize
+          = callee.sp + BitVec.ofNat 64 (userOff gd) := by
+        rw [hcsp, htf_eq, ← BitVec.ofNat_add_ofNat]; bv_omega
+      have hcrg : ∀ r, 1 ≤ r → callee.rget r
+          = if r = gd.frameReg then s.sp - BitVec.ofNat 64 gd.frameSize
+            else parkFold (fun _ => 0) (gd.params.toList.zip (args.toList.map s.rget)) r := by
+        intro r hr
+        have hr0 : r ≠ 0 := Nat.one_le_iff_ne_zero.mp hr
+        rw [← hfe]
+        simp only [LowIR.Prog.St.rget, if_neg hr0, parkFold]
+      -- ==== segment 3: prologue ====
+      have hemPro : Emitted L (fnPos f) (prologueI gd) :=
+        Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hfnEm)
+      have hsp0 : (step (stepN kMar m)).rget SP = s.sp := hJalInv.1
+      have hargs : ∀ i, (hi : i < (args.toList.map s.rget).length) →
+          (step (stepN kMar m)).rget (A i) = (args.toList.map s.rget)[i] := by
+        intro i hi
+        have hi' : i < args.toList.length := by simpa using hi
+        rw [hstepJal, rget_setPc, rget_rset_ne _ RA (A i) _ (by show 10 + i ≠ 1; omega),
+            List.getElem_map]
+        have := hMarVal i hi'; simpa using this
+      have hlen : gd.params.toList.length = (args.toList.map s.rget).length := by
+        simp only [List.length_map]
+        rw [show gd.params.toList.length = gd.argc from by simp,
+            show args.toList.length = argc from by simp, hgargc]
+      have hparb : ∀ x ∈ gd.params.toList, x ≤ maxRegF gd := fun x hx => by
+        have h1 : x ≤ gd.params.toList.foldl max 0 := mem_le_foldl_max x _ _ hx
+        simp only [maxRegF]
+        exact Nat.le_trans h1 (Nat.le_trans (Nat.le_max_left _ _)
+          (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_right _ _)))
+      have hfrb : gd.frameReg ≤ maxRegF gd := by
+        simp only [maxRegF]; exact Nat.le_trans (Nat.le_max_left _ _) (Nat.le_max_right _ _)
+      have haddr : (callee.sp + BitVec.ofNat 64 (userOff gd)).toNat = callee.sp.toNat + userOff gd := by
+        have hsplt : s.sp.toNat < 2 ^ 64 := s.sp.isLt
+        have h1 : callee.sp.toNat + userOff gd < 2 ^ 64 := by omega
+        rw [BitVec.toNat_add, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega : userOff gd < 2 ^ 64)]
+        omega
+      have hmemF : ∀ a, OffPriv L ((callee.sp, userOff gd) :: holes) callee.sp a →
+          ¬ memRange a (callee.sp + BitVec.ofNat 64 (userOff gd)) gd.frameSize →
+          callee.mem a = (step (stepN kMar m)).mem a := by
+        intro a hoff hnfr
+        rw [hcmem]
+        have hz : LowIR.Prog.zeroRange s.mem (s.sp - BitVec.ofNat 64 gd.frameSize) gd.frameSize a
+            = s.mem a := by
+          simp only [LowIR.Prog.zeroRange, hfbEq]
+          rw [if_neg]; intro hc; exact hnfr ⟨hc.1, hc.2⟩
+        rw [hz]
+        have hcallhole : ¬ memRange a callee.sp (userOff gd) := fun hm =>
+          hoff.1 (Or.inr ⟨(callee.sp, userOff gd), List.mem_cons_self, hm⟩)
+        have hmpc : ¬ MachPriv L holes a := by
+          intro hmp
+          apply hoff.1
+          rcases hmp with h | ⟨hh, hhm, hr⟩
+          · exact Or.inl h
+          · exact Or.inr ⟨hh, List.mem_cons_of_mem _ hhm, hr⟩
+        refine hJalInv.2.2.2.1 a ⟨hmpc, ?_⟩
+        intro hmr
+        have ho2 := hoff.2
+        simp only [memRange] at hmr ho2 hcallhole hnfr
+        rw [haddr] at hnfr
+        omega
+      have hcmemZ : ∀ a, memRange a (callee.sp + BitVec.ofNat 64 (userOff gd)) gd.frameSize →
+          callee.mem a = 0 := by
+        intro a ha
+        have ha' : BitVec.toNat (callee.sp + BitVec.ofNat 64 (userOff gd)) ≤ BitVec.toNat a
+            ∧ BitVec.toNat a < BitVec.toNat (callee.sp + BitVec.ofNat 64 (userOff gd)) + gd.frameSize :=
+          ha
+        rw [hcmem]; simp only [LowIR.Prog.zeroRange, hfbEq]
+        rw [if_pos ha']
+      have hsp0align : s.sp.toNat % 8 = 0 := hJalInv.2.2.2.2.2.1
+      have hbdc : L.codeBase.toNat + L.blobLen ≤ callee.sp.toNat
+          ∨ callee.sp.toNat + userOff gd ≤ L.codeBase.toNat := by
+        rcases hbd with ⟨h1, h2⟩ | h
+        · exact Or.inl (by omega)
+        · exact Or.inr (by omega)
+      have hbdcF : L.codeBase.toNat + L.blobLen ≤ callee.sp.toNat
+          ∨ callee.sp.toNat + totalFrame gd ≤ L.codeBase.toNat := by
+        rcases hbd with ⟨h1, h2⟩ | h
+        · exact Or.inl (by omega)
+        · exact Or.inr (by omega)
+      obtain ⟨kPro, hProInv, hProPc, hProRA, hProMem⟩ :=
+        prologue_sim L gd holes (step (stepN kMar m)) s.sp
+          (L.codeBase + BitVec.ofNat 64 (here + 4 * argc) + 4) callee (args.toList.map s.rget)
+          (fnPos f) hJalPc hemPro hJalInv.2.2.1 hsp0 hJalRA hargs hlen hparb hfrb hcsp hcrg
+          hmemF hcmemZ hfnTF hfnFS8 hsp0align hsp0ge hseg hblob hbdc hbdcF
+          hJalInv.2.2.2.2.2.2.1 hJalInv.2.2.2.2.2.2.2
       sorry
 
 end LowIR.ProgSim

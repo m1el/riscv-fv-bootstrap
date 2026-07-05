@@ -50,6 +50,18 @@ theorem loadByte_agree (s : St) (m : State) (a : Word) (h : s.mem a = m.mem a) :
 theorem loadWord_mem_congr (m1 m2 : State) (a : Word) (h : m1.mem = m2.mem) :
     m1.loadWord a = m2.loadWord a := by simp only [State.loadWord, h]
 
+/-- Two machine states whose eight base bytes `a … a+7` agree read the same word —
+    the `State`-to-`State` analogue of `loadWord_agree`, used to transport a
+    saved return address / caller slot through a call when only the frame bytes
+    are known preserved (`FramesPres`), not the whole memory. -/
+theorem State_loadWord_congr8 (m1 m2 : State) (a : Word)
+    (h0 : m1.mem a = m2.mem a) (h1 : m1.mem (a + 1) = m2.mem (a + 1))
+    (h2 : m1.mem (a + 2) = m2.mem (a + 2)) (h3 : m1.mem (a + 3) = m2.mem (a + 3))
+    (h4 : m1.mem (a + 4) = m2.mem (a + 4)) (h5 : m1.mem (a + 5) = m2.mem (a + 5))
+    (h6 : m1.mem (a + 6) = m2.mem (a + 6)) (h7 : m1.mem (a + 7) = m2.mem (a + 7)) :
+    m1.loadWord a = m2.loadWord a := by
+  simp only [State.loadWord, h0, h1, h2, h3, h4, h5, h6, h7]
+
 /-- The load-value payoff: at an address whose eight bytes are off `MachPriv`, the
     machine load equals the IL load (`StInv` gives byte agreement there). -/
 theorem loadWord_agree_off (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State)
