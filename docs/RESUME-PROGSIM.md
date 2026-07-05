@@ -451,14 +451,21 @@ memory-safety statements anyway.
 3. `execT` + erasure (§3.4).
    *Risk: low. Size: ~400 lines.*
 
-**Phase 1 — encode/decode generically.** `decode (encode i) = i` per
-constructor, ∀ operands in range (rd/rs < 32, sh < 64, imm any). Today this
-is only checked per-program by `native_decide`. Two routes: (a) restate
-`encode`'s field packing in BitVec form and hit each constructor with
-`bv_decide`/`bv_omega` after bounding Nat operands; (b) hand bit-arithmetic
-à la `RvCross.v`'s decode half. Try (a) first; budget for (b).
-*Risk: MEDIUM (known painful bit-fiddling). Size: ~600 lines. Fully
-parallel to Phases 2-3; can start immediately.*
+**Phase 1 — encode/decode generically. ✅ DONE (2026-07-05, `d2b4a80`).**
+`lean/LowIR/ProgSim/EncodeFacts.lean` (new `LowIRProgSim` root): a general,
+axiom-clean (`[propext, Quot.sound]`) `decode (encode i) = i` for all 16 forms,
+plus `WF : Instr → Prop` (the operand-range side condition: regs < 32; shamt < 32;
+branch/jump offsets even) and the dispatcher `decode_encode : ∀ i, WF i →
+decode (encode i) = i`. Route (b) — hand bit-arithmetic — was the one taken:
+`bv_decide` is unavailable (needs `Std.Tactic.BVDecide`) and the stdlib's
+`Nat.and_two_pow_sub_one_eq_mod` is `Classical.choice`-tainted, so the file
+reproves a clean bit toolkit culminating in the order-agnostic combinator
+`lor_window_add` (disjoint-OR-is-add), reducing `(encode i).toNat` to an
+arithmetic sum so every `field` extraction closes by `omega`. ⚠ Two round-trip
+side conditions surfaced (both now in `WF`, both Phase-2 obligations): `slli`/`srli`
+need `sh < 32` (the trusted decode's `funct7 = field w 25 7` overlaps shamt bit 5);
+branches/`jal` need the offset even (4-aligned targets). *Was: MEDIUM risk,
+~600 lines — landed at ~530.*
 
 **Phase 2 — the assembler layer (layout/resolve).**
 - `symSize`-consistency: `(resolveOne … (pos,si)).length * 4 = symSize si`;
@@ -545,7 +552,7 @@ lean/LowIR/ProgSim/Defs.lean         Layout/Installed/StInv/SimPre, execT     [D
                                        + execT_erase (0.3); prog_sim sorry'd
 lean/LowIR/ProgSim/WordMem.lean      Phase 3 start (LE load/store algebra)    [DONE]
 lean/LowIR/ProgSim/SlotFacts.lean    Phase 3 finish (StInv slot algebra)      [DONE]
-lean/LowIR/ProgSim/EncodeFacts.lean  Phase 1
+lean/LowIR/ProgSim/EncodeFacts.lean  Phase 1                                    [DONE]
 lean/LowIR/ProgSim/AsmFacts.lean     Phase 2
 lean/LowIR/ProgSim/StmtSim.lean      Phase 4 (the induction)
 lean/LowIR/ProgSim/CallSim.lean      Phase 5
