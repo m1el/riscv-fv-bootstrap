@@ -2194,6 +2194,7 @@ theorem lower_sim_cf
       have hJalMem : (step (stepN kMar m)).mem = m.mem := by
         rw [hstepJal, mem_setPc, mem_rset, hMarMem]
       -- ==== unfold frameEnter to expose the callee's fields ====
+      have hfe0 := hfe
       rw [hpadf] at hfe
       simp only [LowIR.Prog.frameEnter] at hfe
       split at hfe
@@ -2298,6 +2299,90 @@ theorem lower_sim_cf
           (fnPos f) hJalPc hemPro hJalInv.2.2.1 hsp0 hJalRA hargs hlen hparb hfrb hcsp hcrg
           hmemF hcmemZ hfnTF hfnFS8 hsp0align hsp0ge hseg hblob hbdc hbdcF
           hJalInv.2.2.2.2.2.2.1 hJalInv.2.2.2.2.2.2.2
+      -- ==== segment 4: the body — fuel IH applied to the callee body ====
+      have hemBody : Emitted L (fnPos f + 4 * prologueSize gd)
+          (emitCF P.data dpos fnPos [] [] (fnPos f + 4 * prologueSize gd + 4 * csize gd.body)
+            (fnPos f + 4 * prologueSize gd) gd.body) := by
+        have h := Emitted_append_right _ _ (prologueI gd) _ (Emitted_append_left _ _ _ _ hfnEm)
+        rw [show (prologueI gd).length = prologueSize gd from rfl] at h
+        exact h
+      have hregBody : maxRegS gd.body ≤ maxRegF gd := by
+        simp only [maxRegF]; exact Nat.le_max_left _ _
+      have hnwBody : callee.sp.toNat + userOff gd ≤ 2 ^ 64 := by have := s.sp.isLt; omega
+      have hbdBody : (L.codeBase.toNat + L.blobLen ≤ stackLo.toNat ∧ stackLo.toNat ≤ callee.sp.toNat)
+          ∨ callee.sp.toNat + userOff gd ≤ L.codeBase.toNat := by
+        rcases hbd with ⟨h1, h2⟩ | h
+        · exact Or.inl ⟨h1, by omega⟩
+        · exact Or.inr (by omega)
+      have haccBody : MemAccOff L ((callee.sp, userOff gd) :: holes) P dbase pad stackLo fuel
+          gd.body callee := by
+        have h := haccess
+        simp only [MemAccOff, hlk] at h
+        rw [hfe0] at h
+        exact h
+      have hframeBody : userOff gd ≤ 2000 := by
+        have h := hfnTF; simp only [totalFrame] at h; omega
+      obtain ⟨kBod, hBodInv, hBodPc, hBodFr⟩ :=
+        ih gd.body callee s1 ocb (stepN kPro (step (stepN kMar m)))
+          (fnPos f + 4 * prologueSize gd) [] [] hbody hProInv hProPc hemBody hregBody hnwBody
+          hbdBody haccBody ⟨by simp, by simp, by omega⟩ (by omega) hfnBr hframeBody (by omega)
+      have hBodPc' : (stepN kBod (stepN kPro (step (stepN kMar m)))).pc
+          = L.codeBase + BitVec.ofNat 64 (fnPos f + 4 * prologueSize gd + 4 * csize gd.body) := by
+        rw [hBodPc]; rcases hocb with h | h <;> subst h <;> simp only [landPos]
+      -- ==== segment 5: epilogue ====
+      have huo16 : 16 ≤ userOff gd := by simp only [userOff]; omega
+      have hs1sp : s1.sp = callee.sp := by
+        have hc5 := hBodInv.2.2.2.2.1
+        simp only [List.head?_cons, Option.some.injEq, Prod.mk.injEq] at hc5
+        exact hc5.1.symm
+      have hemEpi : Emitted L (fnPos f + 4 * prologueSize gd + 4 * csize gd.body) (epilogueI gd) := by
+        have h := Emitted_append_right _ _ (prologueI gd ++ emitCF P.data dpos fnPos [] []
+            (fnPos f + 4 * prologueSize gd + 4 * csize gd.body) (fnPos f + 4 * prologueSize gd)
+            gd.body) (epilogueI gd) hfnEm
+        rw [List.length_append, emitCF_length,
+            show (prologueI gd).length = prologueSize gd from rfl] at h
+        rw [show fnPos f + 4 * (prologueSize gd + csize gd.body)
+              = fnPos f + 4 * prologueSize gd + 4 * csize gd.body from by omega] at h
+        exact h
+      have hcadd : ∀ i : Nat, i < 8 → (callee.sp + BitVec.ofNat 64 i).toNat = callee.sp.toNat + i := by
+        intro i hi
+        have hclt : callee.sp.toNat < 2 ^ 64 := callee.sp.isLt
+        rw [BitVec.toNat_add, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega : i < 2 ^ 64)]
+        omega
+      have hraslot : (stepN kBod (stepN kPro (step (stepN kMar m)))).loadWord s1.sp
+          = L.codeBase + BitVec.ofNat 64 (here + 4 * argc) + 4 := by
+        rw [hs1sp]
+        have hpres : ∀ i : Nat, i < 8 →
+            (stepN kBod (stepN kPro (step (stepN kMar m)))).mem (callee.sp + BitVec.ofNat 64 i)
+              = (stepN kPro (step (stepN kMar m))).mem (callee.sp + BitVec.ofNat 64 i) := by
+          intro i hi
+          have haddi := hcadd i hi
+          have hmr : memRange (callee.sp + BitVec.ofNat 64 i) callee.sp (userOff gd) :=
+            ⟨by rw [haddi]; omega, by rw [haddi]; omega⟩
+          exact hBodFr _ ⟨(callee.sp, userOff gd), List.mem_cons_self, hmr⟩
+            (Or.inl (by rw [haddi]; omega))
+        refine (State_loadWord_congr8 _ _ callee.sp
+          (by simpa using hpres 0 (by omega)) (by simpa using hpres 1 (by omega))
+          (by simpa using hpres 2 (by omega)) (by simpa using hpres 3 (by omega))
+          (by simpa using hpres 4 (by omega)) (by simpa using hpres 5 (by omega))
+          (by simpa using hpres 6 (by omega)) (by simpa using hpres 7 (by omega))).trans hProRA
+      have hretbGd : ∀ x ∈ gd.rets.toList, x ≤ maxRegF gd := fun x hx => by
+        have h1 : x ≤ gd.rets.toList.foldl max 0 := mem_le_foldl_max x _ _ hx
+        simp only [maxRegF]
+        exact Nat.le_trans h1 (Nat.le_trans (Nat.le_max_right _ _)
+          (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_right _ _)))
+      have hretslotGd : ∀ x ∈ gd.rets.toList, slotOff x < 2 ^ 11 := fun x hx => by
+        have := slotOff_add8_le_userOff gd x (hretbGd x hx); omega
+      have hraeven : (L.codeBase + BitVec.ofNat 64 (here + 4 * argc) + 4).toNat % 2 = 0 := by
+        rw [BitVec.add_assoc, show (4 : Word) = BitVec.ofNat 64 4 from rfl, BitVec.ofNat_add_ofNat,
+            BitVec.toNat_add, BitVec.toNat_ofNat]
+        omega
+      obtain ⟨kEpi, hEpiPc, hEpiSP, hEpiVal, hEpiMem⟩ :=
+        epilogue_sim L gd ((callee.sp, userOff gd) :: holes)
+          (stepN kBod (stepN kPro (step (stepN kMar m)))) s1
+          (L.codeBase + BitVec.ofNat 64 (here + 4 * argc) + 4)
+          (fnPos f + 4 * prologueSize gd + 4 * csize gd.body)
+          hBodInv hBodPc' hemEpi hraslot hraeven hretbGd hretslotGd (by omega)
       sorry
 
 end LowIR.ProgSim
