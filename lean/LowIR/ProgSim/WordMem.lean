@@ -161,25 +161,25 @@ theorem storeWord_zero_mem_inside (s : State) (a x : Word)
   · rcases Nat.lt_or_ge (x.toNat - a.toNat) 2 with h2 | h2
     · rcases Nat.lt_or_ge (x.toNat - a.toNat) 1 with h1 | h1
       · rw [show x.toNat - a.toNat = 0 from by omega] at hxe
-        subst hxe; simp [State.storeWord, State.storeByte]
+        subst hxe; simp only [State.storeWord, State.storeByte, BitVec.add_right_inj, BitVec.add_right_eq_self]; rfl
       · rw [show x.toNat - a.toNat = 1 from by omega] at hxe
-        subst hxe; simp [State.storeWord, State.storeByte]
+        subst hxe; simp only [State.storeWord, State.storeByte, BitVec.add_right_inj, BitVec.add_right_eq_self]; rfl
     · rcases Nat.lt_or_ge (x.toNat - a.toNat) 3 with h3 | h3
       · rw [show x.toNat - a.toNat = 2 from by omega] at hxe
-        subst hxe; simp [State.storeWord, State.storeByte]
+        subst hxe; simp only [State.storeWord, State.storeByte, BitVec.add_right_inj, BitVec.add_right_eq_self]; rfl
       · rw [show x.toNat - a.toNat = 3 from by omega] at hxe
-        subst hxe; simp [State.storeWord, State.storeByte]
+        subst hxe; simp only [State.storeWord, State.storeByte, BitVec.add_right_inj, BitVec.add_right_eq_self]; rfl
   · rcases Nat.lt_or_ge (x.toNat - a.toNat) 6 with h6 | h6
     · rcases Nat.lt_or_ge (x.toNat - a.toNat) 5 with h5 | h5
       · rw [show x.toNat - a.toNat = 4 from by omega] at hxe
-        subst hxe; simp [State.storeWord, State.storeByte]
+        subst hxe; simp only [State.storeWord, State.storeByte, BitVec.add_right_inj, BitVec.add_right_eq_self]; rfl
       · rw [show x.toNat - a.toNat = 5 from by omega] at hxe
-        subst hxe; simp [State.storeWord, State.storeByte]
+        subst hxe; simp only [State.storeWord, State.storeByte, BitVec.add_right_inj, BitVec.add_right_eq_self]; rfl
     · rcases Nat.lt_or_ge (x.toNat - a.toNat) 7 with h7 | h7
       · rw [show x.toNat - a.toNat = 6 from by omega] at hxe
-        subst hxe; simp [State.storeWord, State.storeByte]
+        subst hxe; simp only [State.storeWord, State.storeByte, BitVec.add_right_inj, BitVec.add_right_eq_self]; rfl
       · rw [show x.toNat - a.toNat = 7 from by omega] at hxe
-        subst hxe; simp [State.storeWord, State.storeByte]
+        subst hxe; simp only [State.storeWord, State.storeByte, BitVec.add_right_inj, BitVec.add_right_eq_self]; rfl
 
 end Rv64i
 

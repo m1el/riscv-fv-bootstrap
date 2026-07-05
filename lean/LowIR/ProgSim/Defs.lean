@@ -344,6 +344,29 @@ def memRange (a base : Word) (len : Nat) : Prop :=
 def memRangeB (a base : Word) (len : Nat) : Bool :=
   base.toNat ≤ a.toNat && a.toNat < base.toNat + len
 
+/-- A negated `memRange` as a clean disjunction of single inequalities. Deriving
+    it constructively (via `Nat.lt_or_ge`, never `omega` on the negated
+    conjunction) keeps proofs `Classical.choice`-free — `omega` may consume the
+    resulting `∨` in a hypothesis, but must never be handed `¬(P ∧ Q)`. -/
+theorem not_memRange {a base : Word} {len : Nat} (h : ¬ memRange a base len) :
+    a.toNat < base.toNat ∨ base.toNat + len ≤ a.toNat := by
+  rcases Nat.lt_or_ge a.toNat base.toNat with h1 | h1
+  · exact Or.inl h1
+  · rcases Nat.lt_or_ge a.toNat (base.toNat + len) with h2 | h2
+    · exact absurd ⟨h1, h2⟩ h
+    · exact Or.inr h2
+
+/-- Constructive excluded middle for `memRange` — a `Classical.choice`-free stand-in
+    for `by_cases` (which would fall back to `Classical` since `memRange` carries no
+    registered `Decidable` instance). -/
+theorem memRange_or_not (a base : Word) (len : Nat) :
+    memRange a base len ∨ ¬ memRange a base len := by
+  rcases Nat.lt_or_ge a.toNat base.toNat with h | h
+  · exact Or.inr (fun hc => absurd hc.1 (by omega))
+  · rcases Nat.lt_or_ge a.toNat (base.toNat + len) with h2 | h2
+    · exact Or.inl ⟨h, h2⟩
+    · exact Or.inr (fun hc => absurd hc.2 (by omega))
+
 /-- A machine-private hole: the `[ra][slots]` area an activation adds BELOW its
     user frame — `(base = that activation's sp, len = userOff)`. Listed per live
     activation by the `CallChain` ghost (Phase 5). -/

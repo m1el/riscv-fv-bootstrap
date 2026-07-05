@@ -62,6 +62,29 @@ theorem State_loadWord_congr8 (m1 m2 : State) (a : Word)
     m1.loadWord a = m2.loadWord a := by
   simp only [State.loadWord, h0, h1, h2, h3, h4, h5, h6, h7]
 
+/-- Two machine states that agree on all of `[base, base+len)` read the same word
+    at any address whose eight bytes lie in that range. Packages the eight-byte
+    `State_loadWord_congr8` obligations behind a single range-containment side
+    condition — used to transport caller slots / return addresses across a call. -/
+theorem loadWord_congr_range (m1 m2 : State) (addr base : Word) (len : Nat)
+    (hlo : base.toNat ≤ addr.toNat) (hhi : addr.toNat + 8 ≤ base.toNat + len)
+    (hnw : addr.toNat + 8 ≤ 2 ^ 64)
+    (hagree : ∀ b : Word, memRange b base len → m1.mem b = m2.mem b) :
+    m1.loadWord addr = m2.loadWord addr := by
+  have key : ∀ k : Nat, k < 8 →
+      m1.mem (addr + BitVec.ofNat 64 k) = m2.mem (addr + BitVec.ofNat 64 k) := by
+    intro k hk
+    apply hagree
+    have hkt : (addr + BitVec.ofNat 64 k).toNat = addr.toNat + k := by
+      rw [BitVec.toNat_add, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega : k < 2 ^ 64),
+          Nat.mod_eq_of_lt (by omega)]
+    exact ⟨by rw [hkt]; omega, by rw [hkt]; omega⟩
+  exact State_loadWord_congr8 m1 m2 addr
+    (by simpa using key 0 (by omega)) (by simpa using key 1 (by omega))
+    (by simpa using key 2 (by omega)) (by simpa using key 3 (by omega))
+    (by simpa using key 4 (by omega)) (by simpa using key 5 (by omega))
+    (by simpa using key 6 (by omega)) (by simpa using key 7 (by omega))
+
 /-- The load-value payoff: at an address whose eight bytes are off `MachPriv`, the
     machine load equals the IL load (`StInv` gives byte agreement there). -/
 theorem loadWord_agree_off (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) (m : State)

@@ -432,7 +432,6 @@ theorem run_marshalFrom (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) 
     each single slot write (`run_storeFrom`), whose register-preservation clause
     keeps the yet-unstored `A` values live through earlier stores. -/
 theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
-    (hnw : ∀ s : St, s.sp.toNat + userOff fd ≤ 2 ^ 64)
     (hseg : 4 * L.instrs.length ≤ L.segStart)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64) :
     ∀ (rets : List Nat) (vs : List Word) (base q : Nat) (s : St) (m : State),
@@ -443,6 +442,7 @@ theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
       (∀ r ∈ rets, slotOff r < 2 ^ 11) →
       (L.codeBase.toNat + L.blobLen ≤ s.sp.toNat
          ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat) →
+      s.sp.toNat + userOff fd ≤ 2 ^ 64 →
       rets.length = vs.length →
       (∀ i, (hi : i < vs.length) → m.rget (A (base + i)) = vs[i]) →
       ∃ k, StInv L fd holes ((rets.zip vs).foldl (fun st rv => st.rset rv.1 rv.2) s) (stepN k m)
@@ -453,14 +453,14 @@ theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
   intro rets
   induction rets with
   | nil =>
-      intro vs base q s m hinv hpc _ _ _ _ _ _
+      intro vs base q s m hinv hpc _ _ _ _ _ _ _
       refine ⟨0, ?_, ?_, ?_⟩
       · simpa using hinv
       · simp only [stepN_zero, List.zipIdx_nil, List.flatMap_nil, List.length_nil,
                    Nat.mul_zero, Nat.add_zero]; exact hpc
       · exact FramesPres_of_mem_eq holes s.sp fd m (stepN 0 m) (by rw [stepN_zero])
   | cons r rest ih =>
-      intro vs base q s m hinv hpc hem hrd hfr hbd hlen hval
+      intro vs base q s m hinv hpc hem hrd hfr hbd hnwS hlen hval
       obtain ⟨v, vrest, rfl⟩ : ∃ v vrest, vs = v :: vrest := by
         cases vs with
         | nil => simp at hlen
@@ -478,10 +478,11 @@ theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
         rwa [Nat.add_zero, List.getElem_cons_zero] at h
       obtain ⟨ks, hSts, hStpc, hFrs, hRegs⟩ :=
         run_storeFrom L fd holes s m r (A base) v q hinv hT hpc hemL
-          (hrd r (by simp)) (hfr r (by simp)) (hnw s) hseg hblob hbd
+          (hrd r (by simp)) (hfr r (by simp)) hnwS hseg hblob hbd
       -- recurse on the tail from the post-store machine state
       have hbd' : L.codeBase.toNat + L.blobLen ≤ (s.rset r v).sp.toNat
           ∨ (s.rset r v).sp.toNat + userOff fd ≤ L.codeBase.toNat := by rw [hsp]; exact hbd
+      have hnwS' : (s.rset r v).sp.toNat + userOff fd ≤ 2 ^ 64 := by rw [hsp]; exact hnwS
       have hlen' : rest.length = vrest.length := by
         simpa using hlen
       have hvalR : ∀ i, (hi : i < vrest.length) →
@@ -495,7 +496,7 @@ theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
       obtain ⟨k, hStK, hpcK, hFrK⟩ :=
         ih vrest (base + 1) (q + 4 * (storeSlotI r (A base)).length) (s.rset r v) (stepN ks m)
           hSts hStpc hemR (fun x hx => hrd x (List.mem_cons_of_mem r hx))
-          (fun x hx => hfr x (List.mem_cons_of_mem r hx)) hbd' hlen' hvalR
+          (fun x hx => hfr x (List.mem_cons_of_mem r hx)) hbd' hnwS' hlen' hvalR
       refine ⟨ks + k, ?_, ?_, ?_⟩
       · rw [stepN_add]
         simpa only [List.zip_cons_cons, List.foldl_cons] using hStK
@@ -876,10 +877,11 @@ theorem run_zeroFrame (L : Layout) (fd : FunDef) (sp : Word)
   induction N with
   | zero =>
       intro q m _ hsp hpc _ hinst
-      refine ⟨0, by simpa using hsp, ?_, fun t => by rw [stepN_zero], by simpa using hinst,
+      refine ⟨0, by rw [stepN_zero]; exact hsp, ?_, fun t => by rw [stepN_zero],
+              by rw [stepN_zero]; exact hinst,
               ?_, fun a _ => by rw [stepN_zero], fun a _ => by rw [stepN_zero]⟩
       · simp only [stepN_zero, Nat.mul_zero, Nat.add_zero]; exact hpc
-      · intro a ha; exact absurd ha (by unfold memRange; omega)
+      · intro a ha; obtain ⟨_, _⟩ := ha; omega
   | succ N ih =>
       intro q m hN hsp hpc hem hinst
       rw [List.range_succ, List.map_append] at hem
@@ -931,17 +933,27 @@ theorem run_zeroFrame (L : Layout) (fd : FunDef) (sp : Word)
         simp only [memRange, hbaseN] at ha
         rcases Nat.lt_or_ge a.toNat (sp.toNat + userOff fd + 8 * N) with hin | hin
         · rw [Rv64i.storeWord_mem_outside (stepN kn m) _ 0 a hwa (Or.inl (by rw [haddr]; omega))]
-          exact hzeroN a (by simp only [memRange, hbaseN]; refine ⟨?_, ?_⟩ <;> omega)
+          exact hzeroN a (by simp only [memRange, hbaseN]; exact ⟨by omega, by omega⟩)
         · exact Rv64i.storeWord_zero_mem_inside (stepN kn m) _ a hwa
             (by rw [haddr]; omega) (by rw [haddr]; omega)
       · intro a ha
         rw [hstep1, hstep, mem_setPc]
         simp only [memRange, hbaseN] at ha
+        -- turn the negated-conjunction `ha` into a clean disjunction so `omega`
+        -- never processes `¬(P ∧ Q)` (which would pull `Classical.choice`).
+        have hout : a.toNat < sp.toNat + userOff fd
+            ∨ sp.toNat + userOff fd + 8 * (N + 1) ≤ a.toNat := by
+          rcases Nat.lt_or_ge a.toNat (sp.toNat + userOff fd) with h | h
+          · exact Or.inl h
+          · rcases Nat.lt_or_ge a.toNat (sp.toNat + userOff fd + 8 * (N + 1)) with h2 | h2
+            · exact absurd ⟨h, h2⟩ ha
+            · exact Or.inr h2
+        clear ha
         rcases Nat.lt_or_ge a.toNat (sp.toNat + userOff fd) with hlt | hge
         · rw [Rv64i.storeWord_mem_outside (stepN kn m) _ 0 a hwa (Or.inl (by rw [haddr]; omega))]
-          exact hpresN a (by simp only [memRange, hbaseN]; rintro ⟨_, _⟩; omega)
+          exact hpresN a (by simp only [memRange, hbaseN]; intro hc; obtain ⟨_, _⟩ := hc; omega)
         · rw [Rv64i.storeWord_mem_outside (stepN kn m) _ 0 a hwa (Or.inr (by rw [haddr]; omega))]
-          exact hpresN a (by simp only [memRange, hbaseN]; rintro ⟨_, _⟩; omega)
+          exact hpresN a (by simp only [memRange, hbaseN]; intro hc; obtain ⟨_, _⟩ := hc; omega)
       · intro a ha
         rw [hstep1, hstep, loadWord_setPc,
             Rv64i.loadWord_storeWord_disjoint (stepN kn m) _ a 0 hwa (by omega)
@@ -1302,7 +1314,7 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
     · rw [hfinal]; exact hGinst
     · intro a ha
       rw [hfinal]
-      by_cases hfr : memRange a (callee.sp + BitVec.ofNat 64 (userOff fd)) fd.frameSize
+      rcases memRange_or_not a (callee.sp + BitVec.ofNat 64 (userOff fd)) fd.frameSize with hfr | hfr
       · -- in the user frame: both sides are 0 (IL `zeroRange`, machine G4)
         rw [hcmemZ a hfr]; exact (hGzero a hfr).symm
       · -- off the user frame: G4 preserves, `hmemF` gives entry agreement
@@ -1433,6 +1445,7 @@ theorem mem_le_foldl_max (x : Nat) : ∀ (l : List Nat) (a : Nat), x ∈ l → x
       · exact Nat.le_trans (Nat.le_max_right a x) (foldl_max_ge_acc ys (max a x))
       · exact mem_le_foldl_max x ys (max a y) h
 
+set_option maxHeartbeats 1600000 in
 theorem lower_sim_cf
     {P : Program} {dbase : Name → Option Word} {pad : Name → Nat} {stackLo : Word}
     {L : Layout} {fd : FunDef} {holes : List Hole} {epiPos : Nat} {dpos fnPos : Name → Nat}
@@ -1462,6 +1475,7 @@ theorem lower_sim_cf
     -- alongside hdat/hdbase/hdpos):
     (hpad  : ∀ g gd, List.lookup g P.env = some gd → pad g = userOff gd)
     (halign : L.codeBase.toNat % 4 = 0)
+    (hstackLo : stackLo = L.stackLo)
     (hfn   : ∀ g gd, List.lookup g P.env = some gd →
         Emitted L (fnPos g)
             (prologueI gd
@@ -2270,9 +2284,14 @@ theorem lower_sim_cf
           · exact Or.inr ⟨hh, List.mem_cons_of_mem _ hhm, hr⟩
         refine hJalInv.2.2.2.1 a ⟨hmpc, ?_⟩
         intro hmr
-        have ho2 := hoff.2
-        simp only [memRange] at hmr ho2 hcallhole hnfr
-        rw [haddr] at hnfr
+        -- `hmr` (positive) plus the three negated ranges (as clean disjunctions via
+        -- `not_memRange`) contradict: `[stackLo, s.sp)` is tiled by the free stack
+        -- below the callee, the callee hole, and the user frame.
+        obtain ⟨hmr1, hmr2⟩ := hmr
+        have h2 := not_memRange hoff.2
+        have h3 := not_memRange hcallhole
+        have h4 := not_memRange hnfr
+        rw [haddr] at h4
         omega
       have hcmemZ : ∀ a, memRange a (callee.sp + BitVec.ofNat 64 (userOff gd)) gd.frameSize →
           callee.mem a = 0 := by
@@ -2383,6 +2402,134 @@ theorem lower_sim_cf
           (L.codeBase + BitVec.ofNat 64 (here + 4 * argc) + 4)
           (fnPos f + 4 * prologueSize gd + 4 * csize gd.body)
           hBodInv hBodPc' hemEpi hraslot hraeven hretbGd hretslotGd (by omega)
-      sorry
+      -- caller-level frame preservation across prologue and body (proved here, before
+      -- the heavy StInv hypotheses enter context, to keep `omega`'s scan cheap)
+      have hFrPro : FramesPres holes s.sp fd (step (stepN kMar m))
+          (stepN kPro (step (stepN kMar m))) := by
+        intro a hin _hwin
+        obtain ⟨h, hhm, hr1, _⟩ := hin
+        apply hProMem
+        intro hmr
+        have hh1 : s.sp.toNat ≤ h.1.toNat := hinv.2.2.2.2.2.2.1 h hhm
+        obtain ⟨_, hmr2⟩ := hmr
+        omega
+      have hFrBod : FramesPres holes s.sp fd (stepN kPro (step (stepN kMar m)))
+          (stepN kBod (stepN kPro (step (stepN kMar m)))) := by
+        intro a hin _hwin
+        obtain ⟨h, hhm, hr1, hr2⟩ := hin
+        have hh1 : s.sp.toNat ≤ h.1.toNat := hinv.2.2.2.2.2.2.1 h hhm
+        exact hBodFr a ⟨h, List.mem_cons_of_mem _ hhm, hr1, hr2⟩ (Or.inr (by omega))
+      -- ==== segment 6: ret-stores + final assembly ====
+      -- caller hole membership + free-stack floor ≤ callee.sp (needs stackLo = L.stackLo)
+      have hCallerHole : (s.sp, userOff fd) ∈ holes := by
+        have hc5 := hinv.2.2.2.2.1
+        cases holes with
+        | nil => simp at hc5
+        | cons hd tl =>
+            simp only [List.head?_cons, Option.some.injEq] at hc5
+            rw [← hc5]; exact List.mem_cons_self
+      have hLstackLo_le : L.stackLo.toNat ≤ callee.sp.toNat := by rw [← hstackLo]; omega
+      have hSPrestore : callee.sp + BitVec.ofNat 64 (totalFrame gd) = s.sp := by rw [hcsp]; bv_omega
+      -- caller slots [s.sp, s.sp+userOff fd) survive the whole call (m ↔ m_epi)
+      have hSlotPres : ∀ a, memRange a s.sp (userOff fd) →
+          (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m))))).mem a = m.mem a := by
+        intro a ha
+        obtain ⟨hlo, hhi⟩ := ha
+        have e2 : (stepN kBod (stepN kPro (step (stepN kMar m)))).mem a
+            = (stepN kPro (step (stepN kMar m))).mem a :=
+          hBodFr a ⟨(s.sp, userOff fd), List.mem_cons_of_mem _ hCallerHole, hlo, hhi⟩
+            (Or.inr (by omega))
+        have e3 : (stepN kPro (step (stepN kMar m))).mem a = (step (stepN kMar m)).mem a := by
+          apply hProMem; intro hmr; obtain ⟨_, h2⟩ := hmr; omega
+        rw [hEpiMem, e2, e3, hJalMem]
+      -- rebuild the caller's StInv against the exit machine state m_epi
+      have hSPrget : (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m))))).rget 2 = s.sp := by
+        show (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m))))).rget SP = s.sp
+        rw [hEpiSP, hs1sp, hSPrestore]
+      have hc2 : ∀ r, 1 ≤ r → r ≤ maxRegF fd →
+          s.rget r = (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m))))).loadWord
+              (s.sp + BitVec.ofNat 64 (slotOff r)) := by
+        intro r hr1 hr2
+        have hslot8 : slotOff r + 8 ≤ userOff fd := slotOff_add8_le_userOff fd r hr2
+        have haddrslot : (s.sp + BitVec.ofNat 64 (slotOff r)).toNat = s.sp.toNat + slotOff r := by
+          rw [BitVec.toNat_add, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by omega : slotOff r < 2 ^ 64),
+              Nat.mod_eq_of_lt (by omega)]
+        rw [hinv.2.1 r hr1 hr2]
+        refine loadWord_congr_range m _ (s.sp + BitVec.ofNat 64 (slotOff r)) s.sp (userOff fd)
+          (by omega) (by omega) (by omega) (fun b hb => (hSlotPres b hb).symm)
+      have hc4 : ∀ a, OffPriv L holes s.sp a →
+          s1.mem a = (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m))))).mem a := by
+        intro a ha
+        rw [hEpiMem]
+        apply hBodInv.2.2.2.1
+        rw [hs1sp]
+        obtain ⟨hmp, hfs⟩ := ha
+        refine ⟨?_, ?_⟩
+        · intro hmp'
+          apply hmp
+          rcases hmp' with hb | ⟨hh, hhm, hr⟩
+          · exact Or.inl hb
+          · rcases List.mem_cons.mp hhm with rfl | hmem
+            · exfalso
+              have hr' : memRange a callee.sp (userOff gd) := hr
+              obtain ⟨hr1, hr2⟩ := hr'
+              exact hfs ⟨by omega, by omega⟩
+            · exact Or.inr ⟨hh, hmem, hr⟩
+        · intro hmr
+          have hmr' : memRange a L.stackLo (callee.sp.toNat - L.stackLo.toNat) := hmr
+          obtain ⟨hmr1, hmr2⟩ := hmr'
+          exact hfs ⟨hmr1, by omega⟩
+      have hRetInv : StInv L fd holes ({s with mem := s1.mem} : St)
+          (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m))))) :=
+        ⟨hSPrget, hc2, Installed_congr L _ _ hEpiMem hBodInv.2.2.1, hc4,
+         hinv.2.2.2.2.1, hinv.2.2.2.2.2.1, hinv.2.2.2.2.2.2.1, hinv.2.2.2.2.2.2.2⟩
+      -- run the ret-stores
+      have hemRet : Emitted L (here + 4 * argc + 4)
+          ((rets.toList.zipIdx 0).flatMap fun ri => storeSlotI ri.1 (A ri.2)) := by
+        have h := Emitted_append_right _ _ (marshalI args.toList
+            ++ [Instr.jal RA (BitVec.ofInt 21 ((fnPos f : Int) - ((here : Int) + 4 * argc)))])
+            (retStoresI rets.toList) hem
+        rw [List.length_append, marshalI_length, hAL] at h
+        simp only [List.length_cons, List.length_nil, retStoresI] at h
+        rw [show here + 4 * (argc + (0 + 1)) = here + 4 * argc + 4 from by omega] at h
+        exact h
+      have hEpiPc' : (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m))))).pc
+          = L.codeBase + BitVec.ofNat 64 (here + 4 * argc + 4) := by
+        rw [hEpiPc, BitVec.add_assoc, show (4 : Word) = BitVec.ofNat 64 4 from rfl,
+            BitVec.ofNat_add_ofNat]
+      have hretSlot : ∀ r ∈ rets.toList, slotOff r < 2 ^ 11 := fun r hr => by
+        have := slotOff_add8_le_userOff fd r (hretB r hr); omega
+      have hlenRet : rets.toList.length = (gd.rets.toList.map s1.rget).length := by
+        rw [List.length_map, show rets.toList.length = rvc from by simp,
+            show gd.rets.toList.length = gd.rvc from by simp, hgrvc]
+      have hvalsRet : ∀ i, (hi : i < (gd.rets.toList.map s1.rget).length) →
+          (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m))))).rget (A (0 + i))
+            = (gd.rets.toList.map s1.rget)[i] := by
+        intro i hi
+        have hi' : i < gd.rets.toList.length := by simpa using hi
+        rw [Nat.zero_add, hEpiVal i hi', List.getElem_map]
+      obtain ⟨kRet, hRetFin, hRetPc, hRetFr⟩ :=
+        run_retStoresFrom L fd holes hseg hblob rets.toList (gd.rets.toList.map s1.rget) 0
+          (here + 4 * argc + 4) ({s with mem := s1.mem})
+          (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m)))))
+          hRetInv hEpiPc' hemRet hretB hretSlot hbd_old hnw hlenRet hvalsRet
+      rw [← hs'] at hRetFin
+      -- ==== the composition: total clock and the three conclusion conjuncts ====
+      have hK : stepN (kMar + 1 + kPro + kBod + kEpi + kRet) m
+          = stepN kRet (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m))))) := by
+        have e : step (stepN kMar m) = stepN 1 (stepN kMar m) := rfl
+        rw [e, stepN_add (kMar + 1 + kPro + kBod + kEpi) kRet,
+            stepN_add (kMar + 1 + kPro + kBod) kEpi, stepN_add (kMar + 1 + kPro) kBod,
+            stepN_add (kMar + 1) kPro, stepN_add kMar 1]
+      refine ⟨kMar + 1 + kPro + kBod + kEpi + kRet, ?_, ?_, ?_⟩
+      · rw [hK]; exact hRetFin
+      · rw [hK, hRetPc]; apply pc_congr; simp only [landPos, csize, retStoresI]; omega
+      · rw [hK]
+        refine FramesPres_trans holes s.sp fd m _ _
+          (FramesPres_of_mem_eq holes s.sp fd m (step (stepN kMar m)) hJalMem) ?_
+        refine FramesPres_trans holes s.sp fd (step (stepN kMar m)) _ _ hFrPro ?_
+        refine FramesPres_trans holes s.sp fd (stepN kPro (step (stepN kMar m))) _ _ hFrBod ?_
+        refine FramesPres_trans holes s.sp fd (stepN kBod (stepN kPro (step (stepN kMar m)))) _ _
+          (FramesPres_of_mem_eq holes s.sp fd _ _ hEpiMem) hRetFr
 
 end LowIR.ProgSim
