@@ -467,11 +467,21 @@ need `sh < 32` (the trusted decode's `funct7 = field w 25 7` overlaps shamt bit 
 branches/`jal` need the offset even (4-aligned targets). *Was: MEDIUM risk,
 ~600 lines — landed at ~530.*
 
-**Phase 2 — the assembler layer (layout/resolve).**
+**Phase 2 — the assembler layer (layout/resolve). 🚧 STARTED (2026-07-05,
+`479035e`+`16569ad`).** `lean/LowIR/ProgSim/AsmFacts.lean` (new `LowIRProgSim`
+root). DONE, all axiom-clean: `Installed`-from-memory, both conjuncts —
+`fetch32_reassemble` (LE recombination = the word) → `fetch32_encode` →
+`asmBytes_getElem?`/`_getD`/`_length` (flatten byte-indexing) →
+`installed_code_of_mem` (code conjunct, composing Phase-1 `decode_encode`, needs
+`∀ i∈instrs, WF i`) → `installed_of_mem` (both conjuncts from decoupled code/data
+byte hypotheses). Plus `userPad_eq` discharging the `call` case's `hpad`. REMAINING:
+the layout↔`Emitted` correspondence (`hfn`/`hem`), the data-layout obligations
+(`hdbase`/`hdpos`/`hdat`), and trivial `halign`/`hstackLo` — itemised below.
 - `symSize`-consistency: `(resolveOne … (pos,si)).length * 4 = symSize si`;
   `progBytes` indexing: instruction j's 4 bytes sit at its `layout` position
   (list-flatten arithmetic, same flavor as the already-proved
-  `dataSegment_at` — reuse its induction pattern).
+  `dataSegment_at` — reuse its induction pattern). **[byte-indexing DONE via
+  `asmBytes_getElem?`.]**
 - Label soundness: `fresh` monotonicity ⇒ label nodup ⇒ `lbls.lookup` is THE
   address; every emitted `.br/.jmp/.callf/.cref` resolves to a target that
   is a real position in the stream (br within the function, callf to
