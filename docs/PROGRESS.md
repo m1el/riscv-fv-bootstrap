@@ -1,5 +1,66 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 2: `LowerFacts` layer 3 — `lower_resolve` DONE
+
+The correspondence induction is closed: resolving (`resolveOne` over `layoutItems`)
+the compiler's laid-out symbolic body stream flattens to exactly `emitCF` at the
+same byte position, for ALL 22 statement constructors. `#print axioms
+lower_resolve = [propext, Quot.sound]`; full `lake build` green. This was the crux
+of `hfn`/`hem` (the `matchesRealProg` #guard is its decidable shadow, now a
+theorem for every program).
+
+Statement (structural induction on `stmt`, threading three consistency relations):
+```
+lower_resolve (dat P dpos fnPos lbls fns dats) (htab : TabOk dpos fnPos fns dats) :
+  ∀ stmt bs cs epi cnt here bp cp ep r,
+    (layoutItems (lower dat bs cs epi stmt cnt).1 here).1.mapM (resolveOne lbls fns dats) = some r →
+    Prog.wf P bs.length cs.length stmt = true →
+    LEnvOk lbls bs cs epi bp cp ep →
+    LblConsistent lbls (layoutItems (lower dat bs cs epi stmt cnt).1 here).2.1 →
+    r.flatten = emitCF dat dpos fnPos bp cp ep here stmt
+```
+with the three predicates now real defs: `LEnvOk` (enclosing brk/cont label stacks
++ epilogue resolve to their byte positions), `LblConsistent` (every internal label
+resolves to its layout position), `TabOk` (data/function tables agree with
+`dpos`/`fnPos`). `wf` is used only for the `brkB`/`contL` index bounds.
+
+Proof structure (all `[propext, Quot.sound]`):
+- **Resolve atoms**: `resolveOne_{jmp,br,cref,callf}_eq` (the value a laid-out symbolic
+  item resolves to, given a successful lookup — the uniform `simp only [resolveOne,
+  hlk, bind, Option.bind]` reducer exposes the range-check `if`); `resolveOne_{cref,
+  callf}_lookup` (lookup existence from a successful resolve).
+- **Peeling primitive** `split2`: splits BOTH the resolve (`resolve_flatten_append`)
+  and the label-consistency of a stream append at once. Straight-line/leaf pieces go
+  through `allins_resolve` (all-`.ins`/`.label` ⇒ `flatMap insUnwrap`) or
+  `resolve_singleton_flatten` (a singleton characterized by the `_eq` lemmas);
+  the compound cases (seq/block/ife/while/call) peel into pieces, extract the internal
+  label lookups from the piece `LblConsistent`s (`lblLookup_{singleton,jmplabel}`,
+  `layoutItems_brjmplabel`), and reassemble. Jump/branch offsets: the label position
+  minus the branch position equals `emitCF`'s size-relative offset, closed by
+  `push_cast; omega` over the `lower_totalSymSize`-pinned positions.
+- **Segment runners** for the two compound jump-clusters: `resolve_jmplabel_flatten`
+  (`[.jmp,.label]`), `resolve_brjmp`/`resolve_brjmplabel` (the while guard `[.br,.jmp
+  (,.label)]`). `LEnvOk_push_{brk,cont}` extend the label environment at block/while
+  body entry.
+
+⚠ **Mathlib-free gotchas hit** (for the next session): `ring_nf`/`norm_num` are
+UNAVAILABLE (`push_cast` + `omega` are; do the Int-cast offset identities as an
+explicit `have … := by push_cast; omega` then `rw`, never `congr; push_cast; omega`
+— `congr` over-decomposes lists and leaves omega a mangled goal or "no goals").
+`cases hv : e with …` SUBSTITUTES `e` in the goal (so an `∃`-goal's witness clause
+becomes `some v = some v` — provide `rfl`, not the equation). The Option `do`/`>>=`
+is NOT syntactic `Option.bind` (so `Option.bind_some`/`rw [Option.bind_some]` miss);
+`simp only [resolveOne, hlk, bind, Option.bind]` reduces it. Position associativity:
+`rw [s_i]` yields `here + (12 + 4·csize e)`; left-associate with `simp only [←
+Nat.add_assoc]` before matching `emitCF`'s `here + 12 + …`.
+
+STILL OWED for `hfn`/`hem`: (a) the `layout`/`layoutItems` position arithmetic tying
+`fnPos g` to the resolved-stream slice, then glue `lower_resolve` with §6's
+`prologue_resolves`/`epilogue_resolves` per function; discharge `LEnvOk`/
+`LblConsistent`/`TabOk` from the global `layout`/`fnTab`/`dataOffsets` construction
+(`fresh`-monotonicity label nodup is the remaining plumbing). Then `hdpos`/`halign`
+and Phase 6 (`prog_sim`).
+
 ## 2026-07-05 (compile_sim campaign) — Phase 2: `LowerFacts` layers 1–2 (the `lower`↔`emitCF` infrastructure)
 
 New file `LowIR/ProgSim/LowerFacts.lean` (in the `LowIRProgSim` lake target),
