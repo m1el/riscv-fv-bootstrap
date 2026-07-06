@@ -1,5 +1,44 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 2: the FULL per-function `hfn` bundle (`fn_hfn`)
+
+The complete six-conjunct `hfn` fact that `lower_sim_cf` (CtrlSim.lean:1479) and
+`prog_sim` take is now discharged from the real layout for every function of a
+successfully-compiled program. All axiom-clean (`[propext, Quot.sound]`), full
+`lake build` green (still exactly the 3 known sorries: `Core.compile_sim`,
+`Hex0/ProgProof`, `Defs.prog_sim`).
+
+Two **compiler guard tightenings** first (commit `b095917`, same class as the
+2^22 data tightening — both close real soundness gaps surfaced while assembling
+the bundle; every real program already satisfies both, all tests re-green):
+- `fnOk` now requires `frameSize % 8 == 0` — the prologue zeroes the user frame
+  in 8-byte words (`List.range (frameSize/8)`), so a non-8-multiple would leave a
+  tail unzeroed (machine vs IL `zeroRange` disagree). → `hfn` conjunct 5.
+- `wfProgram` now requires each function name non-empty — the entry stub reserves
+  the `""` key and `fns.filter (·.1 != "")` silently drops a `""`-named function.
+  → `fn_emitted`'s `g ≠ ""` premise.
+
+Then `fn_hfn` (commit `bd0bb21`, `LayoutFacts.lean`):
+- **`compileProgT_wfProgram`/`compileProgT_fnOkAll`** — guard extractors (1st/2nd
+  clauses of `compileProgT`'s conjunction; twins of `compileProgT_dataBound`).
+- **`fn_guard_facts`** — per-function facts for `(g,gd) ∈ P.env`: body `wf`,
+  `g ≠ ""`, `totalFrame ≤ 2000`, `frameSize % 8 = 0`.
+- **`epilogueI_length`** — resolved epilogue = `rvc + 3` instrs (`rets : Vector
+  Reg rvc`, each ret one `loadSlotI`, + ld/addi/jalr).
+- **`fn_hfn`** (payoff) — for any `List.lookup g P.env = some gd`: conjunct 1
+  (`Emitted`) via `fn_emitted`; conjunct 2 (the `< 2^20` end position) from ONE
+  program-level blob bound `4·|L.instrs| < 2^20` + the Brick-2 slice (`fnPos =
+  4·|preF.flatten|`, `preF+rsg ≤ |instrs|`, `|rsg.flatten| = prologueSize + csize
+  body + epilogueSize`); 4/5 from `fn_guard_facts`; 6 (`fnPos % 4 = 0`) from the
+  tie. `BranchOk gd.body` is threaded as `hbr` (the per-program structural
+  hypothesis `lower_sim_cf` itself carries; `decide`-checkable per program).
+
+REMAINING for Phase 6 `prog_sim` (Defs.lean:471, the lone campaign `sorry`): the
+entry-stub `Emitted` (`hem` — the `[jal ra entry; jal0]` at position 0, a small
+`fn_emitted`-analog on `stubSeg`), the blob-size/`hdpos` bound plumbing, `halign`
+(codeBase 4-alignment), then the summit assembly — entry-stub step + `call_sim`
+into `entry` + body via `lower_sim_cf` + halt-pad bridge to `runFuel`.
+
 ## 2026-07-06 (compile_sim campaign) — Phase 2: `hfn`/`hem` Emitted payload ASSEMBLED (Bricks 1–4)
 
 The `layout`↔`Emitted` correspondence — "the big one" flagged STILL OWED in
