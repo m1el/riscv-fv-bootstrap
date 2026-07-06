@@ -1102,4 +1102,67 @@ theorem fnPosOf_tie {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
       lookup_filter_ne g hg, layout_fns_lookup_none g _ 0 hkeys, Option.none_or,
       lc_self, Option.getD_some]
 
+/-! ## Brick 4 — the per-function `Emitted` assembly (the `hfn`/`hem` payload). -/
+
+/-- `Emitted` from a positional slice of `L.instrs`: if `L.instrs = A ++ B ++ C`
+    with `|A| = pos/4` and `pos` 4-aligned, then `B` is emitted at `pos`. -/
+theorem Emitted_of_slice (L : Layout) (pos : Nat) (A B C : List Instr)
+    (hpos : pos % 4 = 0) (hA : A.length = pos / 4) (hinstrs : L.instrs = A ++ B ++ C) :
+    Emitted L pos B := by
+  refine ⟨hpos, fun j hj => ?_⟩
+  have hi : pos / 4 + j = A.length + j := by rw [hA]
+  have hidx : pos / 4 + j < L.instrs.length := by
+    rw [hinstrs, hi]; simp only [List.length_append]; omega
+  refine ⟨hidx, ?_⟩
+  rw [List.getElem_of_eq hinstrs hidx,
+      List.getElem_append_left (show pos / 4 + j < (A ++ B).length by
+        simp only [List.length_append]; omega),
+      List.getElem_append_right (show A.length ≤ pos / 4 + j by omega)]
+  congr 1
+  omega
+
+/-- **Brick 4 (the payoff).** Each function `g` at its first env occurrence
+    (`g ∉ envPre`, `g ≠ ""`, body `wf`) is `Emitted` at its `fnPosOf` position as
+    `prologueI gd ++ emitCF … gd.body ++ epilogueI gd` — the `hfn`/`hem` `Emitted`
+    payload `lower_sim_cf`/`prog_sim` consume. Composes the flat resolve slice
+    (Brick 2) + `compileFun_resolves` (label premises via `env_fn_lbls_discharge`,
+    tables via `tabOk_discharge`) + the `fnPosOf` tie (Brick 3). -/
+theorem fn_emitted {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
+    {dats : List (Name × Nat)}
+    (hL : layoutOf P entry cb slo = some L)
+    (hc : compileProgT P entry = some (L.instrs, L.fnTab, dats))
+    (envPre envSuf : List (Name × FunDef)) (g : Name) (gd : FunDef) (hg : g ≠ "")
+    (hE : P.env = envPre ++ (g, gd) :: envSuf)
+    (hnp : g ∉ envPre.map Prod.fst)
+    (hwf : LowIR.Prog.wf P 0 0 gd.body = true) :
+    Emitted L (fnPosOf L g)
+      (prologueI gd
+        ++ emitCF P.data (dposOf L) (fnPosOf L) [] []
+             (fnPosOf L g + 4 * prologueSize gd + 4 * csize gd.body)
+             (fnPosOf L g + 4 * prologueSize gd) gd.body
+        ++ epilogueI gd) := by
+  obtain ⟨rs, hrs, hins, hfnt, hdats⟩ := compileProgT_decomp hc
+  obtain ⟨pre, rsg, suf, hflat, hlen, hgres⟩ := fn_resolve_slice envPre envSuf g gd hE hrs
+  have htie := fnPosOf_tie hL hc envPre envSuf g gd hg hE hnp
+  have htab := tabOk_discharge hL hc
+  rw [hdats] at htab
+  obtain ⟨hepi, hlc⟩ := env_fn_lbls_discharge P.data envPre envSuf (stubSeg entry)
+    (labelIds_stubSeg entry) g gd
+  rw [← hE] at hepi hlc
+  have hpay := compileFun_resolves P.data P (dposOf L) (fnPosOf L)
+    (progLayout P entry).2.1 (progLayout P entry).2.2.1
+    (dataOffsetsFrom (pad8 (progLayout P entry).2.2.2) P.data) htab gd
+    (mapSegs P.data envPre 0).2
+    (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2
+    rsg hgres hwf hepi hlc
+  have hinstrs : L.instrs = pre.flatten ++ rsg.flatten ++ suf.flatten := by rw [hins]; exact hflat
+  have hpp4 : (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2 % 4 = 0 := by
+    omega
+  have hApp : pre.flatten.length
+      = (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2 / 4 := by omega
+  have hslice := Emitted_of_slice L _ pre.flatten rsg.flatten suf.flatten hpp4 hApp hinstrs
+  rw [hpay] at hslice
+  rw [htie]
+  exact hslice
+
 end LowIR.ProgSim.LayoutFacts
