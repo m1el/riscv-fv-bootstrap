@@ -833,4 +833,82 @@ theorem layoutOf_decomp {P : Program} {entry : Name} {cb slo : Word} {L : Layout
     exact ⟨rfl, rfl, rfl, rfl, dats', hc⟩
   · exact absurd h (by simp)
 
+/-! ## Brick 2 — the flat resolve split at each function's byte position.
+
+    Slice the whole-program resolved stream `L.instrs` at a function `g`'s position:
+    `L.instrs = pre ++ rsg.flatten ++ suf`, where `rsg` is g's compiled segment
+    resolved at `pp` (feeding `compileFun_resolves`' `hres`) and `4·|pre| = pp`. -/
+
+/-- Layout-level resolve-length: the whole positioned stream resolves to
+    `totalSymSize/4` instructions (the byte-position ↔ instruction-index bridge,
+    lifted from `resolve_length` per segment). -/
+theorem resolve_length_layout (lbls fns dats : List _) :
+    ∀ (segs : List (Name × List SymInstr)) (pos : Nat) (rs : List (List Instr)),
+      (layout segs pos).1.mapM (resolveOne lbls fns dats) = some rs →
+      4 * rs.flatten.length = totalSymSize (segs.flatMap Prod.snd) := by
+  intro segs
+  induction segs with
+  | nil => intro pos rs h; simp only [layout, List.mapM_nil] at h; rw [← Option.some.inj h]; rfl
+  | cons s rest ih =>
+    intro pos rs h
+    obtain ⟨n, items⟩ := s
+    rw [show (layout ((n, items) :: rest) pos).1
+          = (layoutItems items pos).1 ++ (layout rest (layoutItems items pos).2.2).1 from rfl] at h
+    obtain ⟨ra, rb, hra, hrb, hr⟩ := mapM_append_inv _ _ _ _ h
+    rw [hr, List.flatten_append, List.length_append, Nat.mul_add,
+        resolve_length lbls fns dats items pos ra hra, ih _ _ hrb,
+        List.flatMap_cons, totalSymSize_append]
+
+/-- **Brick 2.** For a function `g` at env position `envPre ++ (g,gd) :: envSuf`,
+    the whole-program resolved stream splits as `pre ++ rsg.flatten ++ suf`, where
+    `rsg` is g's compiled segment resolved at its byte position `pp` (the input
+    `compileFun_resolves` needs) and `4·|pre.flatten| = pp`. -/
+theorem fn_resolve_slice {P : Program} {entry : Name}
+    {dats : List (Name × Nat)} {rs : List (List Instr)}
+    (envPre envSuf : List (Name × FunDef)) (g : Name) (gd : FunDef)
+    (hE : P.env = envPre ++ (g, gd) :: envSuf)
+    (hrs : (progLayout P entry).1.mapM
+              (resolveOne (progLayout P entry).2.1 (progLayout P entry).2.2.1 dats) = some rs) :
+    ∃ (pre rsg suf : List (List Instr)),
+      rs.flatten = pre.flatten ++ rsg.flatten ++ suf.flatten
+      ∧ 4 * pre.flatten.length
+          = (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2
+      ∧ (layoutItems (compileFun P.data gd (mapSegs P.data envPre 0).2).1
+            (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2).1.mapM
+          (resolveOne (progLayout P entry).2.1 (progLayout P entry).2.2.1 dats) = some rsg := by
+  -- abbreviations (inlined — this codebase is Mathlib-free, no `set`):
+  --   cg      := (mapSegs P.data envPre 0).2         g's fresh-label counter
+  --   preSegs := ("", stubSeg entry) :: (mapSegs P.data envPre 0).1
+  --   sufSegs := (mapSegs P.data envSuf (compileFun P.data gd cg).2).1
+  --   pp      := (layout preSegs 0).2.2.2            g's byte position
+  -- the global segment list decomposes at g
+  have hseg : ("", stubSeg entry) :: (mapSegs P.data P.env 0).1
+      = (("", stubSeg entry) :: (mapSegs P.data envPre 0).1)
+        ++ (g, (compileFun P.data gd (mapSegs P.data envPre 0).2).1)
+           :: (mapSegs P.data envSuf (compileFun P.data gd (mapSegs P.data envPre 0).2).2).1 := by
+    rw [hE, (mapSegs_append P.data envPre ((g, gd) :: envSuf) 0).1, mapSegs_cons, List.cons_append]
+  -- split the flat stream at the prefix / g-segment boundary
+  have hpl : (progLayout P entry).1
+      = (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).1
+        ++ (layout ((g, (compileFun P.data gd (mapSegs P.data envPre 0).2).1)
+              :: (mapSegs P.data envSuf (compileFun P.data gd (mapSegs P.data envPre 0).2).2).1)
+            (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2).1 := by
+    unfold progLayout; rw [hseg, layout_flat_append]
+  rw [hpl] at hrs
+  obtain ⟨rspre, rsGS, hpre, hGS, hsplit1⟩ := mapM_append_inv _ _ _ _ hrs
+  rw [show (layout ((g, (compileFun P.data gd (mapSegs P.data envPre 0).2).1)
+              :: (mapSegs P.data envSuf (compileFun P.data gd (mapSegs P.data envPre 0).2).2).1)
+            (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2).1
+        = (layoutItems (compileFun P.data gd (mapSegs P.data envPre 0).2).1
+              (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2).1
+          ++ (layout (mapSegs P.data envSuf (compileFun P.data gd (mapSegs P.data envPre 0).2).2).1
+                (layoutItems (compileFun P.data gd (mapSegs P.data envPre 0).2).1
+                  (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2).2.2).1
+        from rfl] at hGS
+  obtain ⟨rsg, rssuf, hg, hsuf, hsplit2⟩ := mapM_append_inv _ _ _ _ hGS
+  refine ⟨rspre, rsg, rssuf, ?_, ?_, hg⟩
+  · rw [hsplit1, hsplit2, List.flatten_append, List.flatten_append, List.append_assoc]
+  · rw [resolve_length_layout _ _ _ (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0
+          rspre hpre, layout_end, Nat.zero_add]
+
 end LowIR.ProgSim.LayoutFacts
