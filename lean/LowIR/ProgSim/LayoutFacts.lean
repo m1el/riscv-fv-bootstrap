@@ -911,4 +911,195 @@ theorem fn_resolve_slice {P : Program} {entry : Name}
   · rw [resolve_length_layout _ _ _ (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0
           rspre hpre, layout_end, Nat.zero_add]
 
+/-! ## Brick 3 — the `codeEnd`/`segStart` identity, `TabOk`, and the `fnPosOf` tie. -/
+
+/-- Clean `lookup` on a matching head. (`beq_self_eq_true` on `String` is
+    `Classical.choice`-tainted in this stdlib — its `ReflBEq` instance; `beq_iff_eq
+    .mpr rfl` is the clean route.) -/
+theorem lc_self {β} (k : Name) (v : β) (l : List (Name × β)) :
+    List.lookup k ((k, v) :: l) = some v := by
+  rw [List.lookup_cons, show (k == k) = true from beq_iff_eq.mpr rfl]
+
+/-- Clean `lookup` skipping a non-matching head. -/
+theorem lc_ne {β} (k k' : Name) (v : β) (l : List (Name × β)) (h : k ≠ k') :
+    List.lookup k ((k', v) :: l) = List.lookup k l := by
+  rw [List.lookup_cons, show (k == k') = false from by simpa using h]
+
+/-- The resolved code's byte span equals `4·#instrs` (each resolved instruction is
+    4 bytes). So `codeEnd = (progLayout).2.2.2 = 4·L.instrs.length`, hence
+    `segStart = pad8 codeEnd`. -/
+theorem instrs_len_codeEnd {P : Program} {entry : Name} {is : List Instr}
+    {fnsF dats : List (Name × Nat)} (h : compileProgT P entry = some (is, fnsF, dats)) :
+    4 * is.length = (progLayout P entry).2.2.2 := by
+  obtain ⟨rs, hrs, hins, _, _⟩ := compileProgT_decomp h
+  have := resolve_length_layout (progLayout P entry).2.1 (progLayout P entry).2.2.1
+    (dataOffsetsFrom (pad8 (progLayout P entry).2.2.2) P.data)
+    (("", stubSeg entry) :: (mapSegs P.data P.env 0).1) 0 rs hrs
+  rw [hins]
+  unfold progLayout
+  rw [this, layout_end, Nat.zero_add]
+
+/-- Looking up a non-`""` key is unaffected by dropping the `""`-keyed entries
+    (the `L.fnTab` filter): the first match is preserved. -/
+theorem lookup_filter_ne {β} (f : Name) (hf : f ≠ "") :
+    ∀ (l : List (Name × β)), List.lookup f (l.filter (fun x => x.1 != "")) = List.lookup f l := by
+  intro l
+  induction l with
+  | nil => rfl
+  | cons x rest ih =>
+    obtain ⟨k, v⟩ := x
+    by_cases hk : k = ""
+    · subst hk
+      rw [List.filter_cons_of_neg (by simp)]
+      simp only [List.lookup_cons, (show (f == "") = false by simpa using hf)]
+      exact ih
+    · rw [List.filter_cons_of_pos (by simpa using hk)]
+      simp only [List.lookup_cons]
+      cases hfk : f == k with
+      | true => rfl
+      | false => exact ih
+
+/-- No `""`-keyed entry survives the `L.fnTab` filter, so `""` looks up to `none`. -/
+theorem lookup_filter_empty {β} :
+    ∀ (l : List (Name × β)), List.lookup "" (l.filter (fun x => x.1 != "")) = none := by
+  intro l
+  induction l with
+  | nil => rfl
+  | cons x rest ih =>
+    obtain ⟨k, v⟩ := x
+    by_cases hk : k = ""
+    · subst hk; rw [List.filter_cons_of_neg (by simp)]; exact ih
+    · rw [List.filter_cons_of_pos (by simpa using hk)]
+      have hbk : (("" : Name) == k) = false := by
+        cases hb : (("" : Name) == k)
+        · rfl
+        · rw [beq_iff_eq] at hb; exact absurd hb.symm hk
+      simp only [List.lookup_cons, hbk]
+      exact ih
+
+/-- **`TabOk`.** The compiler's function/data tables agree with `dposOf`/`fnPosOf`.
+    The fn clause holds unconditionally: the stub sits first (`lookup "" = some 0`,
+    matched by `fnPosOf … "" = 0`), and every other key survives the `L.fnTab`
+    filter (`lookup_filter_ne`). The data clause is `dats = dataOffsetsFrom segStart`
+    definitionally (`segStart = pad8 codeEnd`, `L.data = P.data`). -/
+theorem tabOk_discharge {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
+    {dats : List (Name × Nat)}
+    (hL : layoutOf P entry cb slo = some L)
+    (hc : compileProgT P entry = some (L.instrs, L.fnTab, dats)) :
+    TabOk (dposOf L) (fnPosOf L) (progLayout P entry).2.2.1 dats := by
+  obtain ⟨_, _, hdata, hss, _⟩ := layoutOf_decomp hL
+  obtain ⟨rs, hrs, hins, hfnt, hdats⟩ := compileProgT_decomp hc
+  refine ⟨?_, ?_⟩
+  · -- data clause
+    intro d off hlk
+    have hseg : L.segStart = pad8 (progLayout P entry).2.2.2 := by
+      rw [hss, instrs_len_codeEnd hc]
+    unfold dposOf
+    rw [hdats] at hlk
+    rw [hdata, hseg, hlk, Option.getD_some]
+  · -- fn clause
+    intro f p hlk
+    by_cases hf : f = ""
+    · subst hf
+      -- the stub is the first fnTab entry: lookup "" (progLayout).2.2.1 = some 0
+      have hfirst : (progLayout P entry).2.2.1 = ("", 0)
+          :: (layout (mapSegs P.data P.env 0).1
+                (layoutItems (stubSeg entry) 0).2.2).2.2.1 := rfl
+      rw [hfirst, lc_self] at hlk
+      have hp0 : p = 0 := by injection hlk with h; exact h.symm
+      unfold fnPosOf
+      rw [hfnt, lookup_filter_empty]
+      exact hp0
+    · -- non-stub key: survives the filter, so fnPosOf reads it back
+      unfold fnPosOf
+      rw [hfnt, lookup_filter_ne f hf, hlk, Option.getD_some]
+
+/-! ### The `fnPosOf` tie: g's fnTab entry is its layout byte position. -/
+
+/-- A successful `lookup` splits the list at the FIRST occurrence of the key
+    (nothing before it shares the key). -/
+theorem lookup_split {β} (k : Name) :
+    ∀ (l : List (Name × β)) (v : β), List.lookup k l = some v →
+      ∃ pre suf, l = pre ++ (k, v) :: suf ∧ k ∉ pre.map Prod.fst := by
+  intro l
+  induction l with
+  | nil => intro v h; simp [List.lookup] at h
+  | cons x rest ih =>
+    intro v h
+    obtain ⟨k', v'⟩ := x
+    by_cases hkk : k = k'
+    · subst hkk
+      rw [lc_self] at h
+      injection h with hv; subst hv
+      exact ⟨[], rest, rfl, by simp⟩
+    · rw [lc_ne k k' v' rest hkk] at h
+      obtain ⟨pre, suf, hl, hn⟩ := ih v h
+      refine ⟨(k', v') :: pre, suf, by rw [hl]; rfl, ?_⟩
+      simp only [List.map_cons, List.mem_cons, not_or]
+      exact ⟨hkk, hn⟩
+
+/-- `mapSegs` preserves the segment names (each segment is `(nf.1, …)`). -/
+theorem mapSegs_keys (dat : Data) : ∀ (env : List (Name × FunDef)) (c : Nat),
+    (mapSegs dat env c).1.map Prod.fst = env.map Prod.fst := by
+  intro env
+  induction env with
+  | nil => intro c; rfl
+  | cons nf rest ih =>
+    intro c; rw [mapSegs_cons]; simp only [List.map_cons]; rw [ih]
+
+/-- If a key is not among the segment names, it does not resolve in the layout
+    function table. -/
+theorem layout_fns_lookup_none (g : Name) :
+    ∀ (segs : List (Name × List SymInstr)) (pos : Nat),
+      g ∉ segs.map Prod.fst → List.lookup g (layout segs pos).2.2.1 = none := by
+  intro segs
+  induction segs with
+  | nil => intro pos _; rfl
+  | cons s rest ih =>
+    intro pos hg
+    obtain ⟨n, items⟩ := s
+    simp only [List.map_cons, List.mem_cons, not_or] at hg
+    obtain ⟨hne, hrest⟩ := hg
+    show List.lookup g ((n, pos) :: (layout rest (layoutItems items pos).2.2).2.2.1) = none
+    have hbn : (g == n) = false := by
+      cases hb : g == n
+      · rfl
+      · rw [beq_iff_eq] at hb; exact absurd hb hne
+    simp only [List.lookup_cons, hbn]
+    exact ih (layoutItems items pos).2.2 hrest
+
+/-- **The `fnPosOf` tie.** For a function `g` at its FIRST env occurrence
+    `envPre ++ (g,gd) :: envSuf` (`g ∉ envPre` names, `g ≠ ""`), the `fnPosOf`
+    table position IS the layout byte position of g's segment — the input the
+    `hfn`/`hem` `Emitted` slice is stated at. -/
+theorem fnPosOf_tie {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
+    {dats : List (Name × Nat)}
+    (hL : layoutOf P entry cb slo = some L)
+    (hc : compileProgT P entry = some (L.instrs, L.fnTab, dats))
+    (envPre envSuf : List (Name × FunDef)) (g : Name) (gd : FunDef) (hg : g ≠ "")
+    (hE : P.env = envPre ++ (g, gd) :: envSuf)
+    (hnp : g ∉ envPre.map Prod.fst) :
+    fnPosOf L g = (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2 := by
+  obtain ⟨rs, hrs, hins, hfnt, hdats⟩ := compileProgT_decomp hc
+  have hseg : ("", stubSeg entry) :: (mapSegs P.data P.env 0).1
+      = (("", stubSeg entry) :: (mapSegs P.data envPre 0).1)
+        ++ (g, (compileFun P.data gd (mapSegs P.data envPre 0).2).1)
+           :: (mapSegs P.data envSuf (compileFun P.data gd (mapSegs P.data envPre 0).2).2).1 := by
+    rw [hE, (mapSegs_append P.data envPre ((g, gd) :: envSuf) 0).1, mapSegs_cons, List.cons_append]
+  have hfns : (progLayout P entry).2.2.1
+      = (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.1
+        ++ (g, (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2)
+           :: (layout (mapSegs P.data envSuf (compileFun P.data gd (mapSegs P.data envPre 0).2).2).1
+                 (layoutItems (compileFun P.data gd (mapSegs P.data envPre 0).2).1
+                   (layout (("", stubSeg entry) :: (mapSegs P.data envPre 0).1) 0).2.2.2).2.2).2.2.1 := by
+    unfold progLayout; rw [hseg, layout_fns_append]; rfl
+  have hkeys : g ∉ (("", stubSeg entry) :: (mapSegs P.data envPre 0).1).map Prod.fst := by
+    simp only [List.map_cons, List.mem_cons, not_or]
+    exact ⟨hg, by rw [mapSegs_keys]; exact hnp⟩
+  unfold fnPosOf
+  rw [hfnt, hfns, List.filter_append,
+      List.filter_cons_of_pos (by simpa using hg), List.lookup_append,
+      lookup_filter_ne g hg, layout_fns_lookup_none g _ 0 hkeys, Option.none_or,
+      lc_self, Option.getD_some]
+
 end LowIR.ProgSim.LayoutFacts
