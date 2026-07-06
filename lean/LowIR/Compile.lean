@@ -179,9 +179,16 @@ def userOff (fd : FunDef) : Nat := 8 * (maxRegF fd + 2)
 def totalFrame (fd : FunDef) : Nat := userOff fd + fd.frameSize
 
 /-- Per-function compilability limits for this first cut: a0..a7 marshalling
-    and all slot offsets / frame adjustments within imm12. -/
+    and all slot offsets / frame adjustments within imm12. The `frameSize % 8 = 0`
+    clause (added 2026-07-06, like the 2^22 data tightening) closes a real
+    soundness gap surfaced by ProgSim Phase 2: the prologue zeroes the user frame
+    in 8-byte words (`List.range (frameSize / 8)`), so a non-multiple-of-8
+    `frameSize` would leave a tail unzeroed — the machine and the IL `zeroRange`
+    would disagree. Every real program already has an 8-aligned frame; the guard
+    just makes it a checked precondition (discharges ProgSim `hfn`'s
+    `frameSize % 8 = 0` conjunct). -/
 def fnOk (fd : FunDef) : Bool :=
-  fd.argc ≤ 8 && fd.rvc ≤ 8 && totalFrame fd ≤ 2000
+  fd.argc ≤ 8 && fd.rvc ≤ 8 && totalFrame fd ≤ 2000 && fd.frameSize % 8 == 0
 
 /-- Prologue: drop sp, save ra, park params from a0.., `sd x0` every other
     slot (matches IL register-file zeroing EXACTLY), materialize the user-frame

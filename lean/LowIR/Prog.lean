@@ -269,10 +269,13 @@ def wf (P : Program) : Nat → Nat → Stmt → Bool
 /-- Program well-formedness: every body is `wf` with NO enclosing block/loop
     (an escaping brk/cont at function level is ill-formed), no function binds
     its `frameReg` as a parameter (frameReg would shadow the param binding),
-    and data object names are unique. -/
+    every function name is non-empty (the `compileProgT` entry stub reserves the
+    `""` key and `fns.filter (·.1 != "")` would silently drop a `""`-named
+    function — closing that gap discharges ProgSim `hfn`'s `g ≠ ""` premise), and
+    data object names are unique. -/
 def wfProgram (P : Program) : Bool :=
   P.env.all (fun nf =>
-    wf P 0 0 nf.2.body && !(nf.2.params.toList.contains nf.2.frameReg))
+    wf P 0 0 nf.2.body && !(nf.2.params.toList.contains nf.2.frameReg) && nf.1 != "")
   && (P.data.map Prod.fst).eraseDups.length == P.data.length
 
 /-- Data-free convenience (pre-data name, used by the existing tests). -/
