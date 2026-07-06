@@ -1,5 +1,37 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 2: `LayoutFacts.lean` — the hfn/hem glue underway
+
+New library module `LowIR/ProgSim/LayoutFacts.lean` (lakefile root
+`LowIR.ProgSim.LayoutFacts`) builds the layout↔`Emitted` half of `hfn`/`hem` on top
+of `lower_resolve`. Four reusable layers, all `[propext, Quot.sound]`, full build
+green:
+
+- **Resolve-length bridge** (`resolveOne_length`, `resolve_length`): a laid-out
+  symbolic item resolves to `symSize/4` instructions, so `4·(resolved instr count) =
+  totalSymSize` — the byte-position ↔ instruction-index conversion.
+- **`layout` algebra** (`layout_end`, `layout_flat_append`, `layout_fns_append`):
+  the layout pass distributes over a segment-list append; the second group is laid
+  out starting where the first ended.
+- **Per-function slice** (`compileFun_resolves`, the payoff): resolving
+  `compileFun`'s byte stream at position `p` yields exactly `prologueI ++ emitCF …
+  body ++ epilogueI`, composing `prologue_resolves` + `lower_resolve` +
+  `epilogue_resolves`. Supporting: `totalSymSize_allins`, `tss_prologue`,
+  `tss_epilogue`, `compileFun_stream`. Takes the label premises (`hepi`: epilogue-label
+  lookup; `hlc`: body `LblConsistent`) + `TabOk` as **hypotheses** — the last unmet
+  obligations, which the global label-nodup / table-agreement discharge.
+- **`lower` label distinctness** (`labelIds` + algebra; `lower_snd_ge`,
+  `lower_labels_range`, `lower_labels_nodup`): every label `lower` emits sits in
+  `[cnt, finalCnt)` and they are pairwise distinct — the per-function foundation the
+  global nodup lifts from (through `compileFun` then the fresh-counter-threaded
+  segment `mapM`).
+
+Remaining for a complete `hfn`/`hem`: global label nodup (lift range/nodup through
+`compileFun` + segment `mapM`); split the global flat resolve at each `fnPos g`
+(`layout_flat_append` + `resolve_length`) and feed `compileFun_resolves`; `TabOk`
+from `dposOf`/`fnPosOf`; assemble from `layoutOf`. Then `hdpos`/`halign` + Phase 6
+`prog_sim` (Defs.lean:491, the lone remaining `sorry`).
+
 ## 2026-07-06 (compile_sim campaign) — Phase 2: `LowerFacts` layer 3 — `lower_resolve` DONE
 
 The correspondence induction is closed: resolving (`resolveOne` over `layoutItems`)
