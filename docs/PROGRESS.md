@@ -1,5 +1,31 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 2: `hdpos`/`halign` plumbing (blob bound ⇒ dpos, SimPre)
+
+The last flat compile-time obligations of `lower_sim_cf` (`hdpos`, `halign`, and
+`fn_hfn`'s `hcode`) are now wired so Phase 6 `prog_sim` discharges them from ONE
+program-level bound plus a loader precondition. All axiom-clean (`[propext,
+Quot.sound]`), full `lake build` green (still exactly the 3 known sorries).
+
+- **`dataOffsetsFrom_off_le`** (Prog.lean) — every object offset lies within the
+  data segment: `off ≤ start + |dataSegment|` (list induction, sibling of
+  `dataOffsetsFrom_le`/`_fits`/`_shift`).
+- **`dposOf_le_blobLen`/`dposOf_lt`** (AsmFacts) — hence `dposOf L d ≤ L.blobLen`,
+  and `< 2^20` given the blob bound = **`hdpos`**.
+- **`codeLen_le_blobLen`/`codeLen_lt`** (AsmFacts) — `4·|instrs| ≤ blobLen` (via
+  `hseg`), so `< 2^20` given the blob bound = **`hcode`** (fn_hfn / `hbnd`).
+- **`SimPre`** gains two fields: `codeAligned` (`codeBase % 4 = 0` = **`halign`**,
+  a loader precondition) and `blobFits` (`blobLen < 2^20`, powering hdpos/hcode).
+  SimPre is used only by prog_sim, so no construction breaks.
+
+Validated end-to-end (scratch): `SimPre L + layoutOf` ⇒ `halign ∧ (∀ d, dposOf L
+d < 2^20) ∧ 4·|instrs| < 2^20`, with `hseg` from `layoutOf_decomp` (`segStart =
+pad8 (4·|instrs|)`) + `pad8_ge`. All of `lower_sim_cf`'s flat obligations
+(`hdat`/`hdbase`/`hdpos`/`hpad`/`halign`/`hstackLo`/`hfn`) plus `hem` are now
+discharged from the real layout + SimPre; the remaining prog_sim inputs are
+`hblob` (`codeBase.toNat + blobLen ≤ 2^64` wrap-freedom) and the summit assembly
+itself (entry-stub step + `call_sim` into `entry` + body + halt-pad bridge).
+
 ## 2026-07-06 (compile_sim campaign) — Phase 2: the entry-stub `Emitted` (`hem`, `stub_emitted`)
 
 The `hem` half of the Phase-2 payload is now in hand, mirroring `fn_hfn` but for
