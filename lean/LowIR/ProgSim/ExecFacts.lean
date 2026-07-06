@@ -259,4 +259,32 @@ theorem exec_call_inv (fuel argc rvc : Nat) (f : Name) (args : Vector Reg argc)
         · simp at h
     · next harity => simp at h
 
+/-- Inversion of the top-level `run`: a successful run looks up `f`, enters its
+    frame, and its body returns `normal`/`ret`. The `prog_sim` IL-side foundation
+    (the entry into `entry` that the machine's stub `jal` + prologue mirror). -/
+theorem run_inv {P : Program} {stackLo : Word} {fuel : Nat} {f : Name}
+    {args : List Word} {mem : Word → Byte} {sp0 : Word} {pad : Name → Nat}
+    {dataBase : Word} {s' : St}
+    (h : run P stackLo fuel f args mem sp0 pad dataBase = some s') :
+    ∃ (fd : FunDef) (st0 : St) (oc : Outcome),
+      List.lookup f P.env = some fd
+      ∧ frameEnter stackLo fd (pad f) args (installData dataBase P.data mem) sp0 = some st0
+      ∧ exec P (dbaseOf dataBase P.data) pad stackLo fuel fd.body st0 = some (s', oc)
+      ∧ (oc = Outcome.normal ∨ oc = Outcome.ret) := by
+  simp only [run] at h
+  split at h
+  · simp at h
+  · next fd hlk =>
+    split at h
+    · simp at h
+    · next st0 hfe =>
+      split at h
+      · next s1 hbody =>
+        simp only [Option.some.injEq] at h
+        exact ⟨fd, st0, .normal, hlk, hfe, h ▸ hbody, Or.inl rfl⟩
+      · next s1 hbody =>
+        simp only [Option.some.injEq] at h
+        exact ⟨fd, st0, .ret, hlk, hfe, h ▸ hbody, Or.inr rfl⟩
+      · simp at h
+
 end LowIR.Prog
