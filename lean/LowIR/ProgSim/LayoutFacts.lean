@@ -465,4 +465,89 @@ theorem compileFun_snd_gt (dat : Data) (fd : FunDef) (c : Nat) : c < (compileFun
   rw [compileFun_snd]; have := lower_snd_ge dat fd.body [] [] c (c + 1); omega
 
 
+/-! ## Global label nodup: the fresh-counter-threaded segment mapM. -/
+
+/-- The `compileProgT` segment builder (StateM over the fresh-label counter). -/
+def mapSegs (dat : Data) (xs : List (Name × FunDef)) : M (List (Name × List SymInstr)) :=
+  xs.mapM (fun nf => do pure (nf.1, ← compileFun dat nf.2))
+
+theorem mapSegs_nil (dat : Data) (c : Nat) : mapSegs dat [] c = ([], c) := rfl
+
+theorem mapSegs_cons (dat : Data) (nf : Name × FunDef) (rest : List (Name × FunDef)) (c : Nat) :
+    mapSegs dat (nf :: rest) c
+      = ((nf.1, (compileFun dat nf.2 c).1) :: (mapSegs dat rest (compileFun dat nf.2 c).2).1,
+         (mapSegs dat rest (compileFun dat nf.2 c).2).2) := by
+  rw [mapSegs, List.mapM_cons]; rfl
+
+/-- All segment labels (keys) built from counter `c`: nodup, and every one lies in
+    `[c, endCounter)`. The disjoint per-function ranges (`compileFun_snd_gt`) make
+    the concatenation nodup. -/
+theorem mapSegs_labels (dat : Data) : ∀ (xs : List (Name × FunDef)) (c : Nat),
+    ((mapSegs dat xs c).1.flatMap (fun s => labelIds s.2)).Nodup
+    ∧ (∀ l ∈ (mapSegs dat xs c).1.flatMap (fun s => labelIds s.2),
+        c ≤ l ∧ l < (mapSegs dat xs c).2)
+    ∧ c ≤ (mapSegs dat xs c).2 := by
+  intro xs
+  induction xs with
+  | nil => intro c; rw [mapSegs_nil]; refine ⟨by simp, by simp, Nat.le_refl _⟩
+  | cons nf rest ih =>
+    intro c
+    rw [mapSegs_cons]
+    have hc' := compileFun_snd_gt dat nf.2 c
+    obtain ⟨ihnd, ihrange, ihge⟩ := ih (compileFun dat nf.2 c).2
+    simp only [List.flatMap_cons]
+    refine ⟨?_, ?_, ?_⟩
+    · rw [List.nodup_append]
+      refine ⟨compileFun_labels_nodup dat nf.2 c, ihnd, ?_⟩
+      intro x hx y hy
+      have hxr := compileFun_labels_range dat nf.2 c x hx
+      have hyr := ihrange y hy
+      omega
+    · intro l hl
+      rw [List.mem_append] at hl
+      rcases hl with h | h
+      · have := compileFun_labels_range dat nf.2 c l h; exact ⟨by omega, by omega⟩
+      · have := ihrange l h; exact ⟨by omega, by omega⟩
+    · omega
+
+/-! ## Layout label keys = per-segment labelIds; lookup from nodup keys. -/
+
+theorem layoutItems_lbls_keys : ∀ (items : List SymInstr) (pos : Nat),
+    (layoutItems items pos).2.1.map Prod.fst = labelIds items := by
+  intro items
+  induction items with
+  | nil => intro pos; rfl
+  | cons si rest ih =>
+    intro pos
+    cases si <;> simp [layoutItems, labelIds, ih]
+
+theorem layout_lbls_keys : ∀ (segs : List (Name × List SymInstr)) (pos : Nat),
+    (layout segs pos).2.1.map Prod.fst = segs.flatMap (fun s => labelIds s.2) := by
+  intro segs
+  induction segs with
+  | nil => intro pos; rfl
+  | cons s rest ih =>
+    intro pos
+    obtain ⟨n, items⟩ := s
+    show ((layoutItems items pos).2.1 ++ (layout rest (layoutItems items pos).2.2).2.1).map Prod.fst = _
+    rw [List.map_append, layoutItems_lbls_keys, ih, List.flatMap_cons]
+
+theorem lookup_of_nodup_mem (l : List (Nat × Nat)) (a b : Nat)
+    (hnd : (l.map Prod.fst).Nodup) (hmem : (a, b) ∈ l) : l.lookup a = some b := by
+  induction l with
+  | nil => exact absurd hmem List.not_mem_nil
+  | cons x rest ih =>
+    obtain ⟨k, v⟩ := x
+    rw [List.map_cons, List.nodup_cons] at hnd
+    rw [List.lookup_cons]
+    rcases List.mem_cons.mp hmem with h | h
+    · injection h with h1 h2; subst h1; subst h2
+      have hkk : (a == a) = true := by rw [beq_iff_eq]
+      rw [hkk]
+    · have hak : (a == k) = false := by
+        cases hb : a == k
+        · rfl
+        · rw [beq_iff_eq] at hb; exact absurd hb (by
+            rintro rfl; exact hnd.1 (List.mem_map.mpr ⟨(a, b), h, rfl⟩))
+      rw [hak]; exact ih hnd.2 h
 end LowIR.ProgSim.LayoutFacts
