@@ -19,7 +19,8 @@ namespace LowIR.ProgSim
 
 open Rv64i (Instr State step Word decode fetch32 runFuel)
 open LowIR.Ctrl (Outcome)
-open LowIR.Prog (St Program Name FunDef installData)
+open LowIR.Prog (St Program Name FunDef installData frameEnter dbaseOf)
+open LowIR.Compile (userOff)
 
 /-! ## The `stepN` ↔ `runFuel` bridge. -/
 
@@ -61,22 +62,31 @@ theorem runFuel_eq_stepN (halt : Word) (K : Nat) (m : State)
       `jalr`. -/
 theorem entry_run_sim
     {P : Program} {entry : Name} {fd : FunDef} {args : List Word}
-    {stackLo sp0 : Word} {fuel : Nat} {s' : St} {L : Layout} {m0 : State}
+    {sp0 : Word} {fuel : Nat} {s' : St} {L : Layout} {m0 : State}
     (hlk    : List.lookup entry P.env = some fd)
     (hL     : layoutOf P entry L.codeBase L.stackLo = some L)
-    (hpre   : SimPre L stackLo sp0)
+    (hpre   : SimPre L L.stackLo sp0)
     (hpc    : m0.pc = L.codeBase)
     (hsp    : m0.rget 2 = sp0)
+    (hargc  : args.length = fd.argc)
     (hargs  : ∀ i, i < fd.argc → m0.rget (10 + i) = args.getD i 0)
     (hinst  : Installed L m0)
+    (hbr    : ∀ g gd, List.lookup g P.env = some gd → BranchOk gd.body)
+    (haccess : ∀ st0,
+                frameEnter L.stackLo fd (userPad P.env entry) args
+                    (installData (L.codeBase + BitVec.ofNat 64 L.segStart) P.data (fun _ => 0)) sp0
+                  = some st0 →
+                MemAccOff L [(st0.sp, userOff fd)] P
+                  (dbaseOf (L.codeBase + BitVec.ofNat 64 L.segStart) P.data)
+                  (userPad P.env) L.stackLo fuel fd.body st0)
     (hmem   : ∀ a, ¬ MachPriv L [] a →
                 installData (L.codeBase + BitVec.ofNat 64 L.segStart) P.data (fun _ => 0) a
                   = m0.mem a)
-    (hrun   : LowIR.Prog.run P stackLo fuel entry args (fun _ => 0) sp0
+    (hrun   : LowIR.Prog.run P L.stackLo fuel entry args (fun _ => 0) sp0
                 (userPad P.env) (L.codeBase + BitVec.ofNat 64 L.segStart) = some s') :
     ∃ K, (stepN K m0).pc = L.haltPc
        ∧ (∀ j, j < fd.rvc → (stepN K m0).rget (10 + j) = s'.rget (fd.rets.toList.getD j 0))
-       ∧ (∀ a, ¬ memRange a L.codeBase L.blobLen → ¬ MachStack stackLo sp0 a →
+       ∧ (∀ a, ¬ memRange a L.codeBase L.blobLen → ¬ MachStack L.stackLo sp0 a →
             s'.mem a = (stepN K m0).mem a)
        ∧ (∀ j, j < K → (stepN j m0).pc ≠ L.haltPc) := by
   sorry
@@ -91,26 +101,35 @@ theorem entry_run_sim
     `runFuel_eq_stepN` bridge. -/
 theorem prog_sim
     {P : Program} {entry : Name} {fd : FunDef} {args : List Word}
-    {stackLo sp0 : Word} {fuel : Nat} {s' : St} {L : Layout} {m0 : State}
+    {sp0 : Word} {fuel : Nat} {s' : St} {L : Layout} {m0 : State}
     (hlk    : List.lookup entry P.env = some fd)
     (hL     : layoutOf P entry L.codeBase L.stackLo = some L)
-    (hpre   : SimPre L stackLo sp0)
+    (hpre   : SimPre L L.stackLo sp0)
     (hpc    : m0.pc = L.codeBase)
     (hsp    : m0.rget 2 = sp0)
+    (hargc  : args.length = fd.argc)
     (hargs  : ∀ i, i < fd.argc → m0.rget (10 + i) = args.getD i 0)
     (hinst  : Installed L m0)
+    (hbr    : ∀ g gd, List.lookup g P.env = some gd → BranchOk gd.body)
+    (haccess : ∀ st0,
+                frameEnter L.stackLo fd (userPad P.env entry) args
+                    (installData (L.codeBase + BitVec.ofNat 64 L.segStart) P.data (fun _ => 0)) sp0
+                  = some st0 →
+                MemAccOff L [(st0.sp, userOff fd)] P
+                  (dbaseOf (L.codeBase + BitVec.ofNat 64 L.segStart) P.data)
+                  (userPad P.env) L.stackLo fuel fd.body st0)
     (hmem   : ∀ a, ¬ MachPriv L [] a →
                 installData (L.codeBase + BitVec.ofNat 64 L.segStart) P.data (fun _ => 0) a
                   = m0.mem a)
-    (hrun   : LowIR.Prog.run P stackLo fuel entry args (fun _ => 0) sp0
+    (hrun   : LowIR.Prog.run P L.stackLo fuel entry args (fun _ => 0) sp0
                 (userPad P.env) (L.codeBase + BitVec.ofNat 64 L.segStart) = some s') :
     ∃ k, (runFuel L.haltPc k m0).pc = L.haltPc
        ∧ (∀ j, j < fd.rvc →
             (runFuel L.haltPc k m0).rget (10 + j) = s'.rget (fd.rets.toList.getD j 0))
-       ∧ (∀ a, ¬ memRange a L.codeBase L.blobLen → ¬ MachStack stackLo sp0 a →
+       ∧ (∀ a, ¬ memRange a L.codeBase L.blobLen → ¬ MachStack L.stackLo sp0 a →
             s'.mem a = (runFuel L.haltPc k m0).mem a) := by
   obtain ⟨K, hHalt, hRets, hMem, hne⟩ :=
-    entry_run_sim hlk hL hpre hpc hsp hargs hinst hmem hrun
+    entry_run_sim hlk hL hpre hpc hsp hargc hargs hinst hbr haccess hmem hrun
   have hbridge := runFuel_eq_stepN L.haltPc K m0 hne
   exact ⟨K, by rw [hbridge]; exact hHalt,
              fun j hj => by rw [hbridge]; exact hRets j hj,
