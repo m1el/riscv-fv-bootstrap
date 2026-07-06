@@ -479,6 +479,24 @@ theorem mapSegs_cons (dat : Data) (nf : Name × FunDef) (rest : List (Name × Fu
          (mapSegs dat rest (compileFun dat nf.2 c).2).2) := by
   rw [mapSegs, List.mapM_cons]; rfl
 
+/-- `mapSegs` distributes over an env append: the second group is compiled from
+    the fresh-label counter the first group ends at. The counter-threading twin
+    of `layout_flat_append`. -/
+theorem mapSegs_append (dat : Data) : ∀ (a b : List (Name × FunDef)) (c : Nat),
+    (mapSegs dat (a ++ b) c).1
+      = (mapSegs dat a c).1 ++ (mapSegs dat b (mapSegs dat a c).2).1
+    ∧ (mapSegs dat (a ++ b) c).2 = (mapSegs dat b (mapSegs dat a c).2).2 := by
+  intro a
+  induction a with
+  | nil => intro b c; rw [List.nil_append, mapSegs_nil]; exact ⟨rfl, rfl⟩
+  | cons nf rest ih =>
+    intro b c
+    rw [List.cons_append, mapSegs_cons, mapSegs_cons]
+    obtain ⟨ih1, ih2⟩ := ih b (compileFun dat nf.2 c).2
+    constructor
+    · dsimp only; rw [ih1, List.cons_append]
+    · dsimp only; exact ih2
+
 /-- All segment labels (keys) built from counter `c`: nodup, and every one lies in
     `[c, endCounter)`. The disjoint per-function ranges (`compileFun_snd_gt`) make
     the concatenation nodup. -/
@@ -668,5 +686,69 @@ theorem compileFun_lbls_discharge (dat : Data) (env : List (Name × FunDef))
     apply hmem_global
     rw [compileFun_lbltab]
     exact List.mem_append_left _ hlp
+
+/-! ## The `fnPos g` tie: the layout function table records each segment's start.
+
+    `layout` records one `(name, pos)` per segment, in order, at the byte position
+    where that segment begins. So a `mem` in the function table decomposes the
+    segment list at that name with the recorded position as the prefix's end — the
+    `hseg`/`hp` `compileFun_lbls_discharge` demands. -/
+theorem layout_fns_decomp :
+    ∀ (segs : List (Name × List SymInstr)) (pos : Nat) (g : Name) (p : Nat),
+      (g, p) ∈ (layout segs pos).2.2.1 →
+      ∃ (pre : List (Name × List SymInstr)) (items : List SymInstr)
+        (suf : List (Name × List SymInstr)),
+        segs = pre ++ (g, items) :: suf ∧ (layout pre pos).2.2.2 = p := by
+  intro segs
+  induction segs with
+  | nil => intro pos g p hmem; exact absurd hmem List.not_mem_nil
+  | cons ni rest ih =>
+    intro pos g p hmem
+    obtain ⟨n, its⟩ := ni
+    rw [show (layout ((n, its) :: rest) pos).2.2.1
+          = (n, pos) :: (layout rest (layoutItems its pos).2.2).2.2.1 from rfl,
+        List.mem_cons] at hmem
+    rcases hmem with h | h
+    · -- head: g = n, p = pos
+      simp only [Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      exact ⟨[], its, rest, rfl, rfl⟩
+    · -- tail: recurse into `rest`, prepend `(n, its)` to the prefix
+      obtain ⟨pre', items, suf, hrest, hp'⟩ := ih (layoutItems its pos).2.2 g p h
+      refine ⟨(n, its) :: pre', items, suf, ?_, ?_⟩
+      · rw [hrest]; rfl
+      · -- (layout ((n,its)::pre') pos).2.2.2 = (layout pre' (layoutItems its pos).2.2).2.2.2 = p
+        exact hp'
+
+/-- **Env-level discharge** (the `hfn`/`hem` label premises, keyed on an env
+    decomposition). For a program whose env splits as `envPre ++ (g, gd) :: envSuf`,
+    function `g`'s fresh-label counter is `(mapSegs dat envPre 0).2` and its byte
+    position is the layout end of `("", stub) :: (mapSegs dat envPre 0).1`; at those,
+    both `compileFun_resolves` label premises hold. Composes `mapSegs_append` +
+    `mapSegs_cons` (the segment decomposition) with `compileFun_lbls_discharge`. The
+    caller (Phase 6) supplies the env split and identifies this byte position with
+    `g`'s `fnTab` entry (`layout_fns_decomp`). -/
+theorem env_fn_lbls_discharge (dat : Data) (envPre envSuf : List (Name × FunDef))
+    (stub : List SymInstr) (hstub : labelIds stub = []) (g : Name) (gd : FunDef) :
+    List.lookup (mapSegs dat envPre 0).2
+        (layout (("", stub) :: (mapSegs dat (envPre ++ (g, gd) :: envSuf) 0).1) 0).2.1
+      = some ((layout (("", stub) :: (mapSegs dat envPre 0).1) 0).2.2.2
+              + 4 * (prologueI gd).length + 4 * csize gd.body)
+    ∧ LblConsistent
+        (layout (("", stub) :: (mapSegs dat (envPre ++ (g, gd) :: envSuf) 0).1) 0).2.1
+        (layoutItems (lower dat [] [] (mapSegs dat envPre 0).2 gd.body
+              ((mapSegs dat envPre 0).2 + 1)).1
+          ((layout (("", stub) :: (mapSegs dat envPre 0).1) 0).2.2.2
+            + 4 * (prologueI gd).length)).2.1 := by
+  have hseg : ("", stub) :: (mapSegs dat (envPre ++ (g, gd) :: envSuf) 0).1
+      = (("", stub) :: (mapSegs dat envPre 0).1)
+        ++ (g, (compileFun dat gd (mapSegs dat envPre 0).2).1)
+           :: (mapSegs dat envSuf (compileFun dat gd (mapSegs dat envPre 0).2).2).1 := by
+    rw [(mapSegs_append dat envPre ((g, gd) :: envSuf) 0).1, mapSegs_cons, List.cons_append]
+  exact compileFun_lbls_discharge dat (envPre ++ (g, gd) :: envSuf) stub hstub gd
+    (mapSegs dat envPre 0).2 ((layout (("", stub) :: (mapSegs dat envPre 0).1) 0).2.2.2) g
+    (("", stub) :: (mapSegs dat envPre 0).1)
+    (mapSegs dat envSuf (compileFun dat gd (mapSegs dat envPre 0).2).2).1
+    hseg rfl
 
 end LowIR.ProgSim.LayoutFacts

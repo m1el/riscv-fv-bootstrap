@@ -1,5 +1,32 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 2: the `fnPos g` tie (label-premise side)
+
+Three more `LayoutFacts.lean` lemmas close the `fnPos g` tie for the label premises,
+all axiom-clean (`layout_fns_decomp`: `[propext]`; the others `[propext, Quot.sound]`),
+full `lake build` green (still exactly the 3 pre-existing sorries):
+
+- **`layout_fns_decomp`** — a `mem` in the layout's function table decomposes the
+  segment list: `(g, p) ∈ (layout segs pos).2.2.1` ⇒ `segs = pre ++ (g, items) :: suf`
+  with `(layout pre pos).2.2.2 = p`. `layout` records one `(name, startPos)` per
+  segment in order, so the recorded position IS the prefix's end. List induction on segs.
+- **`mapSegs_append`** — the counter-threading twin of `layout_flat_append`: `mapSegs`
+  over an env append compiles the second group from the fresh-label counter the first
+  ends at (`(mapSegs (a++b) c).1 = (mapSegs a c).1 ++ (mapSegs b (mapSegs a c).2).1`,
+  and the end counters compose).
+- **`env_fn_lbls_discharge`** (the payoff) — keyed on an env split `envPre ++ (g,gd)::
+  envSuf`: `g`'s counter is `(mapSegs dat envPre 0).2`, its byte position is the layout
+  end of `("", stub) :: (mapSegs dat envPre 0).1`, and at those BOTH `compileFun_resolves`
+  label premises hold. Composes `mapSegs_append` + `mapSegs_cons` (segment decomposition)
+  with `compileFun_lbls_discharge`.
+
+Remaining for `hfn`/`hem` (assembly only): the caller identifies `env_fn_lbls_discharge`'s
+byte position with `g`'s `fnTab` entry (via `layout_fns_decomp` + env-name uniqueness);
+the **flat resolve split** at each `fnPos g` (`layout_flat_append` + `resolve_length`)
+placing each function's resolved-instruction slice — feeds `compileFun_resolves`' `hres`;
+`TabOk` from `dposOf`/`fnPosOf`; assemble the per-function `Emitted` from `layoutOf` (the
+`hfn` fact). Then `hdpos`/`halign` + Phase 6 `prog_sim` (Defs.lean:491, the lone `sorry`).
+
 ## 2026-07-06 (compile_sim campaign) — Phase 2: position-membership + per-function `hepi`/`hlc` discharge
 
 Three new `LayoutFacts.lean` lemmas close the "position-membership" step (the first
