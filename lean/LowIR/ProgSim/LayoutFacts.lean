@@ -137,4 +137,111 @@ theorem layout_fns_append : ∀ (segsA segsB : List (Name × List SymInstr)) (po
          ++ (layout segsB (layout rest (layoutItems items pos).2.2).2.2.2).2.2.1
     rw [ih, List.cons_append]
 
+/-! ## Per-function slice: `compileFun`'s resolved stream. -/
+
+/-- An all-`.ins`/`.label` stream's byte span is `4 ·` its resolved instruction
+    count (each `.ins` is 4 bytes/1 instr; each `.label` is 0/0). -/
+theorem totalSymSize_allins : ∀ (sym : List SymInstr), sym.all isInsOrLabel = true →
+    totalSymSize sym = 4 * (sym.flatMap insUnwrap).length := by
+  intro sym
+  induction sym with
+  | nil => intro _; rfl
+  | cons si rest ih =>
+    intro hall
+    simp only [List.all_cons, Bool.and_eq_true] at hall
+    rw [totalSymSize_cons, List.flatMap_cons, List.length_append, Nat.mul_add, ih hall.2]
+    cases si with
+    | ins i => simp [symSize, insUnwrap]
+    | label l => simp [symSize, insUnwrap]
+    | br c a b l => exact absurd hall.1 (by simp [isInsOrLabel])
+    | jmp l => exact absurd hall.1 (by simp [isInsOrLabel])
+    | callf f => exact absurd hall.1 (by simp [isInsOrLabel])
+    | cref d => exact absurd hall.1 (by simp [isInsOrLabel])
+
+theorem tss_prologue (fd : FunDef) : totalSymSize (prologue fd) = 4 * (prologueI fd).length := by
+  rw [totalSymSize_allins _ (AsmFacts.prologue_all_ins fd), AsmFacts.prologue_unwrap]
+
+theorem tss_epilogue (fd : FunDef) : totalSymSize (epilogue fd) = 4 * (epilogueI fd).length := by
+  rw [totalSymSize_allins _ (AsmFacts.epilogue_all_ins fd), AsmFacts.epilogue_unwrap]
+
+/-! ## `lower`'s fresh-label counter is monotone (foundation for global label nodup). -/
+
+/-- The counter `lower` returns is at least the one it started with. -/
+theorem lower_snd_ge (dat : Data) : ∀ (stmt : PStmt) (bs cs : List Nat) (epi cnt : Nat),
+    cnt ≤ (lower dat bs cs epi stmt cnt).2 := by
+  intro stmt
+  induction stmt with
+  | seq a b iha ihb =>
+      intro bs cs epi cnt
+      have h1 := iha bs cs epi cnt
+      have h2 := ihb bs cs epi (lower dat bs cs epi a cnt).2
+      show cnt ≤ (lower dat bs cs epi b (lower dat bs cs epi a cnt).2).2; omega
+  | ife c a b t e iht ihe =>
+      intro bs cs epi cnt
+      have h1 := iht bs cs epi (cnt + 2)
+      have h2 := ihe bs cs epi (lower dat bs cs epi t (cnt + 2)).2
+      show cnt ≤ (lower dat bs cs epi e (lower dat bs cs epi t (cnt + 2)).2).2; omega
+  | «while» c a b body ih =>
+      intro bs cs epi cnt
+      have h := ih bs (cnt :: cs) epi (cnt + 3)
+      show cnt ≤ (lower dat bs (cnt :: cs) epi body (cnt + 3)).2; omega
+  | block body ih =>
+      intro bs cs epi cnt
+      have h := ih (cnt :: bs) cs epi (cnt + 1)
+      show cnt ≤ (lower dat (cnt :: bs) cs epi body (cnt + 1)).2; omega
+  | _ => intro bs cs epi cnt; exact Nat.le_refl _
+
+/-- `compileFun`'s resolved byte stream — the direct transcription (label `c` = the
+    epilogue label; the body is lowered from counter `c+1`). -/
+theorem compileFun_stream (dat : Data) (fd : FunDef) (c : Nat) :
+    (compileFun dat fd c).1
+      = prologue fd ++ (lower dat [] [] c fd.body (c + 1)).1 ++ [SymInstr.label c] ++ epilogue fd :=
+  rfl
+
+/-- **Per-function slice.** Resolving `compileFun`'s stream at byte position `p`
+    (under a consistent global label environment) yields exactly `prologueI ++
+    emitCF … body ++ epilogueI` — the `Emitted` payload `hfn` demands. Composes
+    `prologue_resolves` + `lower_resolve` + `epilogue_resolves`; the label premises
+    (`hepi` for the epilogue label, `hlc` for the body's internal labels) are what
+    the global label-nodup discharges. -/
+theorem compileFun_resolves (dat : Data) (P : LowIR.Prog.Program) (dpos fnPos : Name → Nat)
+    (lbls : List (Nat × Nat)) (fns dats : List (Name × Nat)) (htab : TabOk dpos fnPos fns dats)
+    (fd : FunDef) (c p : Nat) (rs : List (List Instr))
+    (hres : (layoutItems (compileFun dat fd c).1 p).1.mapM (resolveOne lbls fns dats) = some rs)
+    (hwf : LowIR.Prog.wf P 0 0 fd.body = true)
+    (hepi : List.lookup c lbls = some (p + 4 * (prologueI fd).length + 4 * csize fd.body))
+    (hlc : LblConsistent lbls
+        (layoutItems (lower dat [] [] c fd.body (c + 1)).1 (p + 4 * (prologueI fd).length)).2.1) :
+    rs.flatten = prologueI fd
+      ++ emitCF dat dpos fnPos [] []
+           (p + 4 * (prologueI fd).length + 4 * csize fd.body) (p + 4 * (prologueI fd).length) fd.body
+      ++ epilogueI fd := by
+  rw [compileFun_stream] at hres
+  obtain ⟨rpre, repi, hpre, hepiR, hf3⟩ :=
+    resolve_flatten_append lbls fns dats _ (epilogue fd) p rs hres
+  obtain ⟨rpre2, rlab, hpre2, hlabR, hf2⟩ :=
+    resolve_flatten_append lbls fns dats _ [SymInstr.label c] p rpre hpre
+  obtain ⟨rpro, rbody, hproR, hbodyR, hf1⟩ :=
+    resolve_flatten_append lbls fns dats _ (lower dat [] [] c fd.body (c + 1)).1 p rpre2 hpre2
+  rw [tss_prologue] at hbodyR
+  -- prologue
+  have hpro : rpro.flatten = prologueI fd := by
+    have h := AsmFacts.prologue_resolves fd lbls fns dats p
+    rw [hproR, Option.map_some, Option.some.injEq] at h; exact h
+  -- body
+  have hbody : rbody.flatten = emitCF dat dpos fnPos [] []
+      (p + 4 * (prologueI fd).length + 4 * csize fd.body) (p + 4 * (prologueI fd).length) fd.body :=
+    lower_resolve dat P dpos fnPos lbls fns dats htab fd.body [] [] c (c + 1)
+      (p + 4 * (prologueI fd).length) [] []
+      (p + 4 * (prologueI fd).length + 4 * csize fd.body) rbody hbodyR hwf
+      ⟨hepi, rfl, rfl, fun k hk => absurd hk (by simp), fun k hk => absurd hk (by simp)⟩ hlc
+  -- trailing label + epilogue
+  have hlabF : rlab.flatten = [] :=
+    allins_resolve lbls fns dats _ _ rlab _ (by simp [isInsOrLabel]) (by simp [insUnwrap]) hlabR
+  have hepiF : repi.flatten = epilogueI fd := by
+    have h := AsmFacts.epilogue_resolves fd lbls fns dats (p + totalSymSize
+      (prologue fd ++ (lower dat [] [] c fd.body (c + 1)).1 ++ [SymInstr.label c]))
+    rw [hepiR, Option.map_some, Option.some.injEq] at h; exact h
+  rw [hf3, hf2, hf1, hpro, hbody, hlabF, hepiF, List.append_nil]
+
 end LowIR.ProgSim.LayoutFacts
