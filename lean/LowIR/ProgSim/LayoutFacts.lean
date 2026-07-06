@@ -1165,4 +1165,122 @@ theorem fn_emitted {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
   rw [htie]
   exact hslice
 
+/-! ## The full per-function `hfn` bundle (the `lower_sim_cf`/`prog_sim` hypothesis).
+
+    `fn_emitted` (Brick 4) gives conjunct 1 (`Emitted`). The remaining five come
+    from: the tightened compiler guards (`wf`, `≠ ""`, `totalFrame ≤ 2000`,
+    `frameSize % 8 = 0` — extracted here), the layout tie (`fnPos % 4 = 0`), and
+    the single program-level blob bound `4·|L.instrs| < 2²⁰` (the `< 2²⁰` end
+    position). `BranchOk gd.body` is threaded as a per-program structural
+    hypothesis — the same shape `lower_sim_cf` itself carries as `hbr`, and
+    `decide`-checkable for any concrete program (branches that don't fit make the
+    real `Compile` return `none`). -/
+
+/-- `wfProgram P` from a successful compile (the guard's FIRST clause). -/
+theorem compileProgT_wfProgram {P : Program} {entry : Name} {t}
+    (h : compileProgT P entry = some t) : LowIR.Prog.wfProgram P = true := by
+  unfold compileProgT at h
+  cases hg : (LowIR.Prog.wfProgram P && P.env.all (fun nf => LowIR.Compile.fnOk nf.2)
+       && (List.lookup entry P.env).isSome
+       && P.data.all (fun d => d.2.length < 2 ^ 22)) with
+  | false => rw [hg] at h; simp at h
+  | true => simp only [Bool.and_eq_true] at hg; exact hg.1.1.1
+
+/-- `P.env.all fnOk` from a successful compile (the guard's SECOND clause). -/
+theorem compileProgT_fnOkAll {P : Program} {entry : Name} {t}
+    (h : compileProgT P entry = some t) : P.env.all (fun nf => fnOk nf.2) = true := by
+  unfold compileProgT at h
+  cases hg : (LowIR.Prog.wfProgram P && P.env.all (fun nf => LowIR.Compile.fnOk nf.2)
+       && (List.lookup entry P.env).isSome
+       && P.data.all (fun d => d.2.length < 2 ^ 22)) with
+  | false => rw [hg] at h; simp at h
+  | true => simp only [Bool.and_eq_true] at hg; exact hg.1.1.2
+
+/-- Per-function facts pulled from the tightened guards for `(g, gd) ∈ P.env`:
+    body `wf`, name non-empty, `totalFrame ≤ 2000`, `frameSize % 8 = 0`. -/
+theorem fn_guard_facts {P : Program} {entry : Name} {t} {g : Name} {gd : FunDef}
+    (hc : compileProgT P entry = some t) (hmem : (g, gd) ∈ P.env) :
+    LowIR.Prog.wf P 0 0 gd.body = true ∧ g ≠ "" ∧ totalFrame gd ≤ 2000
+      ∧ gd.frameSize % 8 = 0 := by
+  have hall := compileProgT_fnOkAll hc
+  have hwfP := compileProgT_wfProgram hc
+  have hok : fnOk gd = true := by
+    have := (List.all_eq_true.mp hall) (g, gd) hmem; simpa using this
+  simp only [fnOk, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hok
+  rw [LowIR.Prog.wfProgram, Bool.and_eq_true] at hwfP
+  have hwfnf : (LowIR.Prog.wf P 0 0 gd.body
+                 && !(gd.params.toList.contains gd.frameReg) && g != "") = true := by
+    have := (List.all_eq_true.mp hwfP.1) (g, gd) hmem; simpa using this
+  simp only [Bool.and_eq_true, bne_iff_ne, ne_eq] at hwfnf
+  exact ⟨hwfnf.1.1, hwfnf.2, hok.1.2, hok.2⟩
+
+/-- The resolved epilogue has exactly `rvc + 3` instructions (`rets` has `rvc`
+    entries, each a single `loadSlotI`, plus the `ld`/`addi`/`jalr` tail). -/
+theorem epilogueI_length (fd : FunDef) : (epilogueI fd).length = epilogueSize fd := by
+  have hfm : ∀ (l : List (Reg × Nat)),
+      (l.flatMap (fun ri => loadSlotI ri.1 (A ri.2))).length = l.length := by
+    intro l; induction l with
+    | nil => rfl
+    | cons x t ih =>
+        rw [List.flatMap_cons, List.length_append, ih, loadSlotI_length, List.length_cons]; omega
+  unfold epilogueI epilogueSize
+  rw [List.length_append, hfm, List.length_zipIdx]
+  simp only [List.length_cons, List.length_nil]
+  have : fd.rets.toList.length = fd.rvc := by simp
+  omega
+
+/-- **The full `hfn` bundle** — for every function of a successfully-compiled
+    program, the six-conjunct fact `lower_sim_cf`/`prog_sim` take as `hfn`. -/
+theorem fn_hfn {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
+    {dats : List (Name × Nat)}
+    (hL : layoutOf P entry cb slo = some L)
+    (hc : compileProgT P entry = some (L.instrs, L.fnTab, dats))
+    (hcode : 4 * L.instrs.length < 2 ^ 20)
+    (hbr : ∀ g gd, List.lookup g P.env = some gd → BranchOk gd.body)
+    (g : Name) (gd : FunDef) (hlk : List.lookup g P.env = some gd) :
+    Emitted L (fnPosOf L g)
+        (prologueI gd
+          ++ emitCF P.data (dposOf L) (fnPosOf L) [] []
+               (fnPosOf L g + 4 * prologueSize gd + 4 * csize gd.body)
+               (fnPosOf L g + 4 * prologueSize gd) gd.body
+          ++ epilogueI gd)
+      ∧ fnPosOf L g + 4 * prologueSize gd + 4 * csize gd.body + 4 * epilogueSize gd < 2 ^ 20
+      ∧ BranchOk gd.body
+      ∧ totalFrame gd ≤ 2000
+      ∧ gd.frameSize % 8 = 0
+      ∧ fnPosOf L g % 4 = 0 := by
+  obtain ⟨pre, suf, hE, hnp⟩ := lookup_split g P.env gd hlk
+  have hmem : (g, gd) ∈ P.env := by rw [hE]; simp
+  obtain ⟨hwf, hg, htf, hfs⟩ := fn_guard_facts hc hmem
+  -- conjunct 1 (Brick 4)
+  have hEmit := fn_emitted hL hc pre suf g gd hg hE hnp hwf
+  -- re-derive the slice + resolved payload for the position/length arithmetic
+  obtain ⟨rs, hrs, hins, hfnt, hdats'⟩ := compileProgT_decomp hc
+  obtain ⟨preF, rsg, sufF, hflat, hlen, hgres⟩ := fn_resolve_slice pre suf g gd hE hrs
+  have htie := fnPosOf_tie hL hc pre suf g gd hg hE hnp
+  have htab := tabOk_discharge hL hc
+  rw [hdats'] at htab
+  obtain ⟨hepi, hlc⟩ := env_fn_lbls_discharge P.data pre suf (stubSeg entry)
+    (labelIds_stubSeg entry) g gd
+  rw [← hE] at hepi hlc
+  have hpay := compileFun_resolves P.data P (dposOf L) (fnPosOf L)
+    (progLayout P entry).2.1 (progLayout P entry).2.2.1
+    (dataOffsetsFrom (pad8 (progLayout P entry).2.2.2) P.data) htab gd
+    (mapSegs P.data pre 0).2
+    (layout (("", stubSeg entry) :: (mapSegs P.data pre 0).1) 0).2.2.2
+    rsg hgres hwf hepi hlc
+  -- fnPos = 4·|preF.flatten|  (tie + resolve length)
+  have hpos : fnPosOf L g = 4 * preF.flatten.length := by rw [htie, ← hlen]
+  -- |rsg.flatten| = prologueSize + csize body + epilogueSize
+  have hrsglen : rsg.flatten.length = prologueSize gd + csize gd.body + epilogueSize gd := by
+    rw [hpay, List.length_append, List.length_append, emitCF_length, epilogueI_length]; rfl
+  -- preF + rsg fit inside L.instrs
+  have hfit : preF.flatten.length + rsg.flatten.length ≤ L.instrs.length := by
+    rw [hins, hflat, List.length_append, List.length_append]; omega
+  refine ⟨hEmit, ?_, hbr g gd hlk, htf, hfs, ?_⟩
+  · -- conjunct 2: the < 2²⁰ end bound (fnPos = 4·preF, and preF+rsg ≤ instrs)
+    rw [hpos]; omega
+  · -- conjunct 6: fnPos % 4 = 0
+    rw [hpos]; omega
+
 end LowIR.ProgSim.LayoutFacts
