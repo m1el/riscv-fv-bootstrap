@@ -566,5 +566,107 @@ theorem lbls_lookup (dat : Data) (env : List (Name × FunDef)) (stub : List SymI
     (layout (("", stub) :: (mapSegs dat env 0).1) 0).2.1.lookup l = some p :=
   lookup_of_nodup_mem _ l p (global_lbls_nodup dat env stub hstub) hmem
 
+/-! ## Position-membership: a function's `layoutItems` label entries live in the
+    global label table (so `lbls_lookup` resolves each to its absolute byte pos). -/
+
+/-- Each label entry `layoutItems` records for a segment sits in the global
+    `layout` label table: the global table is the positional concatenation of the
+    per-segment `layoutItems` tables (the `layout` cons def), so a `mem` on any
+    single segment's slice lifts to the whole. `pre` is the list of segments laid
+    out before this one; the segment `(n, items)` therefore starts at the end
+    position of `pre` (`(layout pre pos).2.2.2`). -/
+theorem layout_lbls_mem :
+    ∀ (pre : List (Name × List SymInstr)) (n : Name) (items : List SymInstr)
+      (suf : List (Name × List SymInstr)) (pos : Nat) (x : Nat × Nat),
+      x ∈ (layoutItems items (layout pre pos).2.2.2).2.1 →
+      x ∈ (layout (pre ++ (n, items) :: suf) pos).2.1 := by
+  intro pre
+  induction pre with
+  | nil =>
+    intro n items suf pos x hx
+    show x ∈ ((layoutItems items pos).2.1 ++ (layout suf (layoutItems items pos).2.2).2.1)
+    exact List.mem_append.mpr (Or.inl hx)
+  | cons mi pre' ih =>
+    intro n items suf pos x hx
+    obtain ⟨m, its⟩ := mi
+    show x ∈ ((layoutItems its pos).2.1
+              ++ (layout (pre' ++ (n, items) :: suf) (layoutItems its pos).2.2).2.1)
+    exact List.mem_append.mpr (Or.inr (ih n items suf (layoutItems its pos).2.2 x hx))
+
+/-- An all-`.ins`/`.label`-free (i.e. no-`.label`) stream records no label
+    entries: its `layoutItems` label table is empty. -/
+theorem layoutItems_lbltab_nil (items : List SymInstr) (pos : Nat)
+    (h : labelIds items = []) : (layoutItems items pos).2.1 = [] := by
+  have hk := layoutItems_lbls_keys items pos
+  rw [h] at hk
+  exact List.map_eq_nil_iff.mp hk
+
+/-- A singleton `.label l` stream records exactly `(l, pos)`. -/
+theorem layoutItems_label_singleton (l pos : Nat) :
+    (layoutItems [SymInstr.label l] pos).2.1 = [(l, pos)] := rfl
+
+/-- **`compileFun`'s label table** (at absolute byte position `p`): exactly the
+    body's internal labels (at `bodyPos = p + 4·|prologueI|`) followed by the
+    single epilogue-label entry `(c, epiPos)` with `epiPos = bodyPos + 4·csize
+    body`. Prologue/epilogue are all-`.ins`, contributing nothing. -/
+theorem compileFun_lbltab (dat : Data) (fd : FunDef) (c p : Nat) :
+    (layoutItems (compileFun dat fd c).1 p).2.1
+      = (layoutItems (lower dat [] [] c fd.body (c + 1)).1
+            (p + 4 * (prologueI fd).length)).2.1
+        ++ [(c, p + 4 * (prologueI fd).length + 4 * csize fd.body)] := by
+  rw [compileFun_stream]
+  -- peel epilogue (all-.ins) off the right
+  rw [(layoutItems_append _ (epilogue fd) p).2,
+      layoutItems_lbltab_nil (epilogue fd) _ (labelIds_epilogue fd), List.append_nil]
+  -- peel the epilogue-label singleton
+  rw [(layoutItems_append _ [SymInstr.label c] p).2, layoutItems_label_singleton]
+  -- peel the prologue (all-.ins) off the left
+  rw [(layoutItems_append (prologue fd) _ p).2,
+      layoutItems_lbltab_nil (prologue fd) _ (labelIds_prologue fd), List.nil_append]
+  -- pin the positions via the size bridges
+  rw [totalSymSize_append, tss_prologue,
+      lower_totalSymSize dat fd.body [] [] c (c + 1), Nat.add_assoc]
+
+/-! ## Per-function discharge: `hepi`/`hlc` for `compileFun_resolves`.
+
+    Given the global program layout and that function `g`'s compiled segment
+    `(compileFun dat gd c).1` sits at absolute byte position `p` (i.e. after the
+    prefix `pre` of segments), both `compileFun_resolves` label premises hold:
+    the epilogue label `c` resolves to its byte position, and every body label
+    resolves to its layout position. This packages `compileFun_lbltab` (what the
+    labels ARE) + `layout_lbls_mem` (they live in the global table) + `lbls_lookup`
+    (nodup keys ⇒ membership determines lookup). The one obligation left to the
+    caller is `hseg`/`hp`: that `g` is laid out at `p` — the `fnPos g` tie. -/
+theorem compileFun_lbls_discharge (dat : Data) (env : List (Name × FunDef))
+    (stub : List SymInstr) (hstub : labelIds stub = [])
+    (gd : FunDef) (c p : Nat) (g : Name)
+    (pre suf : List (Name × List SymInstr))
+    (hseg : ("", stub) :: (mapSegs dat env 0).1
+              = pre ++ (g, (compileFun dat gd c).1) :: suf)
+    (hp : (layout pre 0).2.2.2 = p) :
+    List.lookup c (layout (("", stub) :: (mapSegs dat env 0).1) 0).2.1
+        = some (p + 4 * (prologueI gd).length + 4 * csize gd.body)
+    ∧ LblConsistent (layout (("", stub) :: (mapSegs dat env 0).1) 0).2.1
+        (layoutItems (lower dat [] [] c gd.body (c + 1)).1
+          (p + 4 * (prologueI gd).length)).2.1 := by
+  -- membership of any compileFun-table entry in the global label table
+  have hmem_global : ∀ x, x ∈ (layoutItems (compileFun dat gd c).1 p).2.1 →
+      x ∈ (layout (("", stub) :: (mapSegs dat env 0).1) 0).2.1 := by
+    intro x hx
+    rw [hseg]
+    refine layout_lbls_mem pre g (compileFun dat gd c).1 suf 0 x ?_
+    rw [hp]; exact hx
+  refine ⟨?_, ?_⟩
+  · -- epilogue label
+    apply lbls_lookup dat env stub hstub
+    apply hmem_global
+    rw [compileFun_lbltab]
+    exact List.mem_append_right _ (List.mem_singleton.mpr rfl)
+  · -- body labels
+    intro l lp hlp
+    apply lbls_lookup dat env stub hstub
+    apply hmem_global
+    rw [compileFun_lbltab]
+    exact List.mem_append_left _ hlp
 
 end LowIR.ProgSim.LayoutFacts

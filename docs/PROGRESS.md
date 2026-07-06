@@ -1,5 +1,38 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 2: position-membership + per-function `hepi`/`hlc` discharge
+
+Three new `LayoutFacts.lean` lemmas close the "position-membership" step (the first
+of the four assembly obligations named below), all axiom-clean (`layout_lbls_mem`:
+`[propext]`; the other two `[propext, Quot.sound]`), full `lake build` green (still
+exactly the 3 known pre-existing sorries: `Core.compile_sim`, `Defs.prog_sim`,
+`Hex0/ProgProof`):
+
+- **`layout_lbls_mem`** — a segment's `layoutItems` label entries lift into the global
+  `layout` table: the global table is the positional concatenation of the per-segment
+  tables (the `layout` cons def), so any `mem` on one segment's slice (laid out at the
+  end position of its prefix `pre`) is a `mem` of the whole. List induction on `pre`.
+- **`compileFun_lbltab`** — the exact label table `layoutItems` records for a function's
+  compiled stream at absolute position `p`: the body's internal labels (at `bodyPos =
+  p + 4·|prologueI|`) followed by the single epilogue-label entry `(c, bodyPos +
+  4·csize body)`. Peels prologue/`[.label c]`/epilogue via `layoutItems_append`, kills
+  the all-`.ins` prologue/epilogue tables (`layoutItems_lbltab_nil` from `labelIds_*`),
+  pins positions with `tss_prologue` + `lower_totalSymSize`.
+- **`compileFun_lbls_discharge`** (the payoff) — given the global layout and that `g`'s
+  compiled segment sits at absolute `p` (`hseg`/`hp`), produces BOTH `compileFun_resolves`
+  label premises: `hepi` (epilogue-label lookup = its byte position) and `hlc`
+  (`LblConsistent` for the body labels). Chains `compileFun_lbltab` (what the labels are)
+  → `layout_lbls_mem` (they're in the global table) → `lbls_lookup` (nodup keys ⇒
+  membership determines lookup).
+
+Remaining for a complete `hfn`/`hem` (still assembly only): **the `fnPos g` tie** —
+discharge `compileFun_lbls_discharge`'s `hseg`/`hp` from the global layout's function
+table (each `(g, p) ∈ (layout …).2.2.1` ⇒ `g`'s segment decomposes as `pre ++ (g,·)::suf`
+with `(layout pre 0).2.2.2 = p`); the **flat resolve split** at each `fnPos g`
+(`layout_flat_append` + `resolve_length`) placing each function's slice; `TabOk` from
+`dposOf`/`fnPosOf`; assemble the per-function `Emitted` from `layoutOf`. Then `hdpos`/
+`halign` + Phase 6 `prog_sim` (Defs.lean:491, the lone campaign `sorry`).
+
 ## 2026-07-06 (compile_sim campaign) — Phase 2: `LayoutFacts.lean` — the hfn/hem glue underway
 
 New library module `LowIR/ProgSim/LayoutFacts.lean` (lakefile root
