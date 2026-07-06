@@ -33,6 +33,8 @@ def bag_grid(n):
     rows = math.ceil(n / cols)
     return cols, rows
 
+SEP_H = 14           # divider zone between private and shared dot grids
+
 boxes = {}
 for m in C['majors']:
     name = m['name']
@@ -42,10 +44,14 @@ for m in C['majors']:
     grid_w = cols * DOT_PITCH
     grid_h = rows * DOT_PITCH
     nsh = len(m['shared'])
-    tab_h = 20 if nsh else 0
-    w = max(title_w, 7 * 5.6 + 60, grid_w, (66 if nsh else 0)) + 24
-    h = 44 + (grid_h + 8 if rows else 0) + tab_h + (4 if tab_h else 0)
-    boxes[name] = {'w': w, 'h': h, 'cols': cols, 'rows': rows, 'tab': tab_h}
+    scols, srows = bag_grid(nsh)
+    sgrid_w = scols * DOT_PITCH
+    sgrid_h = srows * DOT_PITCH
+    w = max(title_w, 7 * 5.6 + 60, grid_w, sgrid_w) + 24
+    h = (44 + (grid_h + 8 if rows else 0)
+         + (SEP_H + sgrid_h + 8 if nsh else 0))
+    boxes[name] = {'w': w, 'h': h, 'cols': cols, 'rows': rows,
+                   'scols': scols, 'srows': srows}
 
 # ---- grandalf for ranks + initial order ----
 class VView:

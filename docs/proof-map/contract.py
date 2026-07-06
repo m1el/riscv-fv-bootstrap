@@ -104,7 +104,8 @@ Ered = sorted((a, b) for a, b in E
 def info(m):
     l0, l1 = nodes[m]['lines']
     return {'name': m, 'module': nodes[m]['module'],
-            'lines': max(1, l1 - l0 + 1), 'indeg': indeg[m]}
+            'lines': max(1, l1 - l0 + 1), 'indeg': indeg[m],
+            'type': nodes[m].get('type', '')}
 
 shared_of = defaultdict(list)   # major -> [(info, co-owners)]
 for m, s2 in shared.items():

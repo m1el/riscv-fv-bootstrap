@@ -80,7 +80,7 @@ partial def run : CoreM Unit := do
       if !nodes.contains d then
         nodes := nodes.insert d
         queue := queue.push d
-  -- gather node metadata: module + declaration line span
+  -- gather node metadata: module + declaration line span + statement
   let mut nodeJson : Array Json := #[]
   for n in queue do
     let m := (modOf n).getD .anonymous
@@ -88,9 +88,15 @@ partial def run : CoreM Unit := do
     let (l0, l1) := match rng with
       | some r => (r.range.pos.line, r.range.endPos.line)
       | none => (0, 0)
+    let ty ← match env.find? n with
+      | some ci => do
+        let fmt ← Meta.MetaM.run' (Meta.ppExpr ci.type)
+        pure (fmt.pretty 60)
+      | none => pure ""
     nodeJson := nodeJson.push <| Json.mkObj
       [("name", Json.str n.toString), ("module", Json.str m.toString),
-       ("lines", Json.arr #[Json.num l0, Json.num l1])]
+       ("lines", Json.arr #[Json.num l0, Json.num l1]),
+       ("type", Json.str ty)]
   let edgeJson := edges.map fun (a, b) =>
     Json.arr #[Json.str a.toString, Json.str b.toString]
   let json := Json.mkObj [("nodes", Json.arr nodeJson), ("edges", Json.arr edgeJson)]

@@ -32,6 +32,14 @@ def short(n):
 def filetag(module):
     return module.replace('LowIR.ProgSim.', '') + '.lean'
 
+TYPE_PRE = ('LowIR.ProgSim.LayoutFacts.', 'LowIR.ProgSim.LowerFacts.',
+            'LowIR.ProgSim.', 'LowIR.Compile.', 'LowIR.Prog.', 'LowIR.', 'Rv64i.')
+def shortT(t):
+    """Statement for display: strip project prefixes, HTML-escape."""
+    for pre in TYPE_PRE:
+        t = t.replace(pre, '')
+    return html.escape(t)
+
 MARG = 30
 minx = min(b['x'] - b['w']/2 for b in boxes.values())
 maxx = max(b['x'] + b['w']/2 for b in boxes.values())
@@ -90,10 +98,20 @@ for name, b in boxes.items():
             did = html.escape(mm['name'], quote=True)
             parts.append(f'<circle class="dot dg{grp(mm["module"])}" data-d="{did}" cx="{cx:.1f}" cy="{cy:.1f}" r="{r:.1f}"/>')
     if m['shared']:
-        ty = y0 + b['h'] - 22
-        parts.append(f'<g class="stab" data-s="{nid}">'
-                     f'<rect x="{x0+7:.0f}" y="{ty:.0f}" width="{b["w"]-14:.0f}" height="18" rx="9"/>'
-                     f'<text x="{X(b["x"]):.0f}" y="{ty+12.5:.0f}">+{len(m["shared"])} shared</text></g>')
+        sy = y0 + 42 + (b['rows'] * DOT_PITCH + 6 if n else 0)
+        ly = sy + 7
+        parts.append(f'<line class="sep" x1="{x0+10:.0f}" y1="{ly:.1f}" x2="{x0+b["w"]-10:.0f}" y2="{ly:.1f}"/>')
+        parts.append(f'<text class="sepl" x="{X(b["x"]):.0f}" y="{ly+3:.1f}">shared</text>')
+        scols = b['scols']
+        sgw = scols * DOT_PITCH
+        sgx = x0 + (b['w'] - sgw) / 2 + DOT_PITCH/2
+        sgy = sy + 14 + DOT_PITCH/2
+        for i, mm in enumerate(m['shared']):
+            cx = sgx + (i % scols) * DOT_PITCH
+            cy = sgy + (i // scols) * DOT_PITCH
+            r = min(2.2 + 0.5 * math.sqrt(mm['lines']), 4.6)
+            did = html.escape(mm['name'], quote=True)
+            parts.append(f'<circle class="dot dg{grp(mm["module"])}" data-sd="{did}" cx="{cx:.1f}" cy="{cy:.1f}" r="{r:.1f}"/>')
     parts.append('</g>')
     node_svg.append(''.join(parts))
 
@@ -120,13 +138,23 @@ star_desc = {
 META = {}
 for name, m in majors.items():
     META[name] = {'s': short(name), 'f': filetag(m['module']),
-                  'l': m['lines'], 'bag': len(m['bag']),
-                  'sh': [[short(x['name']), x['lines'], [short(c) for c in x['co']]] for x in m['shared']],
+                  'l': m['lines'], 'bag': len(m['bag']), 'nsh': len(m['shared']),
+                  't': shortT(m['type']),
                   'd': star_desc.get(short(name), '')}
 DOTMETA = {}
 for m in C['majors']:
     for x in m['bag']:
-        DOTMETA[x['name']] = [short(x['name']), filetag(x['module']), x['lines']]
+        DOTMETA[x['name']] = [short(x['name']), filetag(x['module']), x['lines'],
+                              shortT(x['type'])]
+SHMETA = {}
+for m in C['majors']:
+    for x in m['shared']:
+        if x['name'] not in SHMETA:
+            owners = sorted({short(c) for c in x['co']} | {short(m['name'])})
+            SHMETA[x['name']] = [short(x['name']), filetag(x['module']), x['lines'],
+                                 owners, shortT(x['type'])]
+TBMETA = {x['name']: [short(x['name']), filetag(x['module']), x['lines'],
+                      x['owners'], shortT(x['type'])] for x in C['toolbox']}
 
 # ---------- legend / lists ----------
 gcount = {}
@@ -155,7 +183,7 @@ spine_list = ''.join(
     for m in story)
 
 toolbox_html = ''.join(
-    f'<span class="chip tb" title="{html.escape(x["name"])} — {x["lines"]} lines, used under {x["owners"]} boxes">'
+    f'<span class="chip tb" data-tb="{html.escape(x["name"], quote=True)}">'
     f'<i class="sw g{grp(x["module"])}"></i><code>{html.escape(short(x["name"]))}</code><em>×{x["owners"]}</em></span>'
     for x in C['toolbox'])
 
@@ -231,21 +259,22 @@ svg .dot {{ stroke:var(--card); stroke-width:.8; }}
 svg .dot.dg0{{fill:var(--c0)}} svg .dot.dg1{{fill:var(--c1)}} svg .dot.dg2{{fill:var(--c2)}}
 svg .dot.dg3{{fill:var(--c3)}} svg .dot.dg4{{fill:var(--c4)}} svg .dot.dg5{{fill:var(--c5)}}
 svg .dot.dg6{{fill:var(--c6)}} svg .dot.dg7{{fill:var(--c7)}} svg .dot.dg8{{fill:var(--c8)}}
-svg .stab rect {{ fill:var(--surface); stroke:var(--muted); stroke-width:1; stroke-dasharray:4 3.5; }}
-svg .stab text {{ font:10px system-ui,sans-serif; fill:var(--ink2); text-anchor:middle; }}
+svg .sep {{ stroke:var(--muted); stroke-width:1; stroke-dasharray:4 3.5; }}
+svg .sepl {{ font:9px system-ui,sans-serif; fill:var(--muted); text-anchor:middle;
+  paint-order:stroke; stroke:var(--card); stroke-width:5; }}
 svg.dimmed .edge {{ stroke-opacity:.07; }}
 svg.dimmed .major {{ opacity:.18; }}
 svg.dimmed .edge.hi {{ stroke:var(--ink); stroke-opacity:.78; stroke-width:1.8; }}
 svg.dimmed .major.hi {{ opacity:1; }}
 .tip {{ position:fixed; z-index:9; pointer-events:none; background:var(--card);
-  border:1px solid var(--border); border-radius:10px; padding:10px 12px; max-width:380px;
+  border:1px solid var(--border); border-radius:10px; padding:10px 12px; max-width:480px;
   box-shadow:0 6px 24px rgba(0,0,0,.18); display:none; font-size:12.5px; color:var(--ink2); }}
 .tip code {{ color:var(--ink); font-weight:650; font-size:13px; font-family:ui-monospace,Menlo,Consolas,monospace; }}
 .tip .m {{ color:var(--muted); margin:2px 0 4px; }}
-.tip ul {{ margin:6px 0 0; padding-left:16px; }}
-.tip li {{ margin:1px 0; }}
-.tip li code {{ font-weight:500; font-size:12px; }}
-.tip li em {{ font-style:normal; color:var(--muted); }}
+.tip pre.sig {{ margin:8px 0 0; padding:7px 9px; background:var(--surface);
+  border:1px solid var(--border); border-radius:8px; white-space:pre; overflow:hidden;
+  font:10.5px/1.5 ui-monospace,Menlo,Consolas,monospace; color:var(--ink2); }}
+.tip .co code {{ font-weight:500; font-size:12px; }}
 .sect {{ font-size:15px; font-weight:700; margin:26px 0 2px; }}
 .note {{ color:var(--muted); font-size:12.5px; margin:0 0 8px; }}
 .toolbox {{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }}
@@ -273,21 +302,21 @@ details code {{ font-family:ui-monospace,Menlo,Consolas,monospace; }}
   <h1>The proof of <code>prog_sim</code> — the argument, with its support folded in</h1>
   <p>The {stats['majors']} load-bearing lemmas of the LowIR ProgSim campaign, flowing top&nbsp;→&nbsp;down from the summit
      to the leaf facts. The <b>{stats['absorbed']} private support lemmas</b> — used beneath exactly one box — are the dots
-     packed <i>inside</i> that box (dot area ≈ proof length, color = source file). A box's <b>“+N shared”</b> tab counts the
-     support it shares with other boxes — hover it to see the lemmas and who else uses them. The toolbox strip at the bottom
-     holds the {stats['toolbox']} plumbing facts used all over.</p>
+     packed <i>inside</i> that box (dot area ≈ proof length, color = source file). Support a box <b>shares</b> with other
+     boxes appears as dots too, below the dashed divider — hover one to see who else uses it. The toolbox strip at the
+     bottom holds the {stats['toolbox']} plumbing facts used all over.</p>
   <div class="chips">
     <span class="chip"><b>{stats['nodes']}</b> theorems total</span>
     <span class="chip"><b>{stats['majors']}</b> major</span>
     <span class="chip"><b>{stats['absorbed']}</b> folded into boxes</span>
-    <span class="chip"><b>{stats['sharedLemmas']}</b> shared, in the “+N” tabs</span>
+    <span class="chip"><b>{stats['sharedLemmas']}</b> shared, below the dividers</span>
     <span class="chip"><b>{stats['toolbox']}</b> in the toolbox</span>
     <span class="chip">axiom-clean: <b>[propext, Quot.sound]</b></span>
   </div>
 </header>
 <div class="legend">{legend}</div>
 <p class="howto">An arrow means the upper lemma (or its private support) uses the lower one; the heavy dark path is the spine.
-   Hover any box, dot or “+N shared” tab for details.</p>
+   Hover any box, dot or toolbox chip to see the full theorem statement.</p>
 <div class="vizwrap"><svg id="g" viewBox="0 0 {W:.0f} {H:.0f}" xmlns="http://www.w3.org/2000/svg">
 <g id="edges">{''.join(edge_svg)}</g>
 <g id="nodes">{''.join(node_svg)}</g>
@@ -306,6 +335,15 @@ details code {{ font-family:ui-monospace,Menlo,Consolas,monospace; }}
 const ADJ = {json.dumps(adj)};
 const META = {json.dumps(META)};
 const DOT = {json.dumps(DOTMETA)};
+const SH = {json.dumps(SHMETA)};
+const TB = {json.dumps(TBMETA)};
+const SIG_MAX = 24;
+function sig(t) {{
+  if (!t) return '';
+  const lines = t.split('\\n');
+  return `<pre class="sig">${{lines.slice(0, SIG_MAX).join('\\n')}}</pre>` +
+    (lines.length > SIG_MAX ? `<div class="m">… ${{lines.length - SIG_MAX}} more lines</div>` : '');
+}}
 const svg = document.getElementById('g'), tip = document.getElementById('tip');
 const els = {{}};
 for (const el of svg.querySelectorAll('[data-n]')) (els[el.dataset.n] ??= []).push(el);
@@ -328,35 +366,41 @@ svg.addEventListener('mouseover', ev => {{
   unfocus();
   const name = box.dataset.n, m = META[name];
   focus(name);
-  const dot = ev.target.closest('.dot');
-  const stab = ev.target.closest('.stab');
+  const dot = ev.target.closest('[data-d]');
+  const sd = ev.target.closest('[data-sd]');
   if (dot) {{
     const d = DOT[dot.dataset.d];
     tip.innerHTML = `<code>${{d[0]}}</code><div class="m">${{d[1]}} · ${{d[2]}} proof line${{d[2]>1?'s':''}}</div>` +
-      `private support of <code>${{m.s}}</code>`;
-  }} else if (stab) {{
-    const items = m.sh.slice(0, 16).map(x =>
-      `<li><code>${{x[0]}}</code> <em>· ${{x[1]}}L · also under ${{x[2].join(', ')}}</em></li>`).join('');
-    tip.innerHTML = `<code>${{m.sh.length}} shared support lemma${{m.sh.length>1?'s':''}}</code>` +
-      `<div class="m">used by <code>${{m.s}}</code> and the boxes listed per lemma</div><ul>${{items}}</ul>` +
-      (m.sh.length > 16 ? `<div class="m">… and ${{m.sh.length-16}} more</div>` : '');
+      `private support of <code>${{m.s}}</code>` + sig(d[3]);
+  }} else if (sd) {{
+    const d = SH[sd.dataset.sd];
+    tip.innerHTML = `<code>${{d[0]}}</code><div class="m">${{d[1]}} · ${{d[2]}} proof line${{d[2]>1?'s':''}}</div>` +
+      `<span class="co">shared support of ${{d[3].map(x => `<code>${{x}}</code>`).join(', ')}}</span>` + sig(d[4]);
   }} else {{
     tip.innerHTML = `<code>${{m.s}}</code><div class="m">${{m.f}} · ${{m.l}} proof lines</div>` +
       (m.bag ? `holds ${{m.bag}} private support lemma${{m.bag>1?'s':''}}` : 'no private support — leans on shared facts') +
-      (m.sh.length ? ` · shares ${{m.sh.length}}` : '') +
-      (m.d ? `<div style="margin-top:6px">${{m.d}}</div>` : '');
+      (m.nsh ? ` · shares ${{m.nsh}}` : '') +
+      (m.d ? `<div style="margin-top:6px">${{m.d}}</div>` : '') + sig(m.t);
   }}
   tip.style.display = 'block';
 }});
-svg.addEventListener('mousemove', ev => {{
+document.addEventListener('mousemove', ev => {{
   const pad = 14;
   let x = ev.clientX + pad, y = ev.clientY + pad;
   const r = tip.getBoundingClientRect();
   if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
-  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
+  if (y + r.height > innerHeight - 8) y = Math.max(8, ev.clientY - r.height - pad);
   tip.style.left = x + 'px'; tip.style.top = y + 'px';
 }});
 svg.addEventListener('mouseout', ev => {{ if (ev.target.closest('[data-n]')) unfocus(); }});
+for (const el of document.querySelectorAll('[data-tb]')) {{
+  el.addEventListener('mouseenter', () => {{
+    const d = TB[el.dataset.tb];
+    tip.innerHTML = `<code>${{d[0]}}</code><div class="m">${{d[1]}} · ${{d[2]}} proof line${{d[2]>1?'s':''}} · used under ${{d[3]}} boxes</div>` + sig(d[4]);
+    tip.style.display = 'block';
+  }});
+  el.addEventListener('mouseleave', () => {{ tip.style.display = 'none'; }});
+}}
 </script>
 '''
 open('progsim-map.html', 'w').write(page)
