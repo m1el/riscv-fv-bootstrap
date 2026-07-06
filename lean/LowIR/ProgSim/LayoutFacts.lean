@@ -20,7 +20,7 @@ open LowIR.Compile
 open LowIR.ProgSim
 open LowIR.ProgSim.AsmFacts
 open LowIR.ProgSim.LowerFacts
-open LowIR.Prog (FunDef Data Name)
+open LowIR.Prog (FunDef Data Name Program dataOffsetsFrom)
 
 namespace LowIR.ProgSim.LayoutFacts
 
@@ -750,5 +750,87 @@ theorem env_fn_lbls_discharge (dat : Data) (envPre envSuf : List (Name × FunDef
     (("", stub) :: (mapSegs dat envPre 0).1)
     (mapSegs dat envSuf (compileFun dat gd (mapSegs dat envPre 0).2).2).1
     hseg rfl
+
+/-! ## Brick 1 — the `compileProgT`/`layoutOf` structural unfolding.
+
+    Expose, from a successful `compileProgT`/`layoutOf`, the internal resolve
+    structure: `L.instrs` is the flatten of the whole positioned stream resolved
+    under the global tables, `L.fnTab` is the non-stub function table, and the
+    data-offset table is `dataOffsetsFrom (pad8 codeEnd)`. Everything downstream
+    (`hfn`/`hem`) reads these off `progLayout`. -/
+
+/-- The stub segment `compileProgT` prepends before the functions: the entry
+    `jal` (`callf entry`) and the halt self-loop (`jal x0 0`). Label-free. -/
+def stubSeg (entry : Name) : List SymInstr :=
+  [SymInstr.callf entry, SymInstr.ins (jal0 0)]
+
+@[simp] theorem labelIds_stubSeg (entry : Name) : labelIds (stubSeg entry) = [] := rfl
+
+/-- The whole program's positioned layout (Pass A): the stub segment followed by
+    every function's compiled symbolic stream, laid out from byte 0. Its four
+    projections are the flat stream, the global label table, the function table,
+    and the end position (total code bytes). This is exactly what `compileProgT`
+    resolves. -/
+def progLayout (P : Program) (entry : Name) :
+    List (Nat × SymInstr) × List (Nat × Nat) × List (Name × Nat) × Nat :=
+  layout (("", stubSeg entry) :: (mapSegs P.data P.env 0).1) 0
+
+/-- The byte position of each function's entry, read off the (frozen) layout
+    function table — the `fnPos` that `emitCF`/`lower_sim_cf` consume. -/
+def fnPosOf (L : Layout) : Name → Nat := fun f => (List.lookup f L.fnTab).getD 0
+
+/-- **Brick 1.** A successful `compileProgT` decomposes into a resolve of
+    `progLayout`: the flat stream resolves (under the global label/fn/data tables)
+    to `rs`, `L.instrs = rs.flatten`, the returned function table is the layout's
+    minus the stub, and the data table is `dataOffsetsFrom (pad8 codeEnd)`. -/
+theorem compileProgT_decomp {P : Program} {entry : Name} {is : List Instr}
+    {fnsF dats : List (Name × Nat)}
+    (h : compileProgT P entry = some (is, fnsF, dats)) :
+    ∃ rs, (progLayout P entry).1.mapM
+              (resolveOne (progLayout P entry).2.1 (progLayout P entry).2.2.1
+                (dataOffsetsFrom (pad8 (progLayout P entry).2.2.2) P.data)) = some rs
+      ∧ is = rs.flatten
+      ∧ fnsF = (progLayout P entry).2.2.1.filter (fun f => f.1 != "")
+      ∧ dats = dataOffsetsFrom (pad8 (progLayout P entry).2.2.2) P.data := by
+  unfold compileProgT at h
+  split at h
+  · exact absurd h (by simp)
+  · -- the good branch: reduce the segs `.run'` and match on the layout tuple
+    have hsegs : ((P.env.mapM (fun nf => do pure (nf.1, ← compileFun P.data nf.2)) : M _).run' 0)
+        = (mapSegs P.data P.env 0).1 := rfl
+    rw [hsegs] at h
+    -- `h`'s `layout (...) 0` is now defeq to `progLayout P entry`
+    show ∃ rs, _ ∧ _ ∧ _ ∧ _
+    revert h
+    show (((( progLayout P entry).1.mapM
+              (resolveOne (progLayout P entry).2.1 (progLayout P entry).2.2.1
+                (dataOffsetsFrom (pad8 (progLayout P entry).2.2.2) P.data))).map List.flatten).map
+          (fun is => (is, (progLayout P entry).2.2.1.filter (fun f => f.1 != ""),
+                      dataOffsetsFrom (pad8 (progLayout P entry).2.2.2) P.data))
+        = some (is, fnsF, dats)) → _
+    intro h
+    cases hm : (progLayout P entry).1.mapM
+        (resolveOne (progLayout P entry).2.1 (progLayout P entry).2.2.1
+          (dataOffsetsFrom (pad8 (progLayout P entry).2.2.2) P.data)) with
+    | none => rw [hm] at h; simp at h
+    | some rs =>
+        rw [hm] at h
+        simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+        exact ⟨rs, rfl, h.1.symm, h.2.1.symm, h.2.2.symm⟩
+
+/-- `layoutOf` succeeding gives the same decomposition on `L`'s own fields, plus
+    `L.segStart = pad8 (4 * L.instrs.length)` and `L.data = P.data`. -/
+theorem layoutOf_decomp {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
+    (h : layoutOf P entry cb slo = some L) :
+    L.codeBase = cb ∧ L.stackLo = slo ∧ L.data = P.data
+    ∧ L.segStart = pad8 (4 * L.instrs.length)
+    ∧ ∃ dats, compileProgT P entry = some (L.instrs, L.fnTab, dats) := by
+  unfold layoutOf at h
+  split at h
+  · rename_i is fns dats' hc
+    simp only [Option.some.injEq] at h
+    subst h
+    exact ⟨rfl, rfl, rfl, rfl, dats', hc⟩
+  · exact absurd h (by simp)
 
 end LowIR.ProgSim.LayoutFacts
