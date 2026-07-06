@@ -484,36 +484,14 @@ def userPad (env : Env) : Name → Nat := fun f => (List.lookup f env).elim 0 us
     + resolved label addresses) that Phase 2 (AsmFacts) characterizes and the
     Phase 4.1 VERTICAL SLICE validates against the differential oracle — the
     go/no-go checkpoint for this whole relation. They land there, not guessed
-    here. `prog_sim` below is self-contained (no `Emitted`) and is the corollary
-    every ProgLib function composes with. -/
+    here. `prog_sim` is self-contained (no `Emitted`) and is the corollary every
+    ProgLib function composes with.
 
-/-- **`prog_sim`** — if the D7/D8 IL says `entry(args)` computes `s'` (with the
-    P1 padding `userPad`), then the compiled RV64I blob, started at `codeBase`
-    with `args` in `a0..` and `sp = sp0`, runs to the halt pad in a state whose
-    `a0..` hold `entry`'s return values and whose memory agrees with `s'`
-    everywhere outside the blob and the stack. Const data is placed at
-    `codeBase + segStart` on BOTH sides (`dataOffsetsFrom_shift`). -/
-theorem prog_sim
-    {P : Program} {entry : Name} {fd : FunDef} {args : List Word}
-    {stackLo sp0 : Word} {fuel : Nat} {s' : St} {L : Layout} {m0 : State}
-    (hlk    : List.lookup entry P.env = some fd)
-    (hL     : layoutOf P entry L.codeBase L.stackLo = some L)
-    (hpre   : SimPre L stackLo sp0)
-    (hpc    : m0.pc = L.codeBase)
-    (hsp    : m0.rget 2 = sp0)
-    (hargs  : ∀ i, i < fd.argc → m0.rget (10 + i) = args.getD i 0)
-    (hinst  : Installed L m0)
-    (hmem   : ∀ a, ¬ MachPriv L [] a →
-                installData (L.codeBase + BitVec.ofNat 64 L.segStart) P.data (fun _ => 0) a
-                  = m0.mem a)
-    (hrun   : LowIR.Prog.run P stackLo fuel entry args (fun _ => 0) sp0
-                (userPad P.env) (L.codeBase + BitVec.ofNat 64 L.segStart) = some s') :
-    ∃ k, (Rv64i.runFuel L.haltPc k m0).pc = L.haltPc
-       ∧ (∀ j, j < fd.rvc →
-            (Rv64i.runFuel L.haltPc k m0).rget (10 + j) = s'.rget (fd.rets.toList.getD j 0))
-       ∧ (∀ a, ¬ memRange a L.codeBase L.blobLen → ¬ MachStack stackLo sp0 a →
-            s'.mem a = (Rv64i.runFuel L.haltPc k m0).mem a) := by
-  sorry
+    **`prog_sim` now lives in `LowIR/ProgSim/Main.lean`** — its proof needs
+    `lower_sim_cf`/`prologue_sim`/`epilogue_sim` (CtrlSim) and `fn_hfn`/
+    `stub_emitted` (LayoutFacts), which import this file, so it cannot live here.
+    The relation defs (`Layout`/`Installed`/`StInv`/`SimPre`/`MachPriv`/…) and the
+    `#guard` oracles below remain the single source of truth. -/
 
 /-! ## Executable sanity (`#guard`) — the def oracle (RESUME-PROGSIM §6). -/
 
