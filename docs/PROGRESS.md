@@ -1,5 +1,38 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 6: the `prog_sim` summit SKELETON (`Main.lean`)
+
+**`prog_sim` is now PROVEN modulo one well-specified machine-side lemma.** The
+lone campaign sorry moves from `Defs.prog_sim` to `Main.entry_run_sim`; the
+summit's outer structure + the halt bridge are axiom-clean. Full `lake build`
+green. New file `LowIR/ProgSim/Main.lean` (new `LowIRProgSim` root — prog_sim
+needs `lower_sim_cf`/`prologue_sim`/`epilogue_sim` (CtrlSim) AND `fn_hfn`/
+`stub_emitted` (LayoutFacts), which import `Defs`, so it can't live in `Defs`).
+
+Decomposition: **`prog_sim = entry_run_sim ∘ runFuel_eq_stepN`.**
+- **`run_inv`** (ExecFacts, PROVEN, axiom-clean) — the IL-side inversion:
+  `run … = some s'` ⇒ `lookup entry = some fd ∧ frameEnter … = some st0 ∧ exec
+  fd.body st0 = some (s', oc) ∧ oc ∈ {normal, ret}`. Note s' IS the body's final
+  state (`run` does NOT remarshal rets) — so `epilogue_sim`'s `rget (A j) =
+  s1.rget rets[j]` matches the conclusion directly.
+- **`runFuel_eq_stepN`** (Main, PROVEN, `[propext, Quot.sound]`) — the RESUME §3.2
+  bridge: if the machine first reaches `halt` at exactly step K (the `hne`
+  no-early-halt clause), plain iteration `stepN K` equals `runFuel halt K`. Nat
+  induction; no global pc-invariant needed (`hne` is a hypothesis).
+- **`entry_run_sim`** (Main, SORRY, fully specified) — the machine run in `stepN`
+  form: stub `jal` → `prologue_sim` → `lower_sim_cf` on `fd.body` (`hfn` ←
+  `fn_hfn`; flat obligations ← `SimPre` + layout) → `epilogue_sim` → halt, plus
+  the `hne` clause (`fnPos entry ≥ 8 > 4`, so pc stays above `codeBase+4` until
+  the final `jalr`).
+- **`prog_sim`** (Main, PROVEN modulo `entry_run_sim`) — obtains the `stepN`
+  result and rewrites through the bridge. `#print axioms prog_sim` = `[propext,
+  sorryAx, Quot.sound]` (sorryAx solely via `entry_run_sim`).
+
+REMAINING = `entry_run_sim` alone: the machine-side assembly (stub step +
+`prologue_sim` + `lower_sim_cf` + `epilogue_sim` + the `hne` monotone-pc clause),
+all atoms in hand (the call case of `lower_sim_cf` is the worked template, minus
+marshalling and minus a caller frame — holes start `[]`).
+
 ## 2026-07-06 (compile_sim campaign) — Phase 2: `hblob` wrap-freedom plumbing (`SimPre.blobBelowStack`)
 
 `hblob` (`codeBase.toNat + blobLen ≤ 2^64`, the last placement obligation of
