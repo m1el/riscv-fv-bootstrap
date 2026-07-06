@@ -1196,6 +1196,18 @@ theorem compileProgT_fnOkAll {P : Program} {entry : Name} {t}
   | false => rw [hg] at h; simp at h
   | true => simp only [Bool.and_eq_true] at hg; exact hg.1.1.2
 
+/-- The entry function is present in the env (the guard's THIRD clause). -/
+theorem compileProgT_entry {P : Program} {entry : Name} {t}
+    (h : compileProgT P entry = some t) : ∃ fd, List.lookup entry P.env = some fd := by
+  unfold compileProgT at h
+  cases hg : (LowIR.Prog.wfProgram P && P.env.all (fun nf => LowIR.Compile.fnOk nf.2)
+       && (List.lookup entry P.env).isSome
+       && P.data.all (fun d => d.2.length < 2 ^ 22)) with
+  | false => rw [hg] at h; simp at h
+  | true =>
+      simp only [Bool.and_eq_true] at hg
+      exact Option.isSome_iff_exists.mp hg.1.2
+
 /-- Per-function facts pulled from the tightened guards for `(g, gd) ∈ P.env`:
     body `wf`, name non-empty, `totalFrame ≤ 2000`, `frameSize % 8 = 0`. -/
 theorem fn_guard_facts {P : Program} {entry : Name} {t} {g : Name} {gd : FunDef}
@@ -1282,5 +1294,84 @@ theorem fn_hfn {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
     rw [hpos]; omega
   · -- conjunct 6: fnPos % 4 = 0
     rw [hpos]; omega
+
+/-! ## The entry-stub `Emitted` (`hem`) — the `[jal ra entry; jal0]` at position 0.
+
+    `compileProgT` prepends `("", stubSeg entry)`; resolved, its two items are the
+    initial call `jal ra, entry` (`.callf entry` → `jal RA (ofInt 21 (fnPosOf L
+    entry))`) and the halt self-loop `jal x0, 0` (`.ins (jal0 0)`). `prog_sim`
+    steps the first to enter `entry` (ra := codeBase+4) and spins on the second
+    at the halt PC `codeBase + 4`. -/
+
+/-- `mapM`-resolving a single NON-label positioned item: its layout is `[(pos,
+    si)]`, so the result is `[v]` with `resolveOne … (pos, si) = some v`. -/
+theorem mapM_single_nonlabel (lbls fns dats : List _) (pos : Nat) (si : SymInstr)
+    (r : List (List Instr)) (hne : ∀ l, si ≠ .label l)
+    (h : (layoutItems [si] pos).1.mapM (resolveOne lbls fns dats) = some r) :
+    ∃ v, resolveOne lbls fns dats (pos, si) = some v ∧ r = [v] := by
+  have hli : (layoutItems [si] pos).1 = [(pos, si)] := by
+    cases si with
+    | label l => exact absurd rfl (hne l)
+    | _ => rfl
+  rw [hli, List.mapM_cons] at h
+  cases hf : resolveOne lbls fns dats (pos, si) with
+  | none =>
+      rw [hf] at h
+      replace h : (none : Option (List (List Instr))) = some r := h
+      simp at h
+  | some v =>
+      rw [hf] at h
+      replace h : (some [v] : Option (List (List Instr))) = some r := h
+      exact ⟨v, rfl, (Option.some.inj h).symm⟩
+
+/-- **The entry-stub `Emitted` (`hem`).** The resolved stub `[jal ra entry;
+    jal x0 0]` is the length-2 prefix of `L.instrs`, emitted at position 0. -/
+theorem stub_emitted {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
+    {dats : List (Name × Nat)}
+    (hL : layoutOf P entry cb slo = some L)
+    (hc : compileProgT P entry = some (L.instrs, L.fnTab, dats)) :
+    Emitted L 0 [Instr.jal RA (BitVec.ofInt 21 (fnPosOf L entry : Int)), jal0 0] := by
+  -- entry is a real, non-empty function name (guards)
+  obtain ⟨fd, hlk⟩ := compileProgT_entry hc
+  obtain ⟨preE, sufE, hEE, _⟩ := lookup_split entry P.env fd hlk
+  have hmemE : (entry, fd) ∈ P.env := by rw [hEE]; simp
+  obtain ⟨_, hentry, _, _⟩ := fn_guard_facts hc hmemE
+  -- decompose the resolve; peel the stub prefix off progLayout.1
+  obtain ⟨rs, hrs, hins, hfnt, _⟩ := compileProgT_decomp hc
+  have hpl1 : (progLayout P entry).1
+      = (layoutItems (stubSeg entry) 0).1
+        ++ (layout (mapSegs P.data P.env 0).1 (layoutItems (stubSeg entry) 0).2.2).1 := rfl
+  rw [hpl1] at hrs
+  obtain ⟨rsStub, rsRest, hStub, _, hsplit⟩ := mapM_append_inv _ _ _ _ hrs
+  -- split the stub segment into its two items
+  obtain ⟨ra, rb, hra, hrb, hflat⟩ :=
+    resolve_flatten_append _ _ _ [SymInstr.callf entry] [SymInstr.ins (jal0 0)] 0 rsStub hStub
+  -- second item: `.ins (jal0 0)` → `[jal0 0]`
+  obtain ⟨vb, hvb, hrbEq⟩ := mapM_single_nonlabel _ _ _ _ _ rb (by simp) hrb
+  rw [show resolveOne (progLayout P entry).2.1 (progLayout P entry).2.2.1
+        (dataOffsetsFrom (pad8 (progLayout P entry).2.2.2) P.data)
+        (0 + totalSymSize [SymInstr.callf entry], SymInstr.ins (jal0 0)) = some [jal0 0] from rfl]
+      at hvb
+  obtain rfl := Option.some.inj hvb
+  -- first item: `.callf entry` → `jal RA (ofInt 21 (fnPosOf L entry))`
+  obtain ⟨va, hva, hraEq⟩ := mapM_single_nonlabel _ _ _ _ _ ra (by simp) hra
+  -- the fn-table lookup: entry sits at `fnPosOf L entry`
+  cases hlk0 : List.lookup entry (progLayout P entry).2.2.1 with
+  | none => simp [resolveOne, hlk0] at hva
+  | some tgt =>
+      have hfp : fnPosOf L entry = tgt := by
+        unfold fnPosOf; rw [hfnt, lookup_filter_ne entry hentry, hlk0]; rfl
+      simp only [resolveOne, hlk0, bind, Option.bind] at hva
+      split at hva
+      · -- range check passed: va = [jal RA (ofInt 21 (tgt - 0))]
+        have hva' : va = [Instr.jal RA (BitVec.ofInt 21 (fnPosOf L entry : Int))] := by
+          have hval := (Option.some.inj hva).symm
+          have hc : ((tgt : Int) - ((0 : Nat) : Int)) = ((fnPosOf L entry : Nat) : Int) := by omega
+          rw [hval, hc]
+        -- assemble: L.instrs = [] ++ [jal RA …, jal0 0] ++ rsRest.flatten
+        refine Emitted_of_slice L 0 [] _ rsRest.flatten (by simp) (by simp) ?_
+        rw [hins, hsplit, List.flatten_append, hflat, hraEq, hrbEq, hva']
+        simp
+      · exact absurd hva (by simp)
 
 end LowIR.ProgSim.LayoutFacts
