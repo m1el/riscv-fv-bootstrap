@@ -1,5 +1,49 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 2: `hfn`/`hem` Emitted payload ASSEMBLED (Bricks 1–4)
+
+The `layout`↔`Emitted` correspondence — "the big one" flagged STILL OWED in
+`AsmFacts.lean` §6 — is closed. Four bricks in `LayoutFacts.lean`, full
+`LowIRProgSim` green (still exactly the 2 known sorries: `Core.compile_sim`,
+`Defs.prog_sim`), all axiom-clean:
+
+- **Brick 1** (`compileProgT_decomp`/`layoutOf_decomp`, `[propext]`) — a successful
+  compile exposes the internal resolve structure: `L.instrs = rs.flatten` with the
+  whole positioned stream (`progLayout`) resolving to `rs`; `L.fnTab = layout fns
+  minus the stub`; data table `= dataOffsetsFrom (pad8 codeEnd)`; `segStart = pad8
+  (4·#instrs)`. New defs: `stubSeg`, `progLayout`, `fnPosOf`.
+- **Brick 2** (`fn_resolve_slice`, `[propext,Quot.sound]`) — the flat resolve split:
+  for `g` at env split `envPre ++ (g,gd) :: envSuf`, `L.instrs = pre ++ rsg.flatten
+  ++ suf` with `rsg` = g's compiled segment resolved at its byte position `pp`
+  (feeds `compileFun_resolves`' `hres`) and `4·|pre.flatten| = pp`. Composes
+  `layout_flat_append` + `mapM_append_inv` (×2) + new `resolve_length_layout` +
+  `layout_end`.
+- **Brick 3** (`tabOk_discharge` + `fnPosOf_tie` + `instrs_len_codeEnd`) — `TabOk
+  dposOf fnPosOf fns dats` (fn clause UNCONDITIONAL: stub sits first + non-stub keys
+  survive the `L.fnTab` filter; data clause from `segStart = pad8 codeEnd`); the
+  `fnPosOf` tie (`fnPosOf L g` = g's layout byte position, at g's FIRST env
+  occurrence, `g ≠ ""`). Helpers: `lookup_split`, `mapSegs_keys`,
+  `layout_fns_lookup_none`, and `lc_self`/`lc_ne` (clean lookup — ⚠ `beq_self_eq_true`
+  on `String` is **`Classical.choice`-tainted** via its `ReflBEq` instance;
+  `beq_iff_eq.mpr rfl` is the clean route).
+- **Brick 4** (`fn_emitted` — the payoff, `[propext,Quot.sound]`) — each function `g`
+  (first env occurrence, `g ≠ ""`, body `wf`) is `Emitted` at `fnPosOf L g` as
+  `prologueI gd ++ emitCF … gd.body ++ epilogueI gd` — the exact `hfn`/`hem`
+  `Emitted` payload `lower_sim_cf`/`prog_sim` consume. Composes Brick 2 +
+  `compileFun_resolves` (label premises via `env_fn_lbls_discharge`, tables via
+  `tabOk_discharge`) + Brick 3. Helper `Emitted_of_slice` (via `getElem_of_eq` +
+  `getElem_append`).
+
+REMAINING for a full `hfn` (per-`g` bundle, still Phase 2, mostly independent):
+the `Emitted` conjunct is DONE; the remaining conjuncts are `fnPos g % 4 = 0`
+(cheap, from `4·|pre| = pp`), `totalFrame gd ≤ 2000` (from `fnOk`, in the guard),
+`BranchOk gd.body` (needs a `BranchOk_of_wf`), `gd.frameSize % 8 = 0` (NOT currently
+checked by `fnOk`/`wfProgram` — a guard-design gap, like the 2^22 tightening), and
+the `< 2^20` end-position bound (needs a **blob-size bound** hypothesis — the same
+`hdpos`/`hblob` blob bound noted REMAINING in RESUME-PROGSIM §Phase-2). Then wire
+`fn_emitted` over all `g` via `lookup_split` (first-occurrence env split), and Phase 6
+`prog_sim` (Defs.lean:471, one of the two lone sorries).
+
 ## 2026-07-06 (compile_sim campaign) — Phase 2: the `fnPos g` tie (label-premise side)
 
 Three more `LayoutFacts.lean` lemmas close the `fnPos g` tie for the label premises,
