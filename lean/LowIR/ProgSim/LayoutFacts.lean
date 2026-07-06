@@ -416,4 +416,53 @@ theorem lower_labels_nodup (dat : Data) : ∀ (stmt : PStmt) (bs cs : List Nat) 
     simp [labelIds_append, labelIds, labelIds_loadSlot, labelIds_storeSlot, labelIds_synthConst]
 
 
+/-! ## Lift label range/nodup through `compileFun` (epi label = `c`; body labels ≥ `c+1`). -/
+
+@[simp] theorem labelIds_map_ins {α} (g : α → Instr) (xs : List α) :
+    labelIds (xs.map (fun x => SymInstr.ins (g x))) = [] := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih => rw [List.map_cons, labelIds_ins, ih]
+
+theorem labelIds_prologue (fd : FunDef) : labelIds (prologue fd) = [] := by
+  simp only [prologue, labelIds_append, labelIds_map_ins, labelIds_flatMap, labelIds_storeSlot,
+    flatMap_const_nil, labelIds, List.append_nil]
+  split <;> simp [labelIds, labelIds_append, labelIds_storeSlot]
+
+theorem labelIds_epilogue (fd : FunDef) : labelIds (epilogue fd) = [] := by
+  simp only [epilogue, labelIds_append, labelIds_flatMap, labelIds_loadSlot, flatMap_const_nil,
+    labelIds, List.append_nil]
+
+
+theorem compileFun_snd (dat : Data) (fd : FunDef) (c : Nat) :
+    (compileFun dat fd c).2 = (lower dat [] [] c fd.body (c + 1)).2 := rfl
+
+theorem labelIds_compileFun (dat : Data) (fd : FunDef) (c : Nat) :
+    labelIds (compileFun dat fd c).1 = labelIds (lower dat [] [] c fd.body (c + 1)).1 ++ [c] := by
+  rw [compileFun_stream]
+  simp only [labelIds_append, labelIds_prologue, labelIds_epilogue, labelIds_label, labelIds_nil,
+    List.nil_append, List.append_nil]
+
+theorem compileFun_labels_range (dat : Data) (fd : FunDef) (c : Nat) :
+    ∀ l ∈ labelIds (compileFun dat fd c).1, c ≤ l ∧ l < (compileFun dat fd c).2 := by
+  intro l hl
+  rw [labelIds_compileFun, List.mem_append] at hl
+  rw [compileFun_snd]
+  have hsg := lower_snd_ge dat fd.body [] [] c (c + 1)
+  rcases hl with h | h
+  · have := lower_labels_range dat fd.body [] [] c (c + 1) l h; exact ⟨by omega, by omega⟩
+  · simp only [List.mem_singleton] at h; exact ⟨by omega, by omega⟩
+
+theorem compileFun_labels_nodup (dat : Data) (fd : FunDef) (c : Nat) :
+    (labelIds (compileFun dat fd c).1).Nodup := by
+  rw [labelIds_compileFun, List.nodup_append]
+  refine ⟨lower_labels_nodup dat fd.body [] [] c (c + 1), by simp, ?_⟩
+  intro x hx y hy
+  have := lower_labels_range dat fd.body [] [] c (c + 1) x hx
+  simp only [List.mem_singleton] at hy; omega
+
+theorem compileFun_snd_gt (dat : Data) (fd : FunDef) (c : Nat) : c < (compileFun dat fd c).2 := by
+  rw [compileFun_snd]; have := lower_snd_ge dat fd.body [] [] c (c + 1); omega
+
+
 end LowIR.ProgSim.LayoutFacts
