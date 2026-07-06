@@ -378,30 +378,35 @@ theorem run_marshalFrom (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) 
       Emitted L q ((args.zipIdx base).flatMap fun ri => loadSlotI ri.1 (A ri.2)) →
       (∀ a ∈ args, a ≤ maxRegF fd) →
       (∀ a ∈ args, slotOff a < 2 ^ 11) →
+      8 ≤ q → q + 4 * args.length < 2 ^ 20 →
       ∃ k, StInv L fd holes s (stepN k m)
          ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (q + 4 * args.length)
          ∧ (stepN k m).mem = m.mem
          ∧ (∀ j, (hj : j < args.length) → (stepN k m).rget (A (base + j)) = s.rget args[j])
          ∧ (∀ t, (∀ j, (hj : j < args.length) → t ≠ A (base + j)) → (stepN k m).rget t = m.rget t)
-  | [], base, q, m, hinv, hpc, _, _, _ =>
-      ⟨0, hinv, by simpa using hpc, rfl, fun j hj => by simp at hj, fun t _ => rfl⟩
-  | a :: rest, base, q, m, hinv, hpc, hem, hreg, hfr => by
+         ∧ NoHalt L k m
+  | [], base, q, m, hinv, hpc, _, _, _, _, _ =>
+      ⟨0, hinv, by simpa using hpc, rfl, fun j hj => by simp at hj, fun t _ => rfl,
+        NoHalt_zero L m⟩
+  | a :: rest, base, q, m, hinv, hpc, hem, hreg, hfr, hq8, hqlt => by
       have hAb : A base = 10 + base := rfl
       have h1run : stepN 1 m = step m := rfl
       simp only [List.zipIdx_cons, List.flatMap_cons] at hem
       have hemL : Emitted L q (loadSlotI a (A base)) := Emitted_append_left _ _ _ _ hem
-      obtain ⟨hinv1, h1pc, h1mem, h1v, h1oth⟩ :=
+      obtain ⟨hinv1, h1pc, h1mem, h1v, h1oth, hnoh1⟩ :=
         run_load L fd holes s m a (A base) q hinv (hreg a (by simp))
-          (hfr a (by simp)) (by rw [hAb]; omega) (by rw [hAb]; omega) hpc hemL
+          (hfr a (by simp)) (by rw [hAb]; omega) (by rw [hAb]; omega) hpc hemL hq8
+          (by simp only [List.length_cons] at hqlt; omega)
       have hemR : Emitted L (q + 4)
           ((rest.zipIdx (base + 1)).flatMap fun ri => loadSlotI ri.1 (A ri.2)) := by
         have h := Emitted_append_right _ _ _ _ hem
         rwa [loadSlotI_length, Nat.mul_one] at h
-      obtain ⟨k, hinvK, hpcK, hmemK, hvK, hothK⟩ :=
+      obtain ⟨k, hinvK, hpcK, hmemK, hvK, hothK, hnohK⟩ :=
         run_marshalFrom L fd holes s rest (base + 1) (q + 4) (step m) hinv1 h1pc hemR
           (fun x hx => hreg x (List.mem_cons_of_mem a hx))
           (fun x hx => hfr x (List.mem_cons_of_mem a hx))
-      refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_⟩
+          (by omega) (by simp only [List.length_cons] at hqlt; omega)
+      refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_⟩
       · rw [stepN_add, h1run]; exact hinvK
       · rw [stepN_add, h1run, hpcK]; apply pc_congr; simp only [List.length_cons]; omega
       · rw [stepN_add, h1run, hmemK, h1mem]
@@ -425,6 +430,7 @@ theorem run_marshalFrom (L : Layout) (fd : FunDef) (holes : List Hole) (s : St) 
               have h := hne (j' + 1) (by simp only [List.length_cons]; omega)
               rwa [show base + (j' + 1) = base + 1 + j' from by omega] at h),
             h1oth t (by have h := hne 0 (by simp); rwa [Nat.add_zero] at h)]
+      · exact NoHalt_chain L 1 k m hnoh1 (by rw [h1run]; exact hnohK)
 
 /-- Run `retStoresI`'s stores (indices `base, base+1, …`): starting from a machine
     state whose `A (base+i)` hold the return values `vs[i]`, the `rvc` slot stores
@@ -445,23 +451,26 @@ theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
          ∨ s.sp.toNat + userOff fd ≤ L.codeBase.toNat) →
       s.sp.toNat + userOff fd ≤ 2 ^ 64 →
       rets.length = vs.length →
+      8 ≤ q →
+      q + 4 * ((rets.zipIdx base).flatMap fun ri => storeSlotI ri.1 (A ri.2)).length < 2 ^ 20 →
       (∀ i, (hi : i < vs.length) → m.rget (A (base + i)) = vs[i]) →
       ∃ k, StInv L fd holes ((rets.zip vs).foldl (fun st rv => st.rset rv.1 rv.2) s) (stepN k m)
          ∧ (stepN k m).pc = L.codeBase
              + BitVec.ofNat 64 (q + 4 * ((rets.zipIdx base).flatMap
                  fun ri => storeSlotI ri.1 (A ri.2)).length)
-         ∧ FramesPres holes s.sp fd m (stepN k m) := by
+         ∧ FramesPres holes s.sp fd m (stepN k m)
+         ∧ NoHalt L k m := by
   intro rets
   induction rets with
   | nil =>
-      intro vs base q s m hinv hpc _ _ _ _ _ _ _
-      refine ⟨0, ?_, ?_, ?_⟩
+      intro vs base q s m hinv hpc _ _ _ _ _ _ _ _ _
+      refine ⟨0, ?_, ?_, ?_, NoHalt_zero L m⟩
       · simpa using hinv
       · simp only [stepN_zero, List.zipIdx_nil, List.flatMap_nil, List.length_nil,
                    Nat.mul_zero, Nat.add_zero]; exact hpc
       · exact FramesPres_of_mem_eq holes s.sp fd m (stepN 0 m) (by rw [stepN_zero])
   | cons r rest ih =>
-      intro vs base q s m hinv hpc hem hrd hfr hbd hnwS hlen hval
+      intro vs base q s m hinv hpc hem hrd hfr hbd hnwS hlen hq8 hqlt hval
       obtain ⟨v, vrest, rfl⟩ : ∃ v vrest, vs = v :: vrest := by
         cases vs with
         | nil => simp at hlen
@@ -477,9 +486,11 @@ theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
       have hT : m.rget (A base) = v := by
         have h := hval 0 (by simp)
         rwa [Nat.add_zero, List.getElem_cons_zero] at h
-      obtain ⟨ks, hSts, hStpc, hFrs, hRegs⟩ :=
+      have hsl : (storeSlotI r (A base)).length ≤ 1 := by rw [storeSlotI_length]; split <;> omega
+      obtain ⟨ks, hSts, hStpc, hFrs, hRegs, hnohs⟩ :=
         run_storeFrom L fd holes s m r (A base) v q hinv hT hpc hemL
-          (hrd r (by simp)) (hfr r (by simp)) hnwS hseg hblob hbd
+          (hrd r (by simp)) (hfr r (by simp)) hnwS hseg hblob hbd hq8
+          (by omega)
       -- recurse on the tail from the post-store machine state
       have hbd' : L.codeBase.toNat + L.blobLen ≤ (s.rset r v).sp.toNat
           ∨ (s.rset r v).sp.toNat + userOff fd ≤ L.codeBase.toNat := by rw [hsp]; exact hbd
@@ -494,11 +505,14 @@ theorem run_retStoresFrom (L : Layout) (fd : FunDef) (holes : List Hole)
         rw [show base + (i + 1) = base + 1 + i from by omega,
             List.getElem_cons_succ] at h
         exact h
-      obtain ⟨k, hStK, hpcK, hFrK⟩ :=
+      obtain ⟨k, hStK, hpcK, hFrK, hnohK⟩ :=
         ih vrest (base + 1) (q + 4 * (storeSlotI r (A base)).length) (s.rset r v) (stepN ks m)
           hSts hStpc hemR (fun x hx => hrd x (List.mem_cons_of_mem r hx))
-          (fun x hx => hfr x (List.mem_cons_of_mem r hx)) hbd' hnwS' hlen' hvalR
-      refine ⟨ks + k, ?_, ?_, ?_⟩
+          (fun x hx => hfr x (List.mem_cons_of_mem r hx)) hbd' hnwS' hlen'
+          (by omega)
+          (by simp only [List.zipIdx_cons, List.flatMap_cons, List.length_append] at hqlt; omega)
+          hvalR
+      refine ⟨ks + k, ?_, ?_, ?_, NoHalt_chain L ks k m hnohs hnohK⟩
       · rw [stepN_add]
         simpa only [List.zip_cons_cons, List.foldl_cons] using hStK
       · rw [stepN_add, hpcK]
@@ -607,7 +621,8 @@ theorem run_slotStore (L : Layout) (fd : FunDef) (m : State) (sp : Word) (r tsrc
     (hnw : sp.toNat + userOff fd ≤ 2 ^ 64)
     (hseg : 4 * L.instrs.length ≤ L.segStart)
     (hblob : L.codeBase.toNat + L.blobLen ≤ 2 ^ 64)
-    (hbd : L.codeBase.toNat + L.blobLen ≤ sp.toNat ∨ sp.toNat + userOff fd ≤ L.codeBase.toNat) :
+    (hbd : L.codeBase.toNat + L.blobLen ≤ sp.toNat ∨ sp.toNat + userOff fd ≤ L.codeBase.toNat)
+    (hq8 : 8 ≤ q) (hqlt : q < 2 ^ 20) :
     (step m).pc = L.codeBase + BitVec.ofNat 64 (q + 4)
     ∧ (∀ t, (step m).rget t = m.rget t)
     ∧ Installed L (step m)
@@ -616,7 +631,8 @@ theorem run_slotStore (L : Layout) (fd : FunDef) (m : State) (sp : Word) (r tsrc
     ∧ (∀ target : Nat, target ≠ r → 1 ≤ target → target ≤ maxRegF fd →
          (step m).loadWord (sp + BitVec.ofNat 64 (slotOff target))
            = m.loadWord (sp + BitVec.ofNat 64 (slotOff target)))
-    ∧ (step m).loadWord sp = m.loadWord sp := by
+    ∧ (step m).loadWord sp = m.loadWord sp
+    ∧ NoHalt L 1 m := by
   have hslot8 : slotOff r + 8 ≤ userOff fd := slotOff_add8_le_userOff fd r hrm
   have hsl16 : 16 ≤ slotOff r := by unfold slotOff; omega
   have hslot : slotOff r < 2 ^ 11 := by omega
@@ -636,7 +652,8 @@ theorem run_slotStore (L : Layout) (fd : FunDef) (m : State) (sp : Word) (r tsrc
     rw [hatoNat]; rcases hbd with hbd | hbd
     · exact Or.inl (by omega)
     · exact Or.inr (by omega)
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_,
+      NoHalt_cons L 0 m (by rw [hpc]; exact pc_ne_halt L q hq8 hqlt) (NoHalt_zero L (step m))⟩
   · rw [hstep, pc_setPc, hpc, pc_add4]
   · intro t; rw [hstep, rget_setPc, State_storeWord_rget]
   · rw [hstep]; exact Installed_setPc L _ _ hInstStore
@@ -679,6 +696,8 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
       Installed L m →
       (∀ p ∈ params, p ≤ maxRegF fd) →
       params.length = argVals.length →
+      8 ≤ q →
+      q + 4 * ((params.zipIdx base).flatMap fun pi => storeSlotI pi.1 (A pi.2)).length < 2 ^ 20 →
       (∀ i, (hi : i < argVals.length) → m.rget (A (base + i)) = argVals[i]) →
       ∃ k, (stepN k m).rget SP = sp
          ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64
@@ -690,23 +709,29 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
               (stepN k m).loadWord (sp + BitVec.ofNat 64 (slotOff target))
                 = parkFold (fun t => m.loadWord (sp + BitVec.ofNat 64 (slotOff t)))
                     (params.zip argVals) target)
-         ∧ (stepN k m).loadWord sp = m.loadWord sp := by
+         ∧ (stepN k m).loadWord sp = m.loadWord sp
+         ∧ NoHalt L k m := by
   intro params
   induction params with
   | nil =>
-      intro argVals base q m hsp hpc _ hinst _ _ _
+      intro argVals base q m hsp hpc _ hinst _ _ _ _ _
       refine ⟨0, by simpa using hsp, ?_, fun t => by rw [stepN_zero], by simpa using hinst,
-              fun a _ => by rw [stepN_zero], fun target _ _ => ?_, by rw [stepN_zero]⟩
+              fun a _ => by rw [stepN_zero], fun target _ _ => ?_, by rw [stepN_zero],
+              NoHalt_zero L m⟩
       · simp only [stepN_zero, List.zipIdx_nil, List.flatMap_nil, List.length_nil, Nat.mul_zero,
                    Nat.add_zero]; exact hpc
       · rw [stepN_zero]; rfl
   | cons r rest ih =>
-      intro argVals base q m hsp hpc hem hinst hreg hlen hval
+      intro argVals base q m hsp hpc hem hinst hreg hlen hq8 hqlt hval
       obtain ⟨v, vrest, rfl⟩ : ∃ v vrest, argVals = v :: vrest := by
         cases argVals with
         | nil => simp at hlen
         | cons v vrest => exact ⟨v, vrest, rfl⟩
       simp only [List.zipIdx_cons, List.flatMap_cons] at hem
+      have hlenSplit : (((r :: rest).zipIdx base).flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+          = (storeSlotI r (A base)).length
+            + ((rest.zipIdx (base + 1)).flatMap fun pi => storeSlotI pi.1 (A pi.2)).length := by
+        simp only [List.zipIdx_cons, List.flatMap_cons, List.length_append]
       have hv0 : m.rget (A base) = v := by
         have h := hval 0 (by simp)
         rwa [Nat.add_zero, List.getElem_cons_zero] at h
@@ -720,10 +745,11 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
           have h := hval (i + 1) (by simp only [List.length_cons]; omega)
           rw [show base + (i + 1) = base + 1 + i from by omega, List.getElem_cons_succ] at h
           exact h
-        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK, hraK⟩ :=
+        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK, hraK, hnohK⟩ :=
           ih vrest (base + 1) q m hsp hpc hem hinst
-            (fun p hp => hreg p (List.mem_cons_of_mem 0 hp)) (by simpa using hlen) hval'
-        refine ⟨k, hspK, ?_, hregK, hinstK, hmemK, ?_, hraK⟩
+            (fun p hp => hreg p (List.mem_cons_of_mem 0 hp)) (by simpa using hlen)
+            hq8 (by rw [hlenSplit, hs0, List.length_nil, Nat.zero_add] at hqlt; exact hqlt) hval'
+        refine ⟨k, hspK, ?_, hregK, hinstK, hmemK, ?_, hraK, hnohK⟩
         · rw [hpcK]; apply pc_congr
           simp only [List.zipIdx_cons, List.flatMap_cons, hs0, List.nil_append]
         · intro target ht1 htm
@@ -736,9 +762,9 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
         have hemL : Emitted L q [Instr.sd SP (A base) (BitVec.ofNat 12 (slotOff r))] := by
           have h := Emitted_append_left _ _ _ _ hem
           rwa [storeSlotI, if_neg hr0] at h
-        obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne, hra1⟩ :=
+        obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne, hra1, hnoh1⟩ :=
           run_slotStore L fd m sp r (A base) q (by omega) (hreg r (by simp)) hsp hpc hinst hemL
-            huser hnw hseg hblob hbd
+            huser hnw hseg hblob hbd hq8 (by omega)
         have hemR : Emitted L (q + 4)
             ((rest.zipIdx (base + 1)).flatMap fun pi => storeSlotI pi.1 (A pi.2)) := by
           have h := Emitted_append_right _ _ _ _ hem
@@ -751,10 +777,12 @@ theorem run_parkParams (L : Layout) (fd : FunDef) (sp : Word)
           have h := hval (i + 1) (by simp only [List.length_cons]; omega)
           rw [show base + (i + 1) = base + 1 + i from by omega, List.getElem_cons_succ] at h
           exact h
-        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK, hraK⟩ :=
+        obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hslotK, hraK, hnohK⟩ :=
           ih vrest (base + 1) (q + 4) (step m) hsp' hpc1 hemR hinst1
-            (fun p hp => hreg p (List.mem_cons_of_mem r hp)) (by simpa using hlen) hval'
-        refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+            (fun p hp => hreg p (List.mem_cons_of_mem r hp)) (by simpa using hlen)
+            (by omega) (by rw [hlenSplit, storeSlotI_length, if_neg hr0] at hqlt; omega) hval'
+        refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+            NoHalt_chain L 1 k m hnoh1 (by rw [hstep1]; exact hnohK)⟩
         · rw [stepN_add, hstep1]; exact hspK
         · rw [stepN_add, hstep1, hpcK]; apply pc_congr
           simp only [List.zipIdx_cons, List.flatMap_cons, storeSlotI, if_neg hr0,
@@ -788,6 +816,7 @@ theorem run_zeroSlots (L : Layout) (fd : FunDef) (sp : Word)
       Emitted L q (regs.map (fun r => Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r)))) →
       Installed L m →
       (∀ r ∈ regs, 1 ≤ r ∧ r ≤ maxRegF fd) →
+      8 ≤ q → q + 4 * regs.length < 2 ^ 20 →
       ∃ k, (stepN k m).rget SP = sp
          ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (q + 4 * regs.length)
          ∧ (∀ t, (stepN k m).rget t = m.rget t)
@@ -798,23 +827,25 @@ theorem run_zeroSlots (L : Layout) (fd : FunDef) (sp : Word)
          ∧ (∀ target : Nat, 1 ≤ target → target ≤ maxRegF fd → target ∉ regs →
               (stepN k m).loadWord (sp + BitVec.ofNat 64 (slotOff target))
                 = m.loadWord (sp + BitVec.ofNat 64 (slotOff target)))
-         ∧ (stepN k m).loadWord sp = m.loadWord sp := by
+         ∧ (stepN k m).loadWord sp = m.loadWord sp
+         ∧ NoHalt L k m := by
   intro regs
   induction regs with
   | nil =>
-      intro q m hsp hpc _ hinst _
+      intro q m hsp hpc _ hinst _ _ _
       refine ⟨0, by simpa using hsp, ?_, fun t => by rw [stepN_zero], by simpa using hinst,
               fun a _ => by rw [stepN_zero], fun target ht => by simp at ht,
-              fun target _ _ _ => by rw [stepN_zero], by rw [stepN_zero]⟩
+              fun target _ _ _ => by rw [stepN_zero], by rw [stepN_zero], NoHalt_zero L m⟩
       simp only [stepN_zero, List.length_nil, Nat.mul_zero, Nat.add_zero]; exact hpc
   | cons r rest ih =>
-      intro q m hsp hpc hem hinst hbounds
+      intro q m hsp hpc hem hinst hbounds hq8 hqlt
       simp only [List.map_cons] at hem
       obtain ⟨hr1, hrm⟩ := hbounds r (by simp)
       have hemL : Emitted L q [Instr.sd SP 0 (BitVec.ofNat 12 (slotOff r))] :=
         Emitted_append_left _ _ _ _ hem
-      obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne, hra1⟩ :=
-        run_slotStore L fd m sp r 0 q hr1 hrm hsp hpc hinst hemL huser hnw hseg hblob hbd
+      obtain ⟨hpc1, hreg1, hinst1, hmem1, hslotr, hslotne, hra1, hnoh1⟩ :=
+        run_slotStore L fd m sp r 0 q hr1 hrm hsp hpc hinst hemL huser hnw hseg hblob hbd hq8
+          (by simp only [List.length_cons] at hqlt; omega)
       have hslot_r0 : (step m).loadWord (sp + BitVec.ofNat 64 (slotOff r)) = 0 := by
         rw [hslotr]; rfl
       have hemR : Emitted L (q + 4)
@@ -823,10 +854,12 @@ theorem run_zeroSlots (L : Layout) (fd : FunDef) (sp : Word)
         rw [List.length_singleton, Nat.mul_one] at h; exact h
       have hstep1 : stepN 1 m = step m := rfl
       have hsp' : (step m).rget SP = sp := by rw [hreg1]; exact hsp
-      obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hzeroK, hpresK, hraK⟩ :=
+      obtain ⟨k, hspK, hpcK, hregK, hinstK, hmemK, hzeroK, hpresK, hraK, hnohK⟩ :=
         ih (q + 4) (step m) hsp' hpc1 hemR hinst1
           (fun p hp => hbounds p (List.mem_cons_of_mem r hp))
-      refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+          (by omega) (by simp only [List.length_cons] at hqlt; omega)
+      refine ⟨1 + k, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+          NoHalt_chain L 1 k m hnoh1 (by rw [hstep1]; exact hnohK)⟩
       · rw [stepN_add, hstep1]; exact hspK
       · rw [stepN_add, hstep1, hpcK]; apply pc_congr
         simp only [List.length_cons]; omega
@@ -864,6 +897,7 @@ theorem run_zeroFrame (L : Layout) (fd : FunDef) (sp : Word)
       Emitted L q ((List.range N).map
         (fun i => Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i)))) →
       Installed L m →
+      8 ≤ q → q + 4 * N < 2 ^ 20 →
       ∃ k, (stepN k m).rget SP = sp
          ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (q + 4 * N)
          ∧ (∀ t, (stepN k m).rget t = m.rget t)
@@ -873,18 +907,19 @@ theorem run_zeroFrame (L : Layout) (fd : FunDef) (sp : Word)
          ∧ (∀ a : Word, ¬ memRange a (sp + BitVec.ofNat 64 (userOff fd)) (8 * N)
               → (stepN k m).mem a = m.mem a)
          ∧ (∀ a : Word, a.toNat + 8 ≤ sp.toNat + userOff fd
-              → (stepN k m).loadWord a = m.loadWord a) := by
+              → (stepN k m).loadWord a = m.loadWord a)
+         ∧ NoHalt L k m := by
   intro N
   induction N with
   | zero =>
-      intro q m _ hsp hpc _ hinst
+      intro q m _ hsp hpc _ hinst _ _
       refine ⟨0, by rw [stepN_zero]; exact hsp, ?_, fun t => by rw [stepN_zero],
               by rw [stepN_zero]; exact hinst,
-              ?_, fun a _ => by rw [stepN_zero], fun a _ => by rw [stepN_zero]⟩
+              ?_, fun a _ => by rw [stepN_zero], fun a _ => by rw [stepN_zero], NoHalt_zero L m⟩
       · simp only [stepN_zero, Nat.mul_zero, Nat.add_zero]; exact hpc
       · intro a ha; obtain ⟨_, _⟩ := ha; omega
   | succ N ih =>
-      intro q m hN hsp hpc hem hinst
+      intro q m hN hsp hpc hem hinst hq8 hqlt
       rw [List.range_succ, List.map_append] at hem
       have hemFirst : Emitted L q ((List.range N).map
           (fun i => Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i)))) :=
@@ -894,8 +929,8 @@ theorem run_zeroFrame (L : Layout) (fd : FunDef) (sp : Word)
         have h := Emitted_append_right L q ((List.range N).map
           (fun i => Instr.sd SP 0 (BitVec.ofNat 12 (userOff fd + 8 * i)))) _ hem
         rwa [List.length_map, List.length_range] at h
-      obtain ⟨kn, hspN, hpcN, hregN, hinstN, hzeroN, hpresN, hloadN⟩ :=
-        ih q m (by omega) hsp hpc hemFirst hinst
+      obtain ⟨kn, hspN, hpcN, hregN, hinstN, hzeroN, hpresN, hloadN, hnohN⟩ :=
+        ih q m (by omega) hsp hpc hemFirst hinst hq8 (by omega)
       have hoff : userOff fd + 8 * N < 2 ^ 11 := by omega
       have haddr : (sp + BitVec.ofNat 64 (userOff fd + 8 * N)).toNat
           = sp.toNat + (userOff fd + 8 * N) := by
@@ -924,7 +959,11 @@ theorem run_zeroFrame (L : Layout) (fd : FunDef) (sp : Word)
         rw [haddr]; rcases hbd with hbd | hbd
         · exact Or.inl (by omega)
         · exact Or.inr (by omega)
-      refine ⟨kn + 1, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨kn + 1, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+          NoHalt_chain L kn 1 m hnohN
+            (NoHalt_cons L 0 (stepN kn m)
+              (by rw [hpcN]; exact pc_ne_halt L (q + 4 * N) (by omega) (by omega))
+              (NoHalt_zero L (step (stepN kn m))))⟩
       · rw [hstep1, hstep, rget_setPc, State_storeWord_rget]; exact hspN
       · rw [hstep1, hstep, pc_setPc, hpcN, pc_add4]; apply pc_congr; omega
       · intro t; rw [hstep1, hstep, rget_setPc, State_storeWord_rget]; exact hregN t
@@ -1001,16 +1040,33 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
     (hbdcF : L.codeBase.toNat + L.blobLen ≤ callee.sp.toNat
               ∨ callee.sp.toNat + totalFrame fd ≤ L.codeBase.toNat)
     (hholes_ord : ∀ h ∈ holes, sp0.toNat ≤ (h.1 : Word).toNat)
-    (hholes_nw : ∀ h ∈ holes, (h.1 : Word).toNat + h.2 ≤ 2 ^ 64) :
+    (hholes_nw : ∀ h ∈ holes, (h.1 : Word).toNat + h.2 ≤ 2 ^ 64)
+    (hp8 : 8 ≤ p) (hplt : p + 4 * prologueSize fd < 2 ^ 20) :
     ∃ k, StInv L fd ((callee.sp, userOff fd) :: holes) callee (stepN k m)
        ∧ (stepN k m).pc = L.codeBase + BitVec.ofNat 64 (p + 4 * prologueSize fd)
        ∧ (stepN k m).loadWord callee.sp = ra
-       ∧ (∀ a : Word, ¬ memRange a callee.sp (totalFrame fd) → (stepN k m).mem a = m.mem a) := by
+       ∧ (∀ a : Word, ¬ memRange a callee.sp (totalFrame fd) → (stepN k m).mem a = m.mem a)
+       ∧ NoHalt L k m := by
   -- ==== numeric helpers ====
   have hsp0lt : sp0.toNat < 2 ^ 64 := sp0.isLt
   have huser : userOff fd ≤ 2000 := by unfold totalFrame at htf; omega
   have huser16 : 16 ≤ userOff fd := by unfold userOff; omega
   have htf_eq : totalFrame fd = userOff fd + fd.frameSize := rfl
+  -- prologue length decomposition (hoisted: needed for the per-segment NoHalt bounds)
+  have hpsz : (prologuePreI fd).length
+      = 2 + (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+        + ((List.range (maxRegF fd + 1)).filter
+            (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length
+        + (if fd.frameReg = 0 then 0 else 2) := by
+    by_cases hfr : fd.frameReg = 0
+    · simp only [prologuePreI, if_pos hfr, storeSlotI, List.length_append,
+                 List.length_cons, List.length_nil, List.length_map]
+    · simp only [prologuePreI, if_neg hfr, storeSlotI, List.length_append,
+                 List.length_cons, List.length_nil, List.length_map, List.length_singleton]
+  have hPS : prologueSize fd = (prologuePreI fd).length + fd.frameSize / 8 := by
+    simp only [prologueSize, prologueI, frameZeroI, List.length_append, List.length_map,
+               List.length_range]
+  have hpge : 2 ≤ prologueSize fd := by rw [hPS, hpsz]; omega
   have hcspN : callee.sp.toNat = sp0.toNat - totalFrame fd := by rw [hcsp]; bv_omega
   have hnwc : callee.sp.toNat + userOff fd ≤ 2 ^ 64 := by omega
   have hcsp8 : callee.sp.toNat % 8 = 0 := by
@@ -1097,9 +1153,16 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
         have : ¬ a.toNat < callee.sp.toNat + userOff fd := fun hh => hna ⟨hge, hh⟩
         omega)
   -- ==== G1: park params ====
-  obtain ⟨kP, hPsp, hPpc, hPreg, hPinst, hPmem, hPslot, hPra⟩ :=
+  obtain ⟨kP, hPsp, hPpc, hPreg, hPinst, hPmem, hPslot, hPra, hPnoh⟩ :=
     run_parkParams L fd callee.sp huser hnwc hseg hblob hbdc
       fd.params.toList argVals 0 (p + 8) (step (step m)) hm2sp hm2pc hempseg hm2inst hparb hlen
+      (by omega)
+      (by rw [show ((fd.params.toList.zipIdx 0).flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+                = (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length from rfl]
+          have hle : (p + 8)
+              + 4 * (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+            ≤ p + 4 * prologueSize fd := by rw [hPS, hpsz]; omega
+          omega)
       (fun i hi => by rw [Nat.zero_add, hm2Areg]; exact hargs i hi)
   -- ==== G2: zero-init the remaining slots ====
   have hemzseg : Emitted L ((p + 8) + 4 * (fd.params.toList.zipIdx.flatMap fun pi =>
@@ -1124,9 +1187,17 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
     have h := hr.2
     simp only [Bool.and_eq_true, bne_iff_ne] at h
     exact ⟨Nat.pos_of_ne_zero h.1.1, Nat.le_of_lt_succ hr.1⟩
-  obtain ⟨kZ, hZsp, hZpc, hZreg, hZinst, hZmem, hZzero, hZpres, hZra⟩ :=
+  obtain ⟨kZ, hZsp, hZpc, hZreg, hZinst, hZmem, hZzero, hZpres, hZra, hZnoh⟩ :=
     run_zeroSlots L fd callee.sp huser hnwc hseg hblob hbdc _ _ (stepN kP (step (step m)))
-      hPsp hPpc hemzseg hPinst hzbounds
+      hPsp hPpc hemzseg hPinst hzbounds (by omega)
+      (by rw [show ((fd.params.toList.zipIdx 0).flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+                = (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length from rfl]
+          have hle : (p + 8)
+              + 4 * (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+              + 4 * ((List.range (maxRegF fd + 1)).filter
+                  (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length
+            ≤ p + 4 * prologueSize fd := by rw [hPS, hpsz]; omega
+          omega)
   -- membership characterization for the filtered zero-init set
   have hz_iff : ∀ r : Nat, r ∈ (List.range (maxRegF fd + 1)).filter
         (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)
@@ -1139,7 +1210,7 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
     · rintro ⟨h1, ⟨⟨h2, h3⟩, h4⟩⟩; exact ⟨by omega, h2, h3, h4⟩
     · rintro ⟨h1, h2, h3, h4⟩; exact ⟨by omega, ⟨⟨h2, h3⟩, h4⟩⟩
   -- ==== G3: frameReg slot (or nothing) ====
-  obtain ⟨kF, hFsp, hFpc, hFinst, hFmem, hFslot, hFra⟩ :
+  obtain ⟨kF, hFsp, hFpc, hFinst, hFmem, hFslot, hFra, hFnoh⟩ :
       ∃ kF, (stepN kF (stepN kZ (stepN kP (step (step m))))).rget SP = callee.sp
           ∧ (stepN kF (stepN kZ (stepN kP (step (step m))))).pc
               = L.codeBase + BitVec.ofNat 64 (p + 4 * (prologuePreI fd).length)
@@ -1154,21 +1225,12 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
                    else (stepN kZ (stepN kP (step (step m)))).loadWord
                      (callee.sp + BitVec.ofNat 64 (slotOff r)))
           ∧ (stepN kF (stepN kZ (stepN kP (step (step m))))).loadWord callee.sp
-              = (stepN kZ (stepN kP (step (step m)))).loadWord callee.sp := by
-    -- prologueSize = 2 + |pseg| + |zseg| + |fseg|
-    have hpsz : (prologuePreI fd).length
-        = 2 + (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
-          + ((List.range (maxRegF fd + 1)).filter
-              (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length
-          + (if fd.frameReg = 0 then 0 else 2) := by
-      by_cases hfr : fd.frameReg = 0
-      · simp only [prologuePreI, if_pos hfr, storeSlotI, List.length_append,
-                   List.length_cons, List.length_nil, List.length_map]
-      · simp only [prologuePreI, if_neg hfr, storeSlotI, List.length_append,
-                   List.length_cons, List.length_nil, List.length_map, List.length_singleton]
+              = (stepN kZ (stepN kP (step (step m)))).loadWord callee.sp
+          ∧ NoHalt L kF (stepN kZ (stepN kP (step (step m)))) := by
     by_cases hfr0 : fd.frameReg = 0
     · refine ⟨0, by rw [stepN_zero]; exact hZsp, ?_, by rw [stepN_zero]; exact hZinst,
-              fun a _ => by rw [stepN_zero], fun r hr1 hrm => ?_, by rw [stepN_zero]⟩
+              fun a _ => by rw [stepN_zero], fun r hr1 hrm => ?_, by rw [stepN_zero],
+              NoHalt_zero L _⟩
       · rw [stepN_zero, hZpc]; apply pc_congr
         rw [hpsz, show (if fd.frameReg = 0 then (0 : Nat) else 2) = 0 from if_pos hfr0]
         generalize (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length = X
@@ -1239,14 +1301,25 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
           [Instr.sd SP T0 (BitVec.ofNat 12 (slotOff fd.frameReg))] := by
         have h := Emitted_append_right L _ [Instr.addi T0 SP (BitVec.ofNat 12 (userOff fd))] _ hemfseg
         rw [List.length_singleton, Nat.mul_one, storeSlotI, if_neg hfr0] at h; exact h
-      obtain ⟨hSDpc, hSDreg, hSDinst, hSDmem, hSDslot, hSDslotne, hSDra⟩ :=
+      obtain ⟨hSDpc, hSDreg, hSDinst, hSDmem, hSDslot, hSDslotne, hSDra, hSDnoh⟩ :=
         run_slotStore L fd (step (stepN kZ (stepN kP (step (step m))))) callee.sp
           fd.frameReg T0 _ hfr1 hfrb hStSp hStPc hStInst hemsd huser hnwc hseg hblob hbdc
+          (by omega) (by rw [hPS, hpsz, if_neg hfr0] at hplt; omega)
       have hSN2Z : stepN 2 (stepN kZ (stepN kP (step (step m))))
           = step (step (stepN kZ (stepN kP (step (step m))))) := rfl
       have hmemA : (step (stepN kZ (stepN kP (step (step m))))).mem
           = (stepN kZ (stepN kP (step (step m)))).mem := hStMem
-      refine ⟨2, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      have hFbnd : (p + 8)
+          + 4 * (fd.params.toList.zipIdx.flatMap fun pi => storeSlotI pi.1 (A pi.2)).length
+          + 4 * ((List.range (maxRegF fd + 1)).filter
+              (fun r => r != 0 && !fd.params.toList.contains r && r != fd.frameReg)).length
+            < 2 ^ 20 := by
+        rw [hPS, hpsz, if_neg hfr0] at hplt; omega
+      have hFne : (stepN kZ (stepN kP (step (step m)))).pc ≠ L.codeBase + 4 := by
+        rw [hZpc']; exact pc_ne_halt L _ (by omega) hFbnd
+      have hFN2 : NoHalt L 2 (stepN kZ (stepN kP (step (step m)))) :=
+        NoHalt_cons L 1 _ hFne hSDnoh
+      refine ⟨2, ?_, ?_, ?_, ?_, ?_, ?_, hFN2⟩
       · rw [hSN2Z, hSDreg SP]; exact hStSp
       · rw [hSN2Z, hSDpc]; apply pc_congr; rw [hpsz, if_neg hfr0]; omega
       · rw [hSN2Z]; exact hSDinst
@@ -1259,14 +1332,12 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
           exact loadWord_mem_congr _ _ _ hmemA
       · rw [hSN2Z, hSDra]; exact loadWord_mem_congr _ _ _ hmemA
   -- ==== G4: zero the user frame ====
-  have hPS : prologueSize fd = (prologuePreI fd).length + fd.frameSize / 8 := by
-    simp only [prologueSize, prologueI, frameZeroI, List.length_append, List.length_map,
-               List.length_range]
   have hfsN : 8 * (fd.frameSize / 8) = fd.frameSize := by omega
-  obtain ⟨kG, hGsp, hGpc, hGreg, hGinst, hGzero, hGpres, hGload⟩ :=
+  obtain ⟨kG, hGsp, hGpc, hGreg, hGinst, hGzero, hGpres, hGload, hGnoh⟩ :=
     run_zeroFrame L fd callee.sp (htf_eq ▸ htf) (by omega) hseg hblob hbdcF
       (fd.frameSize / 8) (p + 4 * (prologuePreI fd).length)
       (stepN kF (stepN kZ (stepN kP (step (step m))))) (by omega) hFsp hFpc hemFZ hFinst
+      (by omega) (by rw [hPS] at hplt; omega)
   rw [hfsN] at hGzero hGpres
   -- ==== final: assemble the callee StInv ====
   have hfinalPre : stepN (2 + kP + kZ + kF) m
@@ -1295,7 +1366,16 @@ theorem prologue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
   have hPreMem : ∀ a : Word, ¬ memRange a callee.sp (userOff fd) →
       (stepN kF (stepN kZ (stepN kP (step (step m))))).mem a = m.mem a := by
     intro a ha; rw [hFmem a ha, hZmem a ha, hPmem a ha, hm2mem_off a ha]
-  refine ⟨2 + kP + kZ + kF + kG, ?_, ?_, ?_, ?_⟩
+  have hNoH : NoHalt L (2 + kP + kZ + kF + kG) m := by
+    rw [show 2 + kP + kZ + kF + kG = 2 + (kP + (kZ + (kF + kG))) from by omega]
+    refine NoHalt_chain L 2 (kP + (kZ + (kF + kG))) m ?_ ?_
+    · exact NoHalt_cons L 1 m (by rw [hpc]; exact pc_ne_halt L p hp8 (by omega))
+        (NoHalt_cons L 0 (step m) (by rw [hm1pc]; exact pc_ne_halt L (p + 4) (by omega) (by omega))
+          (NoHalt_zero L _))
+    · refine NoHalt_chain L kP (kZ + (kF + kG)) (stepN 2 m) hPnoh ?_
+      refine NoHalt_chain L kZ (kF + kG) (stepN kP (stepN 2 m)) hZnoh ?_
+      exact NoHalt_chain L kF kG (stepN kZ (stepN kP (stepN 2 m))) hFnoh hGnoh
+  refine ⟨2 + kP + kZ + kF + kG, ?_, ?_, ?_, ?_, hNoH⟩
   · -- StInv
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · rw [hfinal]; exact hGsp
@@ -1350,17 +1430,19 @@ theorem epilogue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
     (hraeven : ra.toNat % 2 = 0)
     (hretb : ∀ x ∈ fd.rets.toList, x ≤ maxRegF fd)
     (hretslot : ∀ x ∈ fd.rets.toList, slotOff x < 2 ^ 11)
-    (htf : totalFrame fd < 2 ^ 11) :
+    (htf : totalFrame fd < 2 ^ 11)
+    (hq8 : 8 ≤ q) (hqlt : q + 4 * (fd.rets.toList.length + 3) < 2 ^ 20) :
     ∃ k, (stepN k mE).pc = ra
        ∧ (stepN k mE).rget SP = s1.sp + BitVec.ofNat 64 (totalFrame fd)
        ∧ (∀ j, (hj : j < fd.rets.toList.length) →
             (stepN k mE).rget (A j) = s1.rget fd.rets.toList[j])
-       ∧ (stepN k mE).mem = mE.mem := by
+       ∧ (stepN k mE).mem = mE.mem
+       ∧ NoHalt L k mE := by
   rw [epilogueI] at hem
   -- G1: marshal return registers → a0..
-  obtain ⟨kM, hMinv, hMpc, hMmem, hMval, _hMoth⟩ :=
+  obtain ⟨kM, hMinv, hMpc, hMmem, hMval, _hMoth, hMnoh⟩ :=
     run_marshalFrom L fd holes s1 fd.rets.toList 0 q mE hinv hpc
-      (Emitted_append_left _ _ _ _ hem) hretb hretslot
+      (Emitted_append_left _ _ _ _ hem) hretb hretslot hq8 (by omega)
   obtain ⟨hMx2, _hMslot, hMInst, _, _, _, _, _⟩ := hMinv
   have hSP_M : (stepN kM mE).rget SP = s1.sp := hMx2
   have hR : (fd.rets.toList.zipIdx.flatMap fun ri => loadSlotI ri.1 (A ri.2)).length
@@ -1417,7 +1499,15 @@ theorem epilogue_sim (L : Layout) (fd : FunDef) (holes : List Hole)
       hINSTaddi 2 (by simp) (by rw [hPCaddi]) rfl
     simpa using h
   have hfin : stepN (kM + 3) mE = step (step (step (stepN kM mE))) := by rw [stepN_add]; rfl
-  refine ⟨kM + 3, ?_, ?_, ?_, ?_⟩
+  refine ⟨kM + 3, ?_, ?_, ?_, ?_,
+      NoHalt_chain L kM 3 mE hMnoh
+        (NoHalt_cons L 2 (stepN kM mE)
+          (by rw [hMpc]; exact pc_ne_halt L _ (by omega) (by omega))
+          (NoHalt_cons L 1 (step (stepN kM mE))
+            (by rw [hPCld]; exact pc_ne_halt L _ (by omega) (by omega))
+            (NoHalt_cons L 0 (step (step (stepN kM mE)))
+              (by rw [hPCaddi]; exact pc_ne_halt L _ (by omega) (by omega))
+              (NoHalt_zero L _))))⟩
   · rw [hfin]; exact jalr_lands _ RA ra hdJalr hRAaddi hraeven
   · rw [hfin, step_jalr _ 0 RA 0 hdJalr, rget_setPc, rget_rset_ne _ 0 SP _ (by decide)]
     exact hSPaddi
@@ -1579,8 +1669,8 @@ theorem lower_sim_cf
       have he : here < 2 ^ 20 := by simp only [csize] at hbnd; omega
       have hep : epiPos < 2 ^ 20 := hlbl.2.2.2
       simp only [emitCF] at hem
-      obtain ⟨hst, hpcr, hfrj⟩ :=
-        jump_sim L fd holes s m here epiPos _ hinv hpc hem rfl (by omega) (by omega)
+      obtain ⟨hst, hpcr, hfrj, _⟩ :=
+        jump_sim L fd holes s m here epiPos _ hinv hpc hem rfl (by omega) (by omega) hhere8 he
       exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos], hfrj⟩
     case brkB k =>
       rw [LowIR.Prog.exec_brkB, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1589,8 +1679,8 @@ theorem lower_sim_cf
       have htgt : brkPos.getD k 0 < 2 ^ 20 :=
         getD_lt brkPos k _ (by omega) (fun p hp => (hlbl.1 p hp).2)
       simp only [emitCF] at hem
-      obtain ⟨hst, hpcr, hfrj⟩ :=
-        jump_sim L fd holes s m here (brkPos.getD k 0) _ hinv hpc hem rfl (by omega) (by omega)
+      obtain ⟨hst, hpcr, hfrj, _⟩ :=
+        jump_sim L fd holes s m here (brkPos.getD k 0) _ hinv hpc hem rfl (by omega) (by omega) hhere8 he
       exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos], hfrj⟩
     case contL k =>
       rw [LowIR.Prog.exec_contL, Option.some.injEq, Prod.mk.injEq] at hexec
@@ -1599,8 +1689,8 @@ theorem lower_sim_cf
       have htgt : contPos.getD k 0 < 2 ^ 20 :=
         getD_lt contPos k _ (by omega) (fun p hp => (hlbl.2.1 p hp).2)
       simp only [emitCF] at hem
-      obtain ⟨hst, hpcr, hfrj⟩ :=
-        jump_sim L fd holes s m here (contPos.getD k 0) _ hinv hpc hem rfl (by omega) (by omega)
+      obtain ⟨hst, hpcr, hfrj, _⟩ :=
+        jump_sim L fd holes s m here (contPos.getD k 0) _ hinv hpc hem rfl (by omega) (by omega) hhere8 he
       exact ⟨1, hst, by rw [show stepN 1 m = step m from rfl, hpcr]; simp only [csize, landPos], hfrj⟩
     case seq a b =>
       simp only [maxRegS] at hreg
@@ -1664,82 +1754,82 @@ theorem lower_sim_cf
     case addi rd rs imm =>
       rw [LowIR.Prog.exec_addi, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.addi rd rs imm) s _ m here
           (LowIR.Prog.exec_addi P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case add rd r1 r2 =>
       rw [LowIR.Prog.exec_add, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.add rd r1 r2) s _ m here
           (LowIR.Prog.exec_add P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case sub rd r1 r2 =>
       rw [LowIR.Prog.exec_sub, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.sub rd r1 r2) s _ m here
           (LowIR.Prog.exec_sub P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case orr rd r1 r2 =>
       rw [LowIR.Prog.exec_orr, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.orr rd r1 r2) s _ m here
           (LowIR.Prog.exec_orr P dbase pad stackLo fuel rd r1 r2 s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case slli rd rs sh =>
       rw [LowIR.Prog.exec_slli, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.slli rd rs sh) s _ m here
           (LowIR.Prog.exec_slli P dbase pad stackLo fuel rd rs sh s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case srli rd rs sh =>
       rw [LowIR.Prog.exec_srli, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.srli rd rs sh) s _ m here
           (LowIR.Prog.exec_srli P dbase pad stackLo fuel rd rs sh s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case lbu rd rs imm =>
       rw [LowIR.Prog.exec_lbu, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.lbu rd rs imm) s _ m here
           (LowIR.Prog.exec_lbu P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case ld rd rs imm =>
       rw [LowIR.Prog.exec_ld, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.ld rd rs imm) s _ m here
           (LowIR.Prog.exec_ld P dbase pad stackLo fuel rd rs imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case sb rb rv imm =>
       rw [LowIR.Prog.exec_sb, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.sb rb rv imm) s _ m here
           (LowIR.Prog.exec_sb P dbase pad stackLo fuel rb rv imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case sd rb rv imm =>
       rw [LowIR.Prog.exec_sd, Option.some.injEq, Prod.mk.injEq] at hexec
       obtain ⟨rfl, rfl⟩ := hexec
-      obtain ⟨k, hst, hpck, hfr⟩ :=
+      obtain ⟨k, hst, hpck, hfr, _⟩ :=
         lower_sim (fuel + 1) (.sd rb rv imm) s _ m here
           (LowIR.Prog.exec_sd P dbase pad stackLo fuel rb rv imm s) hinv hpc hem hreg hframe hnw
-          hseg hblob hbd_old haccess rfl
+          hseg hblob hbd_old haccess rfl hhere8 hbnd
       exact ⟨k, hst, by rw [hpck]; simp only [landPos, csize], hfr⟩
     case ife c a b t e =>
       simp only [maxRegS] at hreg
@@ -1754,6 +1844,7 @@ theorem lower_sim_cf
       have hfa : slotOff a < 2 ^ 11 := by have := slotOff_add8_le_userOff fd a hra; omega
       have hfb : slotOff b < 2 ^ 11 := by have := slotOff_add8_le_userOff fd b hrb; omega
       have hinst : Installed L m := hinv.2.2.1
+      have hcsz4 : 4 ≤ csize (.ife c a b t e) := by simp only [csize]; omega
       have hemU : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1
           ++ [condInstr c T0 T1 (8 + 4 * csize e)]
           ++ emitCF P.data dpos fnPos brkPos contPos epiPos (here + 12) e
@@ -1762,13 +1853,14 @@ theorem lower_sim_cf
       have hP2 : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1) :=
         Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _
           (Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hemU)))
-      obtain ⟨hinv1, h1pc, h1mem, h1T0, -⟩ :=
+      obtain ⟨hinv1, h1pc, h1mem, h1T0, -, -⟩ :=
         run_load L fd holes s m a T0 here hinv hra hfa (by decide) (by decide) hpc
-          (Emitted_append_left _ _ _ _ hP2)
+          (Emitted_append_left _ _ _ _ hP2) (by omega) (by omega)
       have hemB : Emitted L (here + 4) (loadSlotI b T1) := by
         have h := Emitted_append_right _ _ _ _ hP2; rwa [loadSlotI_length, Nat.mul_one] at h
-      obtain ⟨hinv2, h2pc, h2mem, h2T1, h2oth⟩ :=
+      obtain ⟨hinv2, h2pc, h2mem, h2T1, h2oth, -⟩ :=
         run_load L fd holes s (step m) b T1 (here + 4) hinv1 hrb hfb (by decide) (by decide) h1pc hemB
+          (by omega) (by omega)
       have h2T0 : (step (step m)).rget T0 = s.rget a := by rw [h2oth T0 (by decide)]; exact h1T0
       have h2mm : (step (step m)).mem = m.mem := by rw [h2mem, h1mem]
       have hemBr : Emitted L (here + 8) [condInstr c T0 T1 (8 + 4 * csize e)] := by
@@ -1860,10 +1952,10 @@ theorem lower_sim_cf
               have hspE : s'.sp = s.sp :=
                 StInv_sp_eq L fd holes s s' (step (step (step m))) (stepN ke (step (step (step m))))
                   hinv3 hinvE
-              obtain ⟨hstJ, hpcJ, hfrJ⟩ :=
+              obtain ⟨hstJ, hpcJ, hfrJ, -⟩ :=
                 jump_sim L fd holes s' (stepN ke (step (step (step m)))) (here + 12 + 4 * csize e)
                   (here + 16 + 4 * csize e + 4 * csize t) _ hinvE hpcE' hemJ (by push_cast; omega)
-                  (by omega) (by omega)
+                  (by omega) (by omega) (by omega) (by simp only [csize] at hbnd; omega)
               rw [hspE] at hfrJ
               refine ⟨3 + ke + 1, ?_, ?_, ?_⟩
               · rw [show stepN (3 + ke + 1) m = step (stepN (3 + ke) m) from by rw [stepN_add]; rfl,
@@ -1911,13 +2003,14 @@ theorem lower_sim_cf
       have hP2 : Emitted L here (loadSlotI a T0 ++ loadSlotI b T1) :=
         Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _
           (Emitted_append_left _ _ _ _ hemU))
-      obtain ⟨hinv1, h1pc, h1mem, h1T0, -⟩ :=
+      obtain ⟨hinv1, h1pc, h1mem, h1T0, -, -⟩ :=
         run_load L fd holes s m a T0 here hinv hra hfa (by decide) (by decide) hpc
-          (Emitted_append_left _ _ _ _ hP2)
+          (Emitted_append_left _ _ _ _ hP2) (by omega) (by omega)
       have hemLb : Emitted L (here + 4) (loadSlotI b T1) := by
         have h := Emitted_append_right _ _ _ _ hP2; rwa [loadSlotI_length, Nat.mul_one] at h
-      obtain ⟨hinv2, h2pc, h2mem, h2T1, h2oth⟩ :=
+      obtain ⟨hinv2, h2pc, h2mem, h2T1, h2oth, -⟩ :=
         run_load L fd holes s (step m) b T1 (here + 4) hinv1 hrb hfb (by decide) (by decide) h1pc hemLb
+          (by omega) (by omega)
       have h2T0 : (step (step m)).rget T0 = s.rget a := by rw [h2oth T0 (by decide)]; exact h1T0
       have h2mm : (step (step m)).mem = m.mem := by rw [h2mem, h1mem]
       -- the `[branch, exit-jmp]` chunk sits at here+8.
@@ -1979,9 +2072,10 @@ theorem lower_sim_cf
           have hemJmp : Emitted L (here + 12) [jal0 (8 + 4 * csize body)] :=
             Emitted_append_right L (here + 8) [condInstr c T0 T1 8]
               [jal0 (8 + 4 * csize body)] hemCJ
-          obtain ⟨hstJmp, hpcJmp, hfrJmp⟩ :=
+          obtain ⟨hstJmp, hpcJmp, hfrJmp, _⟩ :=
             jump_sim L fd holes s (step (step (step m))) (here + 12) (here + 20 + 4 * csize body) _
               hinv3 hpc3 hemJmp (by push_cast; omega) (by omega) (by omega)
+              (by omega) (by simp only [csize] at hbnd; omega)
           have h4 : stepN 4 m = step (step (step (step m))) := rfl
           refine ⟨4, ?_, ?_, ?_⟩
           · rw [h4]; exact hstJmp
@@ -2023,10 +2117,11 @@ theorem lower_sim_cf
                   have hpcB' : (stepN kb (step (step (step m)))).pc
                       = L.codeBase + BitVec.ofNat 64 (here + 16 + 4 * csize body) := by
                     rw [hpcB]; simp only [landPos]
-                  obtain ⟨hstBack, hpcBack, hfrBack⟩ :=
+                  obtain ⟨hstBack, hpcBack, hfrBack, _⟩ :=
                     jump_sim L fd holes sb (stepN kb (step (step (step m))))
                       (here + 16 + 4 * csize body) here _ hinvB hpcB' hemBack
                       (by push_cast; omega) (by omega) (by omega)
+                      (by omega) (by simp only [csize] at hbnd; omega)
                   rw [hsp] at hfrBack
                   obtain ⟨kw, hinvW, hpcW, hfrW⟩ :=
                     ih (.while c a b body) sb s' oc (step (stepN kb (step (step (step m)))))
@@ -2089,6 +2184,7 @@ theorem lower_sim_cf
       have hrd : rd ≤ maxRegF fd := hreg
       have hfrd : slotOff rd < 2 ^ 11 := by
         have := slotOff_add8_le_userOff fd rd hrd; omega
+      have hcsz3 : 3 ≤ csize (.clen rd d) := by simp only [csize]; split <;> omega
       cases hlk : List.lookup d P.data with
       | none =>
           rw [LowIR.Prog.exec_clen_none P dbase pad stackLo fuel rd d s hlk] at hexec
@@ -2105,12 +2201,12 @@ theorem lower_sim_cf
             rwa [synthI_length] at h
           have hrange : -2048 ≤ synthHi (bs.length : Int) ∧ synthHi (bs.length : Int) ≤ 2047 := by
             have h := hdat d; rwa [hlk, Option.map_some, Option.getD_some] at h
-          obtain ⟨hinvS, hT0S, hpcS, hmemS, -⟩ :=
+          obtain ⟨hinvS, hT0S, hpcS, hmemS, -, -⟩ :=
             run_synth L fd holes s m T0 (by decide) (by decide) (bs.length : Int) here
-              hinv hpc hemS hrange
-          obtain ⟨ks, hinvF, hpcF, hfrStore⟩ :=
+              hinv hpc hemS hrange (by omega) (by omega)
+          obtain ⟨ks, hinvF, hpcF, hfrStore, -⟩ :=
             run_store L fd holes s (stepN 3 m) rd (BitVec.ofInt 64 (bs.length : Int)) (here + 12)
-              hinvS hT0S hpcS hemST hrd hfrd hnw hseg hblob hbd_old
+              hinvS hT0S hpcS hemST hrd hfrd hnw hseg hblob hbd_old (by omega) (by omega)
           have hval : s.rset rd (BitVec.ofInt 64 (bs.length : Int))
               = s.rset rd (BitVec.ofNat 64 bs.length) := by rw [BitVec.ofInt_natCast]
           refine ⟨3 + ks, ?_, ?_, ?_⟩
@@ -2129,6 +2225,7 @@ theorem lower_sim_cf
       have hrd : rd ≤ maxRegF fd := hreg
       have hfrd : slotOff rd < 2 ^ 11 := by
         have := slotOff_add8_le_userOff fd rd hrd; omega
+      have hcsz5 : 5 ≤ csize (.cref rd d) := by simp only [csize]; split <;> omega
       have hhere : here < 2 ^ 20 := by
         have : here + 4 * csize (.cref rd d) < 2 ^ 20 := hbnd; omega
       cases hdb : dbase d with
@@ -2147,11 +2244,12 @@ theorem lower_sim_cf
             have h := Emitted_append_right L here
               (crefI T0 T1 ((dpos d : Int) - ((here : Int) + 4))) (storeSlotI rd T0) hem
             rwa [crefI_length] at h
-          obtain ⟨hinvC, hT0C, hpcC, hmemC⟩ :=
+          obtain ⟨hinvC, hT0C, hpcC, hmemC, -⟩ :=
             run_cref L fd holes s m (dpos d) here hinv hpc hemC hhere (hdpos d)
-          obtain ⟨ks, hinvF, hpcF, hfrStore⟩ :=
+              (by omega) (by omega)
+          obtain ⟨ks, hinvF, hpcF, hfrStore, -⟩ :=
             run_store L fd holes s (stepN 5 m) rd (L.codeBase + BitVec.ofNat 64 (dpos d))
-              (here + 20) hinvC hT0C hpcC hemST hrd hfrd hnw hseg hblob hbd_old
+              (here + 20) hinvC hT0C hpcC hemST hrd hfrd hnw hseg hblob hbd_old (by omega) (by omega)
           refine ⟨5 + ks, ?_, ?_, ?_⟩
           · rw [stepN_add 5 ks m]; rw [← ha] at hinvF; exact hinvF
           · rw [stepN_add 5 ks m, hpcF]
@@ -2180,9 +2278,10 @@ theorem lower_sim_cf
         have := slotOff_add8_le_userOff fd a (hargB a ha); omega
       simp only [emitCF] at hem
       -- ==== segment 1: marshal caller args into a0.. ====
-      obtain ⟨kMar, hMarInv, hMarPc, hMarMem, hMarVal, hMarOth⟩ :=
+      obtain ⟨kMar, hMarInv, hMarPc, hMarMem, hMarVal, hMarOth, -⟩ :=
         run_marshalFrom L fd holes s args.toList 0 here m hinv hpc
           (Emitted_append_left _ _ _ _ (Emitted_append_left _ _ _ _ hem)) hargB hargSlot
+          hhere8 (by have h := hbnd; simp only [csize] at h; omega)
       have hAL : args.toList.length = argc := by simp
       have hbndArgc : here + 4 * argc < 2 ^ 20 := by
         have h := hbnd; simp only [csize] at h; omega
@@ -2317,12 +2416,12 @@ theorem lower_sim_cf
         rcases hbd with ⟨h1, h2⟩ | h
         · exact Or.inl (by omega)
         · exact Or.inr (by omega)
-      obtain ⟨kPro, hProInv, hProPc, hProRA, hProMem⟩ :=
+      obtain ⟨kPro, hProInv, hProPc, hProRA, hProMem, -⟩ :=
         prologue_sim L gd holes (step (stepN kMar m)) s.sp
           (L.codeBase + BitVec.ofNat 64 (here + 4 * argc) + 4) callee (args.toList.map s.rget)
           (fnPos f) hJalPc hemPro hJalInv.2.2.1 hsp0 hJalRA hargs hlen hparb hfrb hcsp hcrg
           hmemF hcmemZ hfnTF hfnFS8 hsp0align hsp0ge hseg hblob hbdc hbdcF
-          hJalInv.2.2.2.2.2.2.1 hJalInv.2.2.2.2.2.2.2
+          hJalInv.2.2.2.2.2.2.1 hJalInv.2.2.2.2.2.2.2 hfn8 (by omega)
       -- ==== segment 4: the body — fuel IH applied to the callee body ====
       have hemBody : Emitted L (fnPos f + 4 * prologueSize gd)
           (emitCF P.data dpos fnPos [] [] (fnPos f + 4 * prologueSize gd + 4 * csize gd.body)
@@ -2402,12 +2501,14 @@ theorem lower_sim_cf
         rw [BitVec.add_assoc, show (4 : Word) = BitVec.ofNat 64 4 from rfl, BitVec.ofNat_add_ofNat,
             BitVec.toNat_add, BitVec.toNat_ofNat]
         omega
-      obtain ⟨kEpi, hEpiPc, hEpiSP, hEpiVal, hEpiMem⟩ :=
+      obtain ⟨kEpi, hEpiPc, hEpiSP, hEpiVal, hEpiMem, -⟩ :=
         epilogue_sim L gd ((callee.sp, userOff gd) :: holes)
           (stepN kBod (stepN kPro (step (stepN kMar m)))) s1
           (L.codeBase + BitVec.ofNat 64 (here + 4 * argc) + 4)
           (fnPos f + 4 * prologueSize gd + 4 * csize gd.body)
-          hBodInv hBodPc' hemEpi hraslot hraeven hretbGd hretslotGd (by omega)
+          hBodInv hBodPc' hemEpi hraslot hraeven hretbGd hretslotGd (by omega) (by omega)
+          (by have hv : gd.rets.toList.length = gd.rvc := by simp
+              simp only [epilogueSize] at hfnBnd; omega)
       -- caller-level frame preservation across prologue and body (proved here, before
       -- the heavy StInv hypotheses enter context, to keep `omega`'s scan cheap)
       have hFrPro : FramesPres holes s.sp fd (step (stepN kMar m))
@@ -2514,11 +2615,12 @@ theorem lower_sim_cf
         intro i hi
         have hi' : i < gd.rets.toList.length := by simpa using hi
         rw [Nat.zero_add, hEpiVal i hi', List.getElem_map]
-      obtain ⟨kRet, hRetFin, hRetPc, hRetFr⟩ :=
+      obtain ⟨kRet, hRetFin, hRetPc, hRetFr, -⟩ :=
         run_retStoresFrom L fd holes hseg hblob rets.toList (gd.rets.toList.map s1.rget) 0
           (here + 4 * argc + 4) ({s with mem := s1.mem})
           (stepN kEpi (stepN kBod (stepN kPro (step (stepN kMar m)))))
-          hRetInv hEpiPc' hemRet hretB hretSlot hbd_old hnw hlenRet hvalsRet
+          hRetInv hEpiPc' hemRet hretB hretSlot hbd_old hnw hlenRet (by omega)
+          (by have h := hbnd; simp only [csize, retStoresI] at h; omega) hvalsRet
       rw [← hs'] at hRetFin
       -- ==== the composition: total clock and the three conclusion conjuncts ====
       have hK : stepN (kMar + 1 + kPro + kBod + kEpi + kRet) m
