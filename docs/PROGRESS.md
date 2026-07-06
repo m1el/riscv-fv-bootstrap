@@ -26,11 +26,25 @@ green:
   global nodup lifts from (through `compileFun` then the fresh-counter-threaded
   segment `mapM`).
 
-Remaining for a complete `hfn`/`hem`: global label nodup (lift range/nodup through
-`compileFun` + segment `mapM`); split the global flat resolve at each `fnPos g`
-(`layout_flat_append` + `resolve_length`) and feed `compileFun_resolves`; `TabOk`
-from `dposOf`/`fnPosOf`; assemble from `layoutOf`. Then `hdpos`/`halign` + Phase 6
-`prog_sim` (Defs.lean:491, the lone remaining `sorry`).
+**Global label nodup — now DONE** (all `[propext, Quot.sound]`): `compileFun_labels_range`/
+`_nodup`/`_snd`/`_snd_gt` lift the per-`lower` label range/nodup through `compileFun`
+(epilogue label `= c`, body labels `≥ c+1`); `mapSegs`(`_nil`/`_cons`/`_labels`)
+threads the fresh-label counter through the segment `mapM` so the per-function ranges
+`[c_i, c_{i+1})` are disjoint, giving the whole program's label flatMap `Nodup`;
+`layoutItems_lbls_keys`/`layout_lbls_keys` identify the layout's recorded keys with the
+per-segment `labelIds`; `lookup_of_nodup_mem` + the assembled `global_lbls_nodup` /
+`lbls_lookup` conclude that any `(l, p)` in the global label table is looked up to
+exactly `p`. (Mathlib-free gotcha: `beq_self_eq_true`/`List.lookup` on Nat keys pull
+`Classical.choice` via Nat's `LawfulBEq` — use `rw [beq_iff_eq]`.)
+
+Remaining for a complete `hfn`/`hem` (assembly only — the hard machinery is all in
+place): **position-membership** (each function's body + epilogue labels sit in the
+global table at their absolute byte positions, via a `layoutItems` label-position
+lemma threaded through `layout_flat_append`/`layout_fns_append` — feeds `lbls_lookup`
+to discharge `compileFun_resolves`' `hepi`/`hlc`); the **flat resolve split** at each
+`fnPos g` (`layout_flat_append` + `resolve_length`) placing each function's slice;
+`TabOk` from `dposOf`/`fnPosOf`; assemble from `layoutOf`. Then `hdpos`/`halign` +
+Phase 6 `prog_sim` (Defs.lean:491, the lone remaining `sorry`).
 
 ## 2026-07-06 (compile_sim campaign) — Phase 2: `LowerFacts` layer 3 — `lower_resolve` DONE
 
