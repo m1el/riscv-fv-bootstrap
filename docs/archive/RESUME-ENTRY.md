@@ -10,7 +10,7 @@ Plan written 2026-07-06, at commit `9376818`, when `entry_run_sim`
 (`Main.lean:62`, sorry at line 82; all files below are in `lean/LowIR/ProgSim/`
 unless said otherwise) became the ONLY remaining `sorry` of the `compile_sim`
 campaign. Read with
-[RESUME-PROGSIM.md](RESUME-PROGSIM.md) (the campaign handoff) and
+[RESUME-PROGSIM.md](../RESUME-PROGSIM.md) (the campaign handoff) and
 [RESUME-CALL.md](RESUME-CALL.md) (Phase 5 — the `call` case of `lower_sim_cf`
 is the worked template this plan instantiates at the top level). Line numbers
 refer to the `9376818` state.

@@ -22,13 +22,28 @@ index is [docs/README.md](../README.md).
   *Archived: campaign complete — `core1_refines` proved in both Lean and Coq.*
 - [RESUME-LOWIR.md](RESUME-LOWIR.md) — LowIR structured-IL handoff + the hex0
   functional proof (`hex0_correct`); proof toolbox and gotcha notes.
-  *Archived: superseded by [RESUME-LOWIR-COMPILER.md](../RESUME-LOWIR-COMPILER.md);
+  *Archived: superseded by [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md);
   the gotchas also live in the memory/gotcha log.*
 - [RESUME-IR-DESIGN-SESSION.md](RESUME-IR-DESIGN-SESSION.md) — resume for the
   session that finished `hex0_correct`, added `call` + cross-call disjointness,
   and worked the IR design arc. *Archived: the design arc concluded — its
   outcomes are recorded as D7/D8 in [LOWIR-DESIGN.md](../LOWIR-DESIGN.md), and
-  the live handoff is [RESUME-LOWIR-COMPILER.md](../RESUME-LOWIR-COMPILER.md).*
+  the live handoff is [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md).*
+- [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) — handoff for the
+  executable LowIR compiler cut: survey findings, `Prog.lean` IR core,
+  memory-locals compilation strategy, differential-testing regime. *Archived:
+  DONE 2026-07-02 and superseded by the verification campaign
+  ([../RESUME-PROGSIM.md](../RESUME-PROGSIM.md)); kept for the design rationale.*
+- [RESUME-CALL.md](RESUME-CALL.md) — Phase 5 detailed plan: the `call` case of
+  `lower_sim_cf` (the fuel IH, the dead-hole `StInv` repair, the flat
+  `hpad`/`hfn`/`halign` hypotheses, the six-segment call-case assembly).
+  *Archived: `call` closed 2026-07-05 and the whole `compile_sim` campaign since
+  landed (`prog_sim` axiom-clean, [../RESUME-PROGSIM.md](../RESUME-PROGSIM.md)).*
+- [RESUME-ENTRY.md](RESUME-ENTRY.md) — Phase 6 detailed plan: `entry_run_sim`,
+  the last campaign `sorry` (the four statement repairs, the `NoHalt`
+  per-step-pc retrofit, the four-segment assembly ledger, the E1–E8 plan).
+  *Archived: executed as written at commit `2a473d0` — `prog_sim` is proven
+  axiom-clean; the reusable NoHalt-retrofit recipe is kept for the record.*
 
 ## Completed plans & status snapshots
 

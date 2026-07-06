@@ -9,7 +9,7 @@ compiled RV64I blob provably computes what the D7/D8 IL says `entry(args)`
 computes. Full `LowIRProgSim` target green; the only remaining `sorry` in the
 tree is the pre-existing, unrelated `Core.lean:372` old-T1 `compile_sim`.
 
-Close-out followed `docs/RESUME-ENTRY.md`, commits E1–E8:
+Close-out followed `docs/archive/RESUME-ENTRY.md`, commits E1–E8:
 
 - **E1–E2 (statement repairs S1–S4 + sanity).** `entry_run_sim`'s statement was
   not provable as written: (S1) the run's `stackLo` param was never tied to
@@ -552,7 +552,7 @@ correspondence — the big volume piece), `hdpos` (blob-size bound), `halign`
 The `call` case of `lower_sim_cf` (the last statement-level `sorry`) is proved.
 `lean/LowIR/ProgSim/CtrlSim.lean` now has **no `sorry`**, and `#print axioms
 lower_sim_cf = [propext, Quot.sound]` (no `sorryAx`, no `Classical.choice`). Plan
-+ design record: [RESUME-CALL.md](RESUME-CALL.md) (W1–W8 all done).
++ design record: [RESUME-CALL.md](archive/RESUME-CALL.md) (W1–W8 all done).
 
 This session closed segs 3–6 of the six-segment call assembly on top of the
 committed segs 1–2:
@@ -713,7 +713,7 @@ Reverse-chronological execution log for the libc-formalization effort (design do
 
 ## 2026-07-02 — D7/D8 compiler cut: Prog IR + executable compiler + differential tests
 
-The [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) mandate, all landed
+The [RESUME-LOWIR-COMPILER.md](archive/RESUME-LOWIR-COMPILER.md) mandate, all landed
 (commits 16b7296, 1be7e63; build target `LowIRCompile`, in `defaultTargets`):
 
 - **`LowIR/Prog.lean`** — the D7/D8 IR, executable: named activation-local

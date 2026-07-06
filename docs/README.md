@@ -27,14 +27,16 @@ indexed by the README.md of its own directory.
 ## Status & handoffs
 
 - [RESUME-PROGSIM.md](RESUME-PROGSIM.md) — **✅ COMPLETE (2026-07-06): `compile_sim` for Prog is proven** (`prog_sim` axiom-clean `[propext, Quot.sound]`); design record for the campaign: (compiler correctness for the D7/D8 IR): the address-divergence obstacle and the P1 frame-padding-oracle decision, the simulation relation and theorem statements, the footprint side-condition design, six proof phases with risk/size estimates, file/build plan, the vertical-slice go/no-go checkpoint, and the SSA→Prog composability notes (§7.6, on the `iterWhile` semantics).
-- [RESUME-ENTRY.md](RESUME-ENTRY.md) — **Phase 6 detailed plan: `entry_run_sim`, the last campaign `sorry`** (closing `prog_sim`): the four statement repairs (stackLo tie, the missing `MemAccOff` footprint hypothesis, entry arity, `BranchOk`), the `hne`/`NoHalt` per-step-pc retrofit design (the one lemma-conclusion surgery still needed, C3-`FramesPres`-shaped), the four-segment assembly ledger with per-hypothesis sources, and the commit-ordered E1–E8 work plan.
-- [RESUME-CALL.md](RESUME-CALL.md) — **Phase 5 detailed plan: the `call` case of `lower_sim_cf`** (the last statement-level `sorry`): why the fuel IH is the evaluator theorem applied to the callee body, the dead-hole `StInv` repair (free-stack privatization), the `FramesPres` conclusion conjunct, the new flat hypotheses (`hpad`/`hfn`/`halign`), the prologue/epilogue/marshalling lemma atoms, the six-segment call-case assembly, and the commit-ordered work plan.
 - [RESUME-SSA-HEX0.md](RESUME-SSA-HEX0.md) — the hex0-on-LowIRSSA campaign (**COMPLETE**, incl. the §8 rebind-in-env `while` rework): the args-tuple loop invariant, the syntactic frame theorem replacing `Regs`/`Pres`, what imports verbatim from the Ctrl proof, the per-section size-comparison table against `CtrlHex0Proof.lean` (the second deliverable), and the §8 loop-arg redesign record (`iterWhile` semantics + measured outcome).
-- [RESUME-LOWIR-COMPILER.md](RESUME-LOWIR-COMPILER.md) — handoff for the executable LowIR compiler cut (**DONE 2026-07-02**; kept for the design rationale): survey findings, Prog.lean IR core, memory-locals compilation strategy, differential-testing regime.
 
-(Handoffs for completed campaigns — hex0/hex1 status, task-#7 cross-check, the
-LowIR structured-IL effort, the IR design session, and the original project
-context — are in [archive/](archive/README.md).)
+The `compile_sim` campaign is fully closed (`prog_sim` axiom-clean). Its
+per-phase design records — the Phase 5 `call` case ([archive/RESUME-CALL.md](archive/RESUME-CALL.md)),
+the Phase 6 `entry_run_sim` close-out ([archive/RESUME-ENTRY.md](archive/RESUME-ENTRY.md)),
+and the executable-compiler cut ([archive/RESUME-LOWIR-COMPILER.md](archive/RESUME-LOWIR-COMPILER.md))
+— are now in [archive/](archive/README.md), alongside the completed
+hex0/hex1/cross-check and IR-design handoffs. The live frontier (Prog frame
+theorem → hex0 at the Prog altitude → SSA→Prog lowering → borrow checker) is
+tracked in [PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md).
 
 ## Experiments
 

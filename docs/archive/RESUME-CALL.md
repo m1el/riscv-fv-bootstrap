@@ -1,16 +1,19 @@
 # RESUME-CALL — Phase 5: the `call` case of `lower_sim_cf`
 
-> **✅ COMPLETE (2026-07-05).** The `call` case is closed — `lower_sim_cf` has
-> **no statement-level `sorry`** and is **axiom-clean**: `#print axioms
-> lower_sim_cf = [propext, Quot.sound]`. All of W1–W8 done (see §5). What remains
-> of the campaign: Phases 1/2 (encode/decode + AsmFacts discharging the flat
-> layout hypotheses `hdat`/`hdbase`/`hdpos`/`hpad`/`hfn`/`halign`/`hstackLo`) and
-> Phase 6 (`prog_sim`, the lone remaining `sorry` in `Defs.lean`). This doc is now
-> a design record; the sections below describe the plan as executed.
+> **✅ COMPLETE (2026-07-05); campaign since fully closed.** The `call` case is
+> closed — `lower_sim_cf` has **no statement-level `sorry`** and is
+> **axiom-clean**: `#print axioms lower_sim_cf = [propext, Quot.sound]`. All of
+> W1–W8 done (see §5). The rest of the `compile_sim` campaign is now also
+> done: Phases 1/2 (encode/decode + AsmFacts layout hypotheses) and Phase 6
+> (`entry_run_sim`) landed at commit `2a473d0`, so `#print axioms
+> LowIR.ProgSim.prog_sim = [propext, Quot.sound]` (see
+> [../RESUME-PROGSIM.md](../RESUME-PROGSIM.md) and
+> [RESUME-ENTRY.md](RESUME-ENTRY.md)). This doc is an archived design record;
+> the sections below describe the Phase-5 plan as executed.
 
 Plan written 2026-07-04, when `call` became the ONLY remaining statement-level
 `sorry` (`CtrlSim.lean:886`, in `lean/LowIR/ProgSim/`). Read with
-[RESUME-PROGSIM.md](RESUME-PROGSIM.md) (the campaign handoff — §2 P1, §4
+[RESUME-PROGSIM.md](../RESUME-PROGSIM.md) (the campaign handoff — §2 P1, §4
 Phase 5 sketch, §6 discipline); this doc supersedes that Phase-5 sketch with a
 worked design. Everything below is grounded in the code as of commit `5a88ef2`;
 line numbers refer to that state.

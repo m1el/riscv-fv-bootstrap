@@ -9,7 +9,7 @@ Plan written 2026-07-02, immediately after the executable cut landed. Read with
 > `#print axioms LowIR.ProgSim.prog_sim = [propext, Quot.sound]` — the compiled
 > RV64I blob provably computes what the D7/D8 IL says `entry(args)` computes.
 > The final Phase-6 close-out (`entry_run_sim`) is in
-> [RESUME-ENTRY.md](RESUME-ENTRY.md); see PROGRESS.md 2026-07-06 for the wrap-up.
+> [RESUME-ENTRY.md](archive/RESUME-ENTRY.md); see PROGRESS.md 2026-07-06 for the wrap-up.
 > The material below is the original campaign plan, kept for reference.
 
 **Status (updated 2026-07-04).** Phase 0 done, relation validated, and the
@@ -208,7 +208,7 @@ Concretely (older entries retained below):
      `run_synth`/`run_cref` are the axiom-clean simulators; the flat `hdat`/`hdbase`/
      `hdpos` hypotheses are the Phase-2 layout obligations.
   3. **`lower_sim_cf` `call` (Phase 5) is the last statement-level `sorry`.**
-     Detailed worked plan (2026-07-04): [RESUME-CALL.md](RESUME-CALL.md) — the
+     Detailed worked plan (2026-07-04): [RESUME-CALL.md](archive/RESUME-CALL.md) — the
      fuel-IH-on-the-callee-body design, the dead-hole `StInv` repair, and the
      commit-ordered step list. Start there. Then
      Phases 1/2 (encode/decode; AsmFacts —

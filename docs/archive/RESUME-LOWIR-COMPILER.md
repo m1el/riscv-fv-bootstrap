@@ -6,7 +6,7 @@ Tasks 2/4/5 implemented and green (commits 16b7296 `Prog.lean`, 1be7e63
 `Compile.lean`+`CompileTests.lean`): the D7/D8 IR, the memory-locals compiler
 to RV64I bytes, and 16 `native_decide` differential theorems. Built by default
 via the `LowIRCompile` lib target (`lake build`; rooted at
-`LowIR.CompileTests`). Execution details in [PROGRESS.md](PROGRESS.md)
+`LowIR.CompileTests`). Execution details in [PROGRESS.md](../PROGRESS.md)
 (2026-07-02 entry) — including the halt-address collision the differential
 tests caught. The `encode`-coverage eyeball check passed (all 16 constructors,
 `LowIR.lean:238`). Remaining (deliberately out of this cut): compiler
@@ -25,7 +25,7 @@ the full plan and every finding needed to resume cold.
 
 ## Context: what this session decided (all committed)
 
-- [LOWIR-DESIGN.md](LOWIR-DESIGN.md) gained: **D7** (activation-local calls,
+- [LOWIR-DESIGN.md](../LOWIR-DESIGN.md) gained: **D7** (activation-local calls,
   `Env : Name → FunDef`, arity-indexed `Vect` args/rets, fresh zero-init register
   file + definite-assignment check, NOT SSA), **D8** (per-function `frameSize`,
   semantic program-unwritable `sp : Word` in `St`, frame base bound to a
@@ -35,8 +35,8 @@ the full plan and every finding needed to resume cold.
   (`annot`), **Ext. 10** (expression trees, later), **Ext. 11**
   (unwind-outcomes + stackless coroutines, later), Ext. 1 bumped (`ld/sd`
   compiler-forced), priorities: **Ext. 8 → D7+D8 impl → Ext. 1**.
-- [DESIGN-THESES.md](DESIGN-THESES.md): ten theses from the third-party review
-  series ([docs/third-party/](third-party/), 12 reviews) — the design rationale
+- [DESIGN-THESES.md](../DESIGN-THESES.md): ten theses from the third-party review
+  series ([docs/third-party/](../third-party/), 12 reviews) — the design rationale
   lives there.
 
 ## Survey findings (task 1 — done, one check left)
@@ -178,7 +178,7 @@ policy C5 still open, test it anyway executably); stack overflow behavior.
 3. Control flow (ife/while/block/brk/cont/ret) → tests → **commit**.
 4. Calls + frames → tests → **commit**.
 5. Wire into build (globs or root import — decide), update
-   [PROGRESS.md](PROGRESS.md) (reverse-chron log) and this doc's status.
+   [PROGRESS.md](../PROGRESS.md) (reverse-chron log) and this doc's status.
 
 Known Lean gotchas that will bite (from memory/gotcha log): `lake build`
 root-module trap (above); avoid `simp [exec] at h` with IH in context
