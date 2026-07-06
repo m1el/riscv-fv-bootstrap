@@ -1,5 +1,31 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 2: the entry-stub `Emitted` (`hem`, `stub_emitted`)
+
+The `hem` half of the Phase-2 payload is now in hand, mirroring `fn_hfn` but for
+the entry stub. The resolved stub `[jal ra, entry; jal x0, 0]` is `Emitted L 0`
+— the length-2 prefix of `L.instrs`. `prog_sim` will step the first to enter
+`entry` (ra := codeBase+4) and spin on the second at the halt PC `codeBase + 4`.
+All axiom-clean (`[propext, Quot.sound]`), full `lake build` green (still exactly
+the 3 known sorries). In `LayoutFacts.lean`:
+- **`compileProgT_entry`** — the guard's 3rd clause: `entry ∈ P.env` (⇒ `entry ≠
+  ""` via the tightened `wfProgram`, routed through `fn_guard_facts`).
+- **`mapM_single_nonlabel`** — resolving a single non-label positioned item: its
+  layout is `[(pos, si)]`, so `mapM` returns `[v]` with `resolveOne (pos,si) =
+  some v`.
+- **`stub_emitted`** (payoff) — peels the stub off `progLayout.1`
+  (`mapM_append_inv`), splits its two items (`resolve_flatten_append`), resolves
+  `.ins (jal0 0) → [jal0 0]` (rfl) and `.callf entry → [jal RA (ofInt 21 (fnPosOf
+  L entry))]` (fn-table lookup tied to `fnPosOf` via `lookup_filter_ne` + the
+  `L.fnTab` filter; the resolve's own success discharges the 21-bit range check),
+  then `Emitted_of_slice` at position 0.
+
+REMAINING for Phase 6 `prog_sim` (Defs.lean:471, the lone campaign `sorry`): the
+`hdpos`/blob-size bound + `halign` (codeBase 4-alignment) plumbing, then the
+summit assembly — entry-stub step (via `stub_emitted`) + `call_sim` into `entry`
++ body via `lower_sim_cf` (with `hfn` from `fn_hfn`) + halt-pad bridge to
+`runFuel`.
+
 ## 2026-07-06 (compile_sim campaign) — Phase 2: the FULL per-function `hfn` bundle (`fn_hfn`)
 
 The complete six-conjunct `hfn` fact that `lower_sim_cf` (CtrlSim.lean:1479) and
