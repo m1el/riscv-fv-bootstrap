@@ -1,5 +1,30 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 2: `hblob` wrap-freedom plumbing (`SimPre.blobBelowStack`)
+
+`hblob` (`codeBase.toNat + blobLen ≤ 2^64`, the last placement obligation of
+`lower_sim_cf`) is now discharged from a single geometric `SimPre` primitive. All
+axiom-clean (`[propext, Quot.sound]`), full `lake build` green (still the 3 known
+sorries; SimPre is used only by prog_sim, so nothing constructs it).
+
+- **`SimPre`** — the `blobStackDisjoint` field is replaced by the stronger
+  `blobBelowStack : L.codeBase.toNat + L.blobLen ≤ stackLo.toNat` (the loader
+  places code+data at low addresses, below the stack).
+- **`SimPre.blobStackDisjoint`** (now a THEOREM, same name/shape — callers'
+  `hpre.blobStackDisjoint` still resolve): anything in the blob is strictly below
+  `stackLo`, hence outside `[stackLo, sp0)`.
+- **`SimPre.blobWrap`** = **`hblob`**: the blob sits below `stackLo`, itself
+  `< 2^64` (`BitVec.isLt`), so `codeBase.toNat + blobLen ≤ 2^64`.
+
+`blobBelowStack` ALSO yields `hbd`'s blob-below-stack disjunct (with
+`stackNonEmpty`). Validated end-to-end (scratch): `SimPre L + layoutOf` discharges
+`halign ∧ hdpos ∧ hcode ∧ hblob ∧ disjointness ∧ hbd-left` together. **Every
+flat/placement input `lower_sim_cf` takes is now discharged from the real layout
++ SimPre** (`hdat`/`hdbase`/`hdpos`/`hpad`/`halign`/`hstackLo`/`hfn`/`hblob`/`hbd`)
+plus `hem`; the remaining work is the Phase 6 `prog_sim` summit assembly
+(entry-stub step + `call_sim` into `entry` + body via `lower_sim_cf` +
+halt-pad bridge to `runFuel`).
+
 ## 2026-07-06 (compile_sim campaign) — Phase 2: `hdpos`/`halign` plumbing (blob bound ⇒ dpos, SimPre)
 
 The last flat compile-time obligations of `lower_sim_cf` (`hdpos`, `halign`, and
