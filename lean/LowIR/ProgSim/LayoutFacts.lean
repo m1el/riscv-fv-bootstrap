@@ -244,4 +244,176 @@ theorem compileFun_resolves (dat : Data) (P : LowIR.Prog.Program) (dpos fnPos : 
     rw [hepiR, Option.map_some, Option.some.injEq] at h; exact h
   rw [hf3, hf2, hf1, hpro, hbody, hlabF, hepiF, List.append_nil]
 
+/-! ## `lower`'s label ids: fresh-label range + nodup (global-nodup foundation). -/
+
+/-- The label ids marked in a symbolic stream (the `.label` constructors). -/
+def labelIds : List SymInstr → List Nat
+  | [] => []
+  | SymInstr.label l :: rest => l :: labelIds rest
+  | _ :: rest => labelIds rest
+
+@[simp] theorem labelIds_nil : labelIds [] = [] := rfl
+@[simp] theorem labelIds_label (l : Nat) (rest) :
+    labelIds (SymInstr.label l :: rest) = l :: labelIds rest := rfl
+
+theorem labelIds_append : ∀ (a b : List SymInstr), labelIds (a ++ b) = labelIds a ++ labelIds b := by
+  intro a; induction a with
+  | nil => intro b; rfl
+  | cons si rest ih => intro b; cases si <;> simp [labelIds, ih]
+
+@[simp] theorem labelIds_ins (i) (rest) : labelIds (SymInstr.ins i :: rest) = labelIds rest := rfl
+@[simp] theorem labelIds_jmp (l) (rest) : labelIds (SymInstr.jmp l :: rest) = labelIds rest := rfl
+@[simp] theorem labelIds_br (c a b l) (rest) : labelIds (SymInstr.br c a b l :: rest) = labelIds rest := rfl
+@[simp] theorem labelIds_cref (d) (rest) : labelIds (SymInstr.cref d :: rest) = labelIds rest := rfl
+
+theorem labelIds_of_all_ins : ∀ (sym : List SymInstr), sym.all (fun s => match s with | SymInstr.label _ => false | _ => true) = true → labelIds sym = [] := by
+  intro sym; induction sym with
+  | nil => intro _; rfl
+  | cons si rest ih => intro h; simp only [List.all_cons, Bool.and_eq_true] at h
+                       cases si <;> simp_all [labelIds]
+
+@[simp] theorem labelIds_loadSlot (r t : Reg) : labelIds (loadSlot r t) = [] := by
+  unfold loadSlot; by_cases h : r = 0 <;> simp [h, labelIds]
+@[simp] theorem labelIds_storeSlot (r t : Reg) : labelIds (storeSlot r t) = [] := by
+  unfold storeSlot; by_cases h : r = 0 <;> simp [h, labelIds]
+@[simp] theorem labelIds_synthConst (t : Reg) (v : Int) : labelIds (synthConst t v) = [] := by
+  simp [synthConst, labelIds]
+
+@[simp] theorem labelIds_flatMap {α} (f : α → List SymInstr) (xs : List α) :
+    labelIds (xs.flatMap f) = xs.flatMap (fun x => labelIds (f x)) := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih => rw [List.flatMap_cons, labelIds_append, ih, List.flatMap_cons]
+
+@[simp] theorem flatMap_const_nil {α β} (xs : List α) : xs.flatMap (fun _ => ([] : List β)) = [] := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih => rw [List.flatMap_cons, ih]; rfl
+
+
+theorem lower_labels_range (dat : Data) : ∀ (stmt : PStmt) (bs cs : List Nat) (epi cnt : Nat),
+    ∀ l ∈ labelIds (lower dat bs cs epi stmt cnt).1,
+      cnt ≤ l ∧ l < (lower dat bs cs epi stmt cnt).2 := by
+  intro stmt
+  induction stmt with
+  | seq a b iha ihb =>
+    intro bs cs epi cnt l hl
+    rw [lower_seq, labelIds_append, List.mem_append] at hl
+    have hm := lower_snd_ge dat a bs cs epi cnt
+    have hm2 := lower_snd_ge dat b bs cs epi (lower dat bs cs epi a cnt).2
+    show cnt ≤ l ∧ l < (lower dat bs cs epi b (lower dat bs cs epi a cnt).2).2
+    rcases hl with h | h
+    · have := iha bs cs epi cnt l h; exact ⟨by omega, by omega⟩
+    · have := ihb bs cs epi (lower dat bs cs epi a cnt).2 l h; exact ⟨by omega, by omega⟩
+  | block body ih =>
+    intro bs cs epi cnt l hl
+    rw [lower_block, labelIds_append] at hl
+    simp only [List.mem_append, labelIds_label, labelIds_nil, List.mem_singleton,
+      List.mem_cons, List.not_mem_nil, or_false] at hl
+    have hm := lower_snd_ge dat body (cnt :: bs) cs epi (cnt + 1)
+    show cnt ≤ l ∧ l < (lower dat (cnt :: bs) cs epi body (cnt + 1)).2
+    rcases hl with h | h
+    · have := ih (cnt :: bs) cs epi (cnt + 1) l h; exact ⟨by omega, by omega⟩
+    · exact ⟨by omega, by omega⟩
+  | ife c a b t e iht ihe =>
+    intro bs cs epi cnt l hl
+    rw [lower_ife] at hl
+    simp only [labelIds_append, labelIds_loadSlot, labelIds_br, labelIds_jmp, labelIds_label,
+      labelIds_nil, List.nil_append, List.append_assoc, List.mem_append, List.mem_cons,
+      List.mem_singleton, List.not_mem_nil, or_false] at hl
+    have ht := lower_snd_ge dat t bs cs epi (cnt + 2)
+    have he := lower_snd_ge dat e bs cs epi (lower dat bs cs epi t (cnt + 2)).2
+    show cnt ≤ l ∧ l < (lower dat bs cs epi e (lower dat bs cs epi t (cnt + 2)).2).2
+    rcases hl with h | h | h | h
+    · have := ihe bs cs epi (lower dat bs cs epi t (cnt + 2)).2 l h; exact ⟨by omega, by omega⟩
+    · exact ⟨by omega, by omega⟩
+    · have := iht bs cs epi (cnt + 2) l h; exact ⟨by omega, by omega⟩
+    · exact ⟨by omega, by omega⟩
+  | «while» c a b body ih =>
+    intro bs cs epi cnt l hl
+    rw [lower_while] at hl
+    simp only [labelIds_append, labelIds_loadSlot, labelIds_br, labelIds_jmp, labelIds_label,
+      labelIds_nil, List.nil_append, List.append_assoc, List.mem_append, List.mem_cons,
+      List.mem_singleton, List.not_mem_nil, or_false] at hl
+    have hb := lower_snd_ge dat body bs (cnt :: cs) epi (cnt + 3)
+    show cnt ≤ l ∧ l < (lower dat bs (cnt :: cs) epi body (cnt + 3)).2
+    rcases hl with h | h | h | h
+    · exact ⟨by omega, by omega⟩
+    · exact ⟨by omega, by omega⟩
+    · have := ih bs (cnt :: cs) epi (cnt + 3) l h; exact ⟨by omega, by omega⟩
+    · exact ⟨by omega, by omega⟩
+  | _ =>
+    intro bs cs epi cnt l hl
+    revert hl
+    simp only [lower, pure, StateT.pure, bind, StateT.bind, Prod.mk.injEq,
+      labelIds_append, labelIds, labelIds_loadSlot, labelIds_storeSlot, labelIds_synthConst,
+      labelIds_flatMap, flatMap_const_nil, List.append_nil, List.not_mem_nil, false_implies]
+
+
+theorem lower_labels_nodup (dat : Data) : ∀ (stmt : PStmt) (bs cs : List Nat) (epi cnt : Nat),
+    (labelIds (lower dat bs cs epi stmt cnt).1).Nodup := by
+  intro stmt
+  induction stmt with
+  | seq a b iha ihb =>
+    intro bs cs epi cnt
+    rw [lower_seq, labelIds_append, List.nodup_append]
+    refine ⟨iha _ _ _ _, ihb _ _ _ _, ?_⟩
+    intro x hx y hy
+    have h1 := lower_labels_range dat a bs cs epi cnt x hx
+    have h2 := lower_labels_range dat b bs cs epi (lower dat bs cs epi a cnt).2 y hy
+    omega
+  | block body ih =>
+    intro bs cs epi cnt
+    rw [lower_block, labelIds_append, List.nodup_append]
+    refine ⟨ih _ _ _ _, by simp, ?_⟩
+    intro x hx y hy
+    have h1 := lower_labels_range dat body (cnt :: bs) cs epi (cnt + 1) x hx
+    simp only [labelIds_label, labelIds_nil, List.mem_cons, List.not_mem_nil, or_false] at hy
+    omega
+  | ife c a b t e iht ihe =>
+    intro bs cs epi cnt
+    rw [lower_ife]
+    simp only [labelIds_append, labelIds_loadSlot, labelIds_br, labelIds_jmp, labelIds_label,
+      labelIds_nil, List.nil_append, List.append_assoc, List.singleton_append]
+    rw [List.nodup_append]
+    refine ⟨ihe _ _ _ _, ?_, ?_⟩
+    · rw [List.nodup_cons, List.nodup_append]
+      refine ⟨?_, iht _ _ _ _, by simp, ?_⟩
+      · simp only [List.mem_append, List.mem_singleton, not_or]
+        refine ⟨fun hc => ?_, fun hc => by omega⟩
+        have := lower_labels_range dat t bs cs epi (cnt + 2) cnt hc; omega
+      · intro x hx y hy
+        have := lower_labels_range dat t bs cs epi (cnt + 2) x hx
+        simp only [List.mem_singleton] at hy; omega
+    · intro x hx y hy
+      have hxr := lower_labels_range dat e bs cs epi (lower dat bs cs epi t (cnt + 2)).2 x hx
+      have hst := lower_snd_ge dat t bs cs epi (cnt + 2)
+      simp only [List.mem_cons, List.mem_append, List.mem_singleton, List.not_mem_nil, or_false] at hy
+      rcases hy with h | h | h
+      · omega
+      · have := lower_labels_range dat t bs cs epi (cnt + 2) y h; omega
+      · omega
+  | «while» c a b body ih =>
+    intro bs cs epi cnt
+    rw [lower_while]
+    simp only [labelIds_append, labelIds_loadSlot, labelIds_br, labelIds_jmp, labelIds_label,
+      labelIds_nil, List.nil_append, List.append_assoc, List.singleton_append]
+    rw [List.nodup_cons, List.nodup_cons, List.nodup_append]
+    have hb := lower_snd_ge dat body bs (cnt :: cs) epi (cnt + 3)
+    refine ⟨?_, ?_, ih _ _ _ _, by simp, ?_⟩
+    · simp only [List.mem_cons, List.mem_append, List.mem_singleton, List.not_mem_nil, or_false, not_or]
+      refine ⟨by omega, fun hc => ?_, fun hc => by omega⟩
+      have := lower_labels_range dat body bs (cnt :: cs) epi (cnt + 3) cnt hc; omega
+    · simp only [List.mem_append, List.mem_singleton, not_or]
+      refine ⟨fun hc => ?_, fun hc => by omega⟩
+      have := lower_labels_range dat body bs (cnt :: cs) epi (cnt + 3) (cnt + 1) hc; omega
+    · intro x hx y hy
+      have := lower_labels_range dat body bs (cnt :: cs) epi (cnt + 3) x hx
+      simp only [List.mem_singleton] at hy; omega
+  | _ =>
+    intro bs cs epi cnt
+    simp only [lower, pure, StateT.pure, bind, StateT.bind]
+    simp [labelIds_append, labelIds, labelIds_loadSlot, labelIds_storeSlot, labelIds_synthConst]
+
+
 end LowIR.ProgSim.LayoutFacts
