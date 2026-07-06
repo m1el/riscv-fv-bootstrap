@@ -550,4 +550,21 @@ theorem lookup_of_nodup_mem (l : List (Nat × Nat)) (a b : Nat)
         · rw [beq_iff_eq] at hb; exact absurd hb (by
             rintro rfl; exact hnd.1 (List.mem_map.mpr ⟨(a, b), h, rfl⟩))
       rw [hak]; exact ih hnd.2 h
+/-! ## Assembled: global lbls has nodup keys ⇒ membership determines lookup. -/
+
+theorem global_lbls_nodup (dat : Data) (env : List (Name × FunDef)) (stub : List SymInstr)
+    (hstub : labelIds stub = []) :
+    ((layout (("", stub) :: (mapSegs dat env 0).1) 0).2.1.map Prod.fst).Nodup := by
+  rw [layout_lbls_keys, List.flatMap_cons]
+  show (labelIds stub ++ _).Nodup
+  rw [hstub, List.nil_append]
+  exact (mapSegs_labels dat env 0).1
+
+theorem lbls_lookup (dat : Data) (env : List (Name × FunDef)) (stub : List SymInstr)
+    (hstub : labelIds stub = []) (l p : Nat)
+    (hmem : (l, p) ∈ (layout (("", stub) :: (mapSegs dat env 0).1) 0).2.1) :
+    (layout (("", stub) :: (mapSegs dat env 0).1) 0).2.1.lookup l = some p :=
+  lookup_of_nodup_mem _ l p (global_lbls_nodup dat env stub hstub) hmem
+
+
 end LowIR.ProgSim.LayoutFacts
