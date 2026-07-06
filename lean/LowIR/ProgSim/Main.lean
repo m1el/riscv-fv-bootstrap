@@ -135,4 +135,35 @@ theorem prog_sim
              fun j hj => by rw [hbridge]; exact hRets j hj,
              fun a h1 h2 => by rw [hbridge]; exact hMem a h1 h2⟩
 
+/-! ## E2 — statement sanity (RESUME-ENTRY §6).
+
+    The four repaired hypotheses are inhabitable on concrete data — a cheap
+    catcher for a mis-stated (unsatisfiable / self-contradictory) statement, since
+    nothing else constructs `SimPre`/`haccess` yet. -/
+section Sanity
+open LowIR.Prog (sub3)
+
+/-- `haccess`'s `MemAccOff` obligation reduces and is trivially dischargeable for a
+    body with no memory ops (`sub3 = (a+b)−c`), at any fuel/holes — confirms the
+    footprint hypothesis has the right shape and unfolds as intended. -/
+example (L : Layout) (holes : List Hole) (P : Program) (dbase : Name → Option Word)
+    (pad : Name → Nat) (slo : Word) (fuel : Nat) (st0 : St) :
+    MemAccOff L holes P dbase pad slo fuel sub3.body st0 := by
+  cases fuel with
+  | zero => trivial
+  | succ f => simp [sub3, MemAccOff]
+
+/-- `SimPre` is inhabitable: a realistic high code base with a small blob and the
+    stack far above (no contradiction among `blobBelowStack`/`stackNonEmpty`/the
+    alignment fields). -/
+example :
+    SimPre { codeBase := 0x80000000, instrs := [], fnTab := [], segStart := 8,
+             data := [], stackLo := 0x80100000 } 0x80100000 0x80101000 :=
+  ⟨by decide, by decide, by decide, by decide, by decide⟩
+
+-- The entry layout exists at the same realistic base.
+#guard (layoutOf [("sub3", sub3)] "sub3" 0x80000000 0x80100000).isSome
+
+end Sanity
+
 end LowIR.ProgSim
