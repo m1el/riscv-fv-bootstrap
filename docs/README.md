@@ -46,6 +46,7 @@ tracked in [PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md).
 ## Analyses
 
 - [PROOF-COMPLEXITY.md](PROOF-COMPLEXITY.md) — measured complexity/redundancy assessment of the Lean proof corpus (2026-07-04) and the resulting priority ladder: close `compile_sim` → one proof per program at the Prog altitude (frame theorem first) → SSA→Prog lowering → borrow checker.
+- [BUILD-PROFILE.md](BUILD-PROFILE.md) — where the proof compile spends its time (2026-07-06): ~149 s clean build, critical-path/dependency bound (only ~4.3× of 64 cores), the Hex1 refinement chain as ~42% of CPU, the `decide`/`native_decide`/`omega` cost centers, and the optimization levers (split `Refine.lean`, thin the `decide` swarm).
 - [LEAN-VS-COQ.md](LEAN-VS-COQ.md) — implementation-difficulty comparison of the Lean vs Coq proofs, measured from the recorded [agent sessions](../sessions/README.md).
 - [proof-map/](proof-map/README.md) — interactive dependency map of the 328 theorems beneath `prog_sim` (open `proof-map/progsim-map.html` in a browser): the 26 load-bearing lemmas as a top-down graph, each box holding its private support lemmas as dots; includes the Lean-extraction + layout + render pipeline.
 
