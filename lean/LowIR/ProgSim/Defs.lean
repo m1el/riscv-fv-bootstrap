@@ -439,15 +439,38 @@ theorem FramesPres_trans (holes : List Hole) (sp : Word) (fd : FunDef) (m m' m''
     FramesPres holes sp fd m m'' := fun a hh hw => by rw [h2 a hh hw, h1 a hh hw]
 
 /-- The top-level separation bundle for `prog_sim`: the entry stack `[stackLo,
-    sp0)` is well-formed and disjoint from the code+data blob, and `sp0` is
-    8-aligned. (The per-function stack budget is SUBSUMED by P1's overflow
-    check, so it is NOT a hypothesis here — that is the point of §2.) -/
+    sp0)` is well-formed and sits ABOVE the code+data blob, `sp0` is 8-aligned,
+    and the blob is 4-aligned and fits in 1 MiB. `blobBelowStack` is the single
+    geometric primitive — the loader places the blob at low addresses below the
+    stack — from which the blob/stack disjointness (`blobStackDisjoint`) and the
+    wrap-freedom `hblob` (`blobWrap`) both derive. (The per-function stack budget
+    is SUBSUMED by P1's overflow check, so it is NOT a hypothesis here.) -/
 structure SimPre (L : Layout) (stackLo sp0 : Word) : Prop where
   spAligned    : sp0.toNat % 8 = 0
   stackNonEmpty : stackLo.toNat ≤ sp0.toNat
-  blobStackDisjoint : ∀ a, memRange a L.codeBase L.blobLen → ¬ MachStack stackLo sp0 a
+  blobBelowStack : L.codeBase.toNat + L.blobLen ≤ stackLo.toNat  -- code+data placed below the stack
   codeAligned  : L.codeBase.toNat % 4 = 0       -- `halign`: the loader places code 4-aligned
   blobFits     : L.blobLen < 2 ^ 20             -- the code+data blob fits in 1 MiB (⇒ `hdpos`, `hcode`)
+
+/-- The blob and the entry stack don't overlap — anything in the blob is strictly
+    below `stackLo`, so it is outside `[stackLo, sp0)`. (The old `SimPre` field,
+    now derived from `blobBelowStack`; used by `prog_sim`'s memory agreement.) -/
+theorem SimPre.blobStackDisjoint {L : Layout} {stackLo sp0 : Word}
+    (h : SimPre L stackLo sp0) (a : Word) (ha : memRange a L.codeBase L.blobLen) :
+    ¬ MachStack stackLo sp0 a := by
+  intro hms
+  unfold memRange at ha
+  unfold MachStack memRange at hms
+  have hbb := h.blobBelowStack
+  omega
+
+/-- **`hblob`** — the blob is wrap-free (`codeBase.toNat + blobLen ≤ 2^64`): it
+    sits below `stackLo`, itself a 64-bit address (`< 2^64`). -/
+theorem SimPre.blobWrap {L : Layout} {stackLo sp0 : Word} (h : SimPre L stackLo sp0) :
+    L.codeBase.toNat + L.blobLen ≤ 2 ^ 64 := by
+  have hbb := h.blobBelowStack
+  have := stackLo.isLt
+  omega
 
 /-- The padding oracle `compile_sim` instantiates: `userOff` of each function.
     With this, IL `sp` ≡ machine `x2` at every depth (validated in
