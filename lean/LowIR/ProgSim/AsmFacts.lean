@@ -263,6 +263,30 @@ theorem dbaseOf_dposOf (L : Layout) (d : Name) (a : Word)
     simp only [Option.map_some, Option.getD_some]
     rw [← h, BitVec.add_assoc, BitVec.ofNat_add_ofNat]
 
+/-- Each data object's byte offset lies within the blob: `dposOf L d ≤ blobLen`. -/
+theorem dposOf_le_blobLen (L : Layout) (d : Name) : dposOf L d ≤ L.blobLen := by
+  unfold dposOf Layout.blobLen
+  cases hlk : List.lookup d (dataOffsetsFrom L.segStart L.data) with
+  | none => simp
+  | some off =>
+      simp only [hlk, Option.getD_some]
+      exact LowIR.Prog.dataOffsetsFrom_off_le L.segStart L.data hlk
+
+/-- **`hdpos`** from the blob-size bound: every data offset is `< 2²⁰`. -/
+theorem dposOf_lt (L : Layout) (hblob : L.blobLen < 2 ^ 20) (d : Name) :
+    dposOf L d < 2 ^ 20 :=
+  Nat.lt_of_le_of_lt (dposOf_le_blobLen L d) hblob
+
+/-- The code bytes fit within the blob: `4·|instrs| ≤ blobLen` (given `hseg`). -/
+theorem codeLen_le_blobLen (L : Layout) (hseg : 4 * L.instrs.length ≤ L.segStart) :
+    4 * L.instrs.length ≤ L.blobLen := by
+  unfold Layout.blobLen; omega
+
+/-- **`hcode`** (the `fn_hfn`/`hbnd` blob bound) from the blob-size bound. -/
+theorem codeLen_lt (L : Layout) (hseg : 4 * L.instrs.length ≤ L.segStart)
+    (hblob : L.blobLen < 2 ^ 20) : 4 * L.instrs.length < 2 ^ 20 :=
+  Nat.lt_of_le_of_lt (codeLen_le_blobLen L hseg) hblob
+
 /-! ## §6 `hfn`/`hem` foundation — the prologue/epilogue resolve correspondence.
 
     `hfn`/`hem` state that the compiler's RESOLVED stream (`compileProgT`'s output,

@@ -329,6 +329,22 @@ theorem dataOffsetsFrom_le {n : Name} :
       · exact Nat.le_trans (by omega)
           (dataOffsetsFrom_le (start + pad8 bs'.length) rest h)
 
+/-- Every object's offset lies within the data segment: `off ≤ start + |segment|`
+    (the ProgSim `hdpos` blob bound: with `start = segStart`, `off ≤ blobLen`). -/
+theorem dataOffsetsFrom_off_le {n : Name} :
+    ∀ (start : Nat) (data : Data) {off : Nat},
+      List.lookup n (dataOffsetsFrom start data) = some off →
+      off ≤ start + (dataSegment data).length
+  | _, [], _, h => by simp [dataOffsetsFrom] at h
+  | start, (n', bs') :: rest, off, h => by
+      simp only [dataOffsetsFrom, List.lookup] at h
+      simp only [dataSegment, List.length_append, List.length_replicate]
+      split at h
+      · cases h; omega
+      · have ih := dataOffsetsFrom_off_le (start + pad8 bs'.length) rest h
+        have := pad8_ge bs'.length
+        omega
+
 /-- Shifting the start shifts every offset — the compiler's table
     (`dataOffsetsFrom segStart`) IS the harness's (`dataOffsetsFrom 0`)
     translated by `segStart`; no separate convention. -/

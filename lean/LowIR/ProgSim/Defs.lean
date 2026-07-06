@@ -446,6 +446,8 @@ structure SimPre (L : Layout) (stackLo sp0 : Word) : Prop where
   spAligned    : sp0.toNat % 8 = 0
   stackNonEmpty : stackLo.toNat ≤ sp0.toNat
   blobStackDisjoint : ∀ a, memRange a L.codeBase L.blobLen → ¬ MachStack stackLo sp0 a
+  codeAligned  : L.codeBase.toNat % 4 = 0       -- `halign`: the loader places code 4-aligned
+  blobFits     : L.blobLen < 2 ^ 20             -- the code+data blob fits in 1 MiB (⇒ `hdpos`, `hcode`)
 
 /-- The padding oracle `compile_sim` instantiates: `userOff` of each function.
     With this, IL `sp` ≡ machine `x2` at every depth (validated in
