@@ -42,6 +42,43 @@ theorem stepN_add (a b : Nat) (m : State) : stepN (a + b) m = stepN b (stepN a m
   | zero => rw [Nat.zero_add]; rfl
   | succ a ih => rw [show a + 1 + b = (a + b) + 1 from by omega, stepN_succ, stepN_succ, ih]
 
+/-! ## `NoHalt` — the per-step "pc avoids the halt pad" clause (RESUME-ENTRY §3).
+
+    The halt pad `jal x0,0` sits at `codeBase+4`; it is reached ONLY by `entry`'s
+    final `jalr` at the very end of the run. `NoHalt L k m` records that the
+    first `k` steps from `m` never land there — the fact `entry_run_sim` feeds
+    `runFuel_eq_stepN`. Every `∃ k`-shaped simulation lemma additionally
+    concludes `NoHalt` over its own steps (endpoint excluded — strict `j < k`),
+    and compound lemmas chain sub-conclusions with `NoHalt_chain`. -/
+def NoHalt (L : Layout) (k : Nat) (m : State) : Prop :=
+  ∀ j, j < k → (stepN j m).pc ≠ L.codeBase + 4
+
+/-- A code position `q ≥ 8` (below `2²⁰`) is never the halt pad (`codeBase+4`):
+    cancel `codeBase`, then `q ≠ 4`. (`bv_omega` does the cancel + range reasoning.) -/
+theorem pc_ne_halt (L : Layout) (q : Nat) (h8 : 8 ≤ q) (hlt : q < 2 ^ 20) :
+    L.codeBase + BitVec.ofNat 64 q ≠ L.codeBase + 4 := by
+  intro h; bv_omega
+
+/-- Step 0 of the stub: `pc = codeBase` (`= codeBase + ofNat 0`) is not the halt
+    pad either (`0 ≠ 4`). -/
+theorem codeBase_ne_halt (L : Layout) : L.codeBase ≠ L.codeBase + 4 := by
+  intro h; bv_omega
+
+/-- `NoHalt` composes: `k` safe steps from `m`, the boundary pc at step `k` safe,
+    then `k'` safe steps from `stepN k m`, give `k + k'` safe steps from `m`. -/
+theorem NoHalt_chain (L : Layout) (k k' : Nat) (m : State)
+    (h1 : NoHalt L k m)
+    (hb : (stepN k m).pc ≠ L.codeBase + 4)
+    (h2 : NoHalt L k' (stepN k m)) :
+    NoHalt L (k + k') m := by
+  intro j hj
+  rcases Nat.lt_or_ge j k with hjk | hjk
+  · exact h1 j hjk
+  · rw [show j = k + (j - k) from by omega, stepN_add]
+    rcases Nat.eq_zero_or_pos (j - k) with h0 | hpos
+    · rw [h0, stepN_zero]; exact hb
+    · exact h2 (j - k) (by omega)
+
 /-! ## The resolved straight-line lowering `emit`. -/
 
 /-- Resolved `loadSlot`: physical reg `t := IL reg r` (r=0 ⇒ materialise 0). -/

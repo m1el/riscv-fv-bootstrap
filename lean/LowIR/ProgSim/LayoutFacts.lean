@@ -1260,7 +1260,8 @@ theorem fn_hfn {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
       ∧ BranchOk gd.body
       ∧ totalFrame gd ≤ 2000
       ∧ gd.frameSize % 8 = 0
-      ∧ fnPosOf L g % 4 = 0 := by
+      ∧ fnPosOf L g % 4 = 0
+      ∧ 8 ≤ fnPosOf L g := by
   obtain ⟨pre, suf, hE, hnp⟩ := lookup_split g P.env gd hlk
   have hmem : (g, gd) ∈ P.env := by rw [hE]; simp
   obtain ⟨hwf, hg, htf, hfs⟩ := fn_guard_facts hc hmem
@@ -1289,7 +1290,16 @@ theorem fn_hfn {P : Program} {entry : Name} {cb slo : Word} {L : Layout}
   -- preF + rsg fit inside L.instrs
   have hfit : preF.flatten.length + rsg.flatten.length ≤ L.instrs.length := by
     rw [hins, hflat, List.length_append, List.length_append]; omega
-  refine ⟨hEmit, ?_, hbr g gd hlk, htf, hfs, ?_⟩
+  -- conjunct 7: 8 ≤ fnPos (the stub occupies the first 8 bytes, so every
+  -- function starts at ≥ 8 — `fnPos = layout-end of stub++envPre segments`).
+  have hstubsplit :
+      totalSymSize ((("", stubSeg entry) :: (mapSegs P.data pre 0).1).flatMap Prod.snd)
+        = totalSymSize (stubSeg entry)
+          + totalSymSize ((mapSegs P.data pre 0).1.flatMap Prod.snd) := by
+    rw [List.flatMap_cons, totalSymSize_append]
+  have hstubval : totalSymSize (stubSeg entry) = 8 := rfl
+  have h8 : 8 ≤ fnPosOf L g := by rw [htie, layout_end, hstubsplit]; omega
+  refine ⟨hEmit, ?_, hbr g gd hlk, htf, hfs, ?_, h8⟩
   · -- conjunct 2: the < 2²⁰ end bound (fnPos = 4·preF, and preF+rsg ≤ instrs)
     rw [hpos]; omega
   · -- conjunct 6: fnPos % 4 = 0
