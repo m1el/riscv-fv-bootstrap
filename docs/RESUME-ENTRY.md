@@ -1,5 +1,11 @@
 # RESUME-ENTRY — Phase 6: `entry_run_sim`, closing the `prog_sim` summit
 
+> **STATUS: COMPLETE (2026-07-06, commit `2a473d0`).** `entry_run_sim` is
+> proven (`Main.lean`) and `#print axioms LowIR.ProgSim.prog_sim = [propext,
+> Quot.sound]`. The plan below (E1–E8) was executed as written; kept for the
+> record and for the reusable NoHalt-retrofit / segment-assembly recipe. Line
+> numbers refer to the pre-close `9376818` state.
+
 Plan written 2026-07-06, at commit `9376818`, when `entry_run_sim`
 (`Main.lean:62`, sorry at line 82; all files below are in `lean/LowIR/ProgSim/`
 unless said otherwise) became the ONLY remaining `sorry` of the `compile_sim`

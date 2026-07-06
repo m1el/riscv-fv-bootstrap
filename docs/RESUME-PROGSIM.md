@@ -5,6 +5,13 @@ Plan written 2026-07-02, immediately after the executable cut landed. Read with
 [PROGRESS.md](PROGRESS.md) (what exists), [archive/RESUME-LOWIR.md](archive/RESUME-LOWIR.md)
 (the hex0-era proof toolbox and gotchas — much of it ports).
 
+> **CAMPAIGN COMPLETE (2026-07-06, commit `2a473d0`).** All six phases done.
+> `#print axioms LowIR.ProgSim.prog_sim = [propext, Quot.sound]` — the compiled
+> RV64I blob provably computes what the D7/D8 IL says `entry(args)` computes.
+> The final Phase-6 close-out (`entry_run_sim`) is in
+> [RESUME-ENTRY.md](RESUME-ENTRY.md); see PROGRESS.md 2026-07-06 for the wrap-up.
+> The material below is the original campaign plan, kept for reference.
+
 **Status (updated 2026-07-04).** Phase 0 done, relation validated, and the
 statement-level simulation `lower_sim_cf` now covers EVERY control-flow
 construct AND both const-data ops — skip/annot/seq/block/ife/**while**, all six

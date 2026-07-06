@@ -1,5 +1,64 @@
 # PROGRESS — LowIR & libc-formalize
 
+## 2026-07-06 (compile_sim campaign) — Phase 6 COMPLETE: `prog_sim` PROVEN axiom-clean
+
+**The `compile_sim`-for-Prog campaign is done.** `entry_run_sim` — the last
+`sorry` — is closed, and `#print axioms LowIR.ProgSim.prog_sim = [propext,
+Quot.sound]` (no `sorryAx`, no `Classical.choice`, no `native_decide`). The
+compiled RV64I blob provably computes what the D7/D8 IL says `entry(args)`
+computes. Full `LowIRProgSim` target green; the only remaining `sorry` in the
+tree is the pre-existing, unrelated `Core.lean:372` old-T1 `compile_sim`.
+
+Close-out followed `docs/RESUME-ENTRY.md`, commits E1–E8:
+
+- **E1–E2 (statement repairs S1–S4 + sanity).** `entry_run_sim`'s statement was
+  not provable as written: (S1) the run's `stackLo` param was never tied to
+  `L.stackLo` — dropped the free param, use `L.stackLo`; (S2) the `MemAccOff`
+  footprint hypothesis was missing entirely (the body could store into the blob)
+  — added, ∀-quantified over `st0` via `frameEnter`; (S3) `run` has no arity
+  check and `wfProgram` doesn't forbid duplicate params, so `args.length < argc`
+  makes the IL/machine parkFolds genuinely diverge — added `hargc : args.length
+  = fd.argc`; (S4) `fn_hfn` needs `hbr : ∀ g gd, … → BranchOk gd.body` — added as
+  a `prog_sim` hypothesis.
+
+- **E3 NoHalt infrastructure.** The `hne` "machine doesn't hit the halt pad
+  early" clause needed a *conclusion* on every `∃k` lemma, since no endpoint fact
+  implies anything about intermediate pcs. Adopted `NoHalt L k m := ∀ j < k,
+  (stepN j m).pc ≠ L.codeBase + 4` (halt pad `= codeBase + 4`), with helpers
+  `pc_ne_halt` (`8 ≤ q < 2^20 ⇒ codeBase + ofNat q ≠ codeBase + 4`),
+  `codeBase_ne_halt`, `NoHalt_zero`, `NoHalt_cons`, and the associative
+  `NoHalt_chain L k k' m` (no boundary premise) in `StmtSim.lean`.
+
+- **E4–E6 the retrofit.** Threaded a `NoHalt` conclusion conjunct through EVERY
+  StmtSim + CtrlSim atom (`run_load`/`store`/`storeFrom`, `single`/`two_op_sim`,
+  `jump_sim`, `run_synth`/`cref`, `run_marshalFrom`/`retStoresFrom`/`slotStore`/
+  `parkParams`/`zeroSlots`/`zeroFrame`, `prologue_sim`, `epilogue_sim`) and every
+  case of `lower_sim_cf`, composing via `NoHalt_chain` (states kept literal, and
+  indices re-associated by `rw [show a+b+c = a+(b+c) from by omega]` because
+  `stepN (3+ke)` is not defeq to the nested form). Two recursive atoms
+  (`parkParams`, `retStoresFrom`) had to switch their `< 2^20` bound from
+  `params`/`rets.length` to the actual emitted store-list length
+  (`(zipIdx.flatMap storeSlotI).length`) — a zero-valued register emits no store,
+  so `csize`/`prologueSize` only bounds the store count, not the list length.
+
+- **E7 the assembly (`entry_run_sim`).** Mirrors the `lower_sim_cf` `call` case
+  minus marshalling/ret-stores, with `holes = []` and return address = the halt
+  pad `codeBase + 4`: IL-side inversion (`run_inv`) + layout/`hfn` harvest
+  (`fn_hfn`, `layoutOf_decomp`, `stub_emitted`, and the Phase-2 discharge layer
+  `clen_synthOk`/`dbaseOf_dposOf`/`dposOf_lt`/`userPad_eq`/`compileProgT_dataBound`/
+  `codeLen_lt`); seg 0 the stub `jal RA, entry`; `frameEnter` unfolding to `st0`'s
+  sp/mem/regs (a simpler `hmemF` than the call case — no tiling, `holes = []`);
+  seg 1 `prologue_sim`; seg 2 `lower_sim_cf` on `fd.body` (landing at `epiPos` for
+  both `run_inv` outcomes); seg 3 `epilogue_sim` (jalr lands at `codeBase + 4 =
+  haltPc`, rets → `a0…`); memory conclusion via `StInv` c4; `hne` via `NoHalt`
+  over stub·prologue·body·epilogue feeding `runFuel_eq_stepN`.
+
+- **E8 docs + memory.** This entry; status lines in RESUME-ENTRY/-PROGSIM/-CALL;
+  `progsim-campaign-frontier` memory flipped to COMPLETE.
+
+Post-campaign ladder (`docs/PROOF-COMPLEXITY.md`) is unchanged: Prog syntactic
+frame theorem → `hex0F` at Prog → SSA→Prog lowering sim → borrow checker.
+
 ## 2026-07-06 (compile_sim campaign) — Phase 6: the `prog_sim` summit SKELETON (`Main.lean`)
 
 **`prog_sim` is now PROVEN modulo one well-specified machine-side lemma.** The
