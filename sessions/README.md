@@ -1,6 +1,6 @@
 # Agent sessions for `/var/data/bootstrap`
 
-Collected **41 Claude Code** session(s), **5 Codex** session(s), and **2 Pi** session(s) whose working directory is this project.
+Collected **42 Claude Code** session(s), **5 Codex** session(s), and **2 Pi** session(s) whose working directory is this project.
 
 Per-session transcripts, summaries, and token costs live under `claude/`, `codex/`, and `pi/`. Each file has a header (model, turns, token cost), a summary (first request + final response), and the full transcript (long tool outputs truncated). Personal name, email, and OS username are redacted.
 
@@ -8,16 +8,16 @@ Per-session transcripts, summaries, and token costs live under `claude/`, `codex
 
 | Agent | Sessions | Output tokens | Cost (USD) |
 |---|--:|--:|--:|
-| Claude Code | 41 | 9,385,484 | **$1,130.73** |
+| Claude Code | 42 | 9,415,405 | **$1,135.06** |
 | Codex | 5 | 39,258 | **$4.16** |
 | Pi | 2 | 44,269 | **$0.00** |
-| **All** | **48** | **9,469,011** | **$1,134.89** |
+| **All** | **49** | **9,498,932** | **$1,139.22** |
 
 ## Aggregate time
 
 | Agent | Wall-clock | Model gen | Tool exec | Active | Waiting for user |
 |---|--:|--:|--:|--:|--:|
-| Claude Code | 500h47m | 39h04m | 9h09m | 48h13m | 454h18m |
+| Claude Code | 500h57m | 39h11m | 9h09m | 48h21m | 454h19m |
 | Codex | 29m36s | 17m05s | 1m13s | 18m18s | 11m17s |
 | Pi | 1h10m | 16m37s | 16.0s | 16m53s | 53m28s |
 
@@ -77,6 +77,7 @@ Per-session transcripts, summaries, and token costs live under `claude/`, `codex
 | 39 | 2026-07-06 18:31 | claude-opus-4-8 | 16/398 | 434 | 2h24m | 2h25m | $71.78 | resume work from @docs/README.md @docs/RESUME-ENTR | [`claude/2026-07-06_18-31_5397583a354c.md`](claude/2026-07-06_18-31_5397583a354c.md) |
 | 40 | 2026-07-06 21:28 | claude-fable-5 | 14/87 | 86 | 37m03s | 51m02s | $19.60 | visualize the graph of lemmas/theorems used for pr | [`claude/2026-07-06_21-28_bab6698f3ace.md`](claude/2026-07-06_21-28_bab6698f3ace.md) |
 | 41 | 2026-07-06 22:21 | claude-opus-4-8 | 13/69 | 59 | 13m35s | 1h02m | $4.34 | make a gh workflow which deploys gh pages from doc | [`claude/2026-07-06_22-21_bf87ef2f0778.md`](claude/2026-07-06_22-21_bf87ef2f0778.md) |
+| 42 | 2026-07-06 23:35 | claude-fable-5 | 5/30 | 35 | 7m49s | 9m12s | $4.33 | update @docs/proof-map/ such that 1) each theorem. | [`claude/2026-07-06_23-35_7fe0ca15178d.md`](claude/2026-07-06_23-35_7fe0ca15178d.md) |
 
 ## Codex sessions
 
