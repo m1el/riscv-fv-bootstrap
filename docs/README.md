@@ -60,3 +60,7 @@ Design-choice analyses of the verification projects vendored under `third-party/
 (12 reviews: Radix, Verus, CompCert, CakeML, bedrock2, rustc borrowck, Creusot,
 Prusti, RefinedC, Frama-C, lean-mlir, seL4). Indexed in
 [third-party/README.md](third-party/README.md).
+
+## License
+
+The MIT License (MIT) [LICENSE.MIT](../LICENSE.MIT)
